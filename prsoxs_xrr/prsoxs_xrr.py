@@ -65,6 +65,13 @@ def scattering_vector(Metadata):
     Q = 2*k*np.sin(Theta/2)
     return Q
 
+def metadata_to_scattering(MetaData):
+    Important_Information = ['Beamline Energy','Sample Theta',]
+    Data = MetaData[Important_Information]
+    RealMetaData = MetaData.drop(Important_Information) 
+    return Data, RealMetaData
+    
+
 def data_reduction(Images, MetaData):
     Intensity = []
     Q = scattering_vector(MetaData)
@@ -77,9 +84,13 @@ def data_reduction(Images, MetaData):
     MetaData['Intensity'] = Intensity
     return MetaData
 
+def normalization(Data):
+    i_zero_points = pd.DataFrame[Data['Q'] == 0]
+    return i_zero_points
 
 if __name__ == '__main__':
     dir = r'C:/Users/hduva/prsoxs_xrr/tests/TestData/Sorted/282.5'
     Images, MetaData = load_data(dir)
-    Data= data_reduction(Images, MetaData)
-    Data.to_csv('test.csv')
+    Data, MetaData = metadata_to_scattering(MetaData)
+    Data = data_reduction(Data)
+    print(normalization(Data))

@@ -4,7 +4,7 @@ import click
 
 
 @click.command()
-def main(args=None):
+def main(args=None) -> Literal[0]:
     """Console script for prsoxs_xrr."""
     click.echo("Replace this message by putting your code into "
                "prsoxs_xrr.cli.main")

@@ -29,13 +29,12 @@ def load_data(Directory):
     Images = []
     for file in files:
         with fits.open(file) as hdul:
-            Energy = hdul[0].header['Beamline Energy']
-            Theta = hdul[0].header['CCD Theta']
+            Energy = hdul[0].header["Beamline Energy"]
+            Theta = hdul[0].header["CCD Theta"]
             Images.append(hdul[2].data)
         Energies.append(Energy)
         Thetas.append(Theta)
-    UsefulData = {'Energy': Energies,
-            'Theta': Thetas}
+    UsefulData = {"Energy": Energies, "Theta": Thetas}
     Data = pd.DataFrame(UsefulData)
     return Data, Images
 
@@ -90,6 +89,7 @@ def normalization(Data):
     i_zero_err = i_zero_points.std()
     Data = Data["Intensity"] / i_zero
     return Data
+
 
 if __name__ == "__main__":
     dir = f"{os.getcwd()}/tests/TestData/Sorted/282.5"

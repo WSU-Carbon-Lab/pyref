@@ -1,0 +1,11 @@
+import os
+import numpy as np
+
+c = 299_792_458  # m s-2
+ħ = 6.582_119_569  # eV s
+
+
+def scattering_vector(Energy, Theta):
+    k = Energy / ħ / c
+    Q = 2 * k * np.sin(Theta / 2)
+    return Q

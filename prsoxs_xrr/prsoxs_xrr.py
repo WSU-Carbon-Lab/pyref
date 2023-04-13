@@ -1,13 +1,62 @@
 """Main module."""
 
+from array import array
 import os
+from pathlib import PureWindowsPath
+from typing import *
 import numpy as np
 import pandas as pd
 from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy, ufloat
 
-import xrr_toolkit
+from xrr_toolkit import scattering_vector
+from xrr_reduction import reduce, normalized_reduce
+
+
+class XRR:
+    def __init__(self, Directory) -> None:
+        self.Directory: PureWindowsPath("Data Directory") = Directory
+
+        # values from loading
+        self.Images: list = []
+        self.Thetas: list = []
+        self.Energies: list = []
+        self.Q = []
+        self.Energies, self.Thetas, self.Q, self.Images = load_data(Directory)
+
+        # data reduction variables
+        self.Edgetrim = (5, 5)
+        self.Darkside = "LHS"
+        self.reduced_data = []
+        self.reduced_data = normalized_reduce(
+            self.Images, self.Q, self.Darkside, self.Edgetrim
+        )
+
+        # stitch points
+        self._stitch_points = []
+        self._scale_factors = []
+
+    def Reflectivity(self):
+        raise NotImplementedError(
+            "Needs implementation for showing results in a useful format"
+        )
+
+    def plot(self, *args, **kwargs):
+        refl = self.reduced_data
+        plt.errorbar(
+            refl["Q"],
+            unumpy.nominal_values(refl["Intensity"]),
+            unumpy.std_devs(refl["Intensity"]),
+            fmt=".",
+            *args,
+            **kwargs,
+        )
+        plt.yscale("log")
+        plt.title(f"Energy = {np.average(self.Energies):.2g}")
+        plt.show()
+        plt.xlabel("Q")
+        plt.ylabel("R")
 
 
 def load_data(Directory):
@@ -29,50 +78,15 @@ def load_data(Directory):
     for file in files:
         with fits.open(file) as hdul:
             Energy = hdul[0].header["Beamline Energy"]
-            Theta = round(hdul[0].header["CCD Theta"], 2)
-            Images.append(hdul[2].data)
+            Theta = hdul[0].header["Sample Theta"]
+            Image = hdul[2].data
         Energies.append(Energy)
         Thetas.append(Theta)
-    UsefulData = {"Energy": Energies, "Theta": Thetas}
-    Data = pd.DataFrame(UsefulData)
-    return Data, Images
-
-
-def Calculate_Integral_Ranges(Image, edge_trim=(5, 5)) -> tuple[range, range]:
-    N_x, N_y = Image.shape
-    bright_spot_x, bright_spot_y = np.unravel_index(Image.argmax(), Image.shape)
-    temporary_x_range = range(edge_trim[0], N_x - edge_trim[0])
-    temporary_y_range = range(edge_trim[1], N_y - edge_trim[1])
-    if bright_spot_x in temporary_x_range:
-        x_range = temporary_x_range
-    elif bright_spot_x < edge_trim[0]:
-        x_range = range(0, N_x - edge_trim[0])
-    else:
-        x_range = range(edge_trim[0], N_x)
-    if bright_spot_y in temporary_y_range:
-        y_range = temporary_y_range
-    elif bright_spot_y < edge_trim[1]:
-        y_range = range(0, N_y - edge_trim[1])
-    else:
-        y_range = range(edge_trim[1], N_y)
-    return x_range, y_range
-
-
-def normalization(Data):
-    i_zero_points = Data[Data["Q"] == 0]["Intensity"]
-    i_zero_array = i_zero_points.to_numpy()
-    Data["Normalized Intensity"] = Data["Intensity"] / np.mean(i_zero_array)
-    raise NotImplementedError("Normalization not correctly implemented")
-
-
-def find_stitch_points(Data):
-    direct_beam = Data[Data["Q"] == 0]["Intensity"]
-    raise NotImplementedError("Stitch points not implemented")
+        Images.append(Image)
+    Q = scattering_vector(np.array(Energies), np.array(Thetas))
+    return np.array(Energies), np.array(Thetas), np.array(Q), np.array(Images)
 
 
 if __name__ == "__main__":
     dir = f"{os.getcwd()}/tests/TestData/Sorted/282.5"
-    Data, Images = load_data(dir)
-    Refl = data_reduction(Images, Data)
-    i_zero = normalization(Refl)
-    print(i_zero)
+    XRR(dir).plot()

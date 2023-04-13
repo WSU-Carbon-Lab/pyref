@@ -7,8 +7,7 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy, ufloat
 
-c = 299_792_458  # m s-2
-ħ = 6.582_119_569  # eV s
+import xrr_toolkit
 
 
 def load_data(Directory):
@@ -39,7 +38,7 @@ def load_data(Directory):
     return Data, Images
 
 
-def Calculate_Integral_Ranges(Image, edge_trim=(5, 5)):
+def Calculate_Integral_Ranges(Image, edge_trim=(5, 5)) -> tuple[range, range]:
     N_x, N_y = Image.shape
     bright_spot_x, bright_spot_y = np.unravel_index(Image.argmax(), Image.shape)
     temporary_x_range = range(edge_trim[0], N_x - edge_trim[0])
@@ -59,32 +58,16 @@ def Calculate_Integral_Ranges(Image, edge_trim=(5, 5)):
     return x_range, y_range
 
 
-def scattering_vector(Data):
-    Energy = Data["Energy"]
-    Theta = Data["Theta"]
-    k = Energy / ħ / c
-    Q = 2 * k * np.sin(Theta / 2)
-    return Q
-
-
-def data_reduction(Images, Data):
-    Intensity_nominal = []
-    Q = scattering_vector(Data)
-    for image in Images:
-        R_x, R_y = Calculate_Integral_Ranges(image)
-        Image_nominal = image[R_x[0] : R_x[-1]][R_y[0] : R_y[-1]]
-        intensity_nominal = np.sum(Image_nominal)
-        Intensity_nominal.append(intensity_nominal)
-    Data["Q"] = Q
-    Data["Intensity"] = unumpy.uarray(Intensity_nominal, np.sqrt(Intensity_nominal))
-    return Data
-
-
 def normalization(Data):
     i_zero_points = Data[Data["Q"] == 0]["Intensity"]
     i_zero_array = i_zero_points.to_numpy()
     Data["Normalized Intensity"] = Data["Intensity"] / np.mean(i_zero_array)
-    return Data
+    raise NotImplementedError("Normalization not correctly implemented")
+
+
+def find_stitch_points(Data):
+    direct_beam = Data[Data["Q"] == 0]["Intensity"]
+    raise NotImplementedError("Stitch points not implemented")
 
 
 if __name__ == "__main__":

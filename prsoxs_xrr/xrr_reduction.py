@@ -130,10 +130,14 @@ def close_to_any(array, a):
 def stitch(data_not_stitched: pd.DataFrame) -> pd.DataFrame | None:
     Q_values = data_not_stitched["Q"]
     prior_qs = []
+    INDICATOR = False
     INDICATOR_index = []
 
     for i, q in enumerate(Q_values):
-        last_q = Q_values[i - 1]
+        if i == 0:
+            last_q = 0
+        else:
+            last_q = Q_values[i - 1]
 
         current_intensity = data_not_stitched["R"]
 

@@ -1,72 +1,72 @@
+from enum import IntEnum
 import numpy as np
 import pandas as pd
-from typing import *
-
-from xrr_toolkit import scattering_vector
+import typing
+import abc
 from uncertainties import unumpy, ufloat
 
-
-def Calculate_Integral_Ranges(Image, edge_trim) -> tuple[range, range]:
-    N_x, N_y = Image.shape
-    bright_spot_x, bright_spot_y = np.unravel_index(Image.argmax(), Image.shape)
-    temporary_x_range = range(edge_trim[0], N_x - edge_trim[0])
-    temporary_y_range = range(edge_trim[1], N_y - edge_trim[1])
-    if bright_spot_x in temporary_x_range:
-        x_range = temporary_x_range
-    elif bright_spot_x < edge_trim[0]:
-        x_range = range(0, N_x - edge_trim[0])
-    else:
-        x_range = range(edge_trim[0], N_x)
-    if bright_spot_y in temporary_y_range:
-        y_range = temporary_y_range
-    elif bright_spot_y < edge_trim[1]:
-        y_range = range(0, N_y - edge_trim[1])
-    else:
-        y_range = range(edge_trim[1], N_y)
-    return x_range, y_range
+from xrr_toolkit import scattering_vector
 
 
-def reduce(Images, Q, Darkside, Edgetrim):
-    reduced_data = []
+def reduce(Images, Q, Currents, edge_cut=(5, 5)):
+    """
+    Reduces Images to 1d intensity values for each Q and Current
 
-    if Darkside == "LHS":
-        dark_izero = 0
-    elif Darkside == "RHS":
-        raise NotImplementedError(
-            "Input Darkside must be 'LHS' for current implementation"
-        )
-    else:
-        raise ValueError("Choose either Darkside = 'LHS' or Darkside = 'RHS'")
+    Parameters
+    ----------
+    Images : array-like
+        Array containing images to reduce
+    Q : array-like
+        Scattering vector for each Image
+    Currents : array-like
+        Beamline current at the time of each image
 
-    for i, image in enumerate(Images):
-        Rx, Ry = Calculate_Integral_Ranges(image, Edgetrim)
-        sliced_image = image[Rx[0] : Rx[-1]][Ry[0] : Ry[-1]]
-        intensity = ufloat(np.sum(sliced_image), np.sqrt(np.sum(sliced_image)))
-        reduced_data.append([Q[i], intensity])
-    return pd.DataFrame(reduced_data, columns=["Q", "Intensity"])
+    Returns
+    -------
+    Reflectivity : DataFrame
+        Dataframe packed as
+
+            Reflectivity = ['Q', 'Intensity']
+
+        Intensity : ufloat64
+            Computed Intensity and its uncertianty
+
+        Q : float
+            scattering vector
+    """
+    # locate Beam and Dark Spot and make areas of integration about them
+
+    bright_spot, dark_spot = locate_spots(Images)
+
+    # Integrate bright and dark intensity, background subtract.
+
+    i_bright = np.sum(bright_spot, axis=1)
+    i_dark = np.sum(dark_spot, axis=1)
+
+    pre_norm_intensities = (i_bright - i_dark) / Currents
+
+    # pack array into desired output format
+    #   Reflectivity = [Q, R]
+
+    pre_stitch_normal = np.array(Q, pre_norm_intensities)
+
+    # normalize, and stitch
+
+    Reflectivity = stitch(normalize(pre_stitch_normal))
+
+    return Reflectivity
 
 
-def normalized_reduce(*args, **kwargs):
-    raw_reduced_data = reduce(*args, **kwargs)
-
-    i_zeros = raw_reduced_data["Intensity"].where(raw_reduced_data["Q"] == 0).dropna()
-    i_zero = np.sum(i_zeros.to_numpy()) / len(i_zeros.to_numpy())
-    reduced_data = raw_reduced_data.copy()
-    reduced_data["Intensity"] = reduced_data["Intensity"] / i_zero
-
-    return reduced_data.drop(reduced_data.index[: len(i_zeros.to_numpy()) - 1])
+def locate_spots(Images):
+    bright_loc = Images.argmax(axis=1)
+    return bright_loc
 
 
-def find_stitch_points(*args, **kwargs):
-    normalized_data = normalized_data.copy(*args, **kwargs)
-    for Q in normalized_data["Q"]:
-        pass
+def normalize(data_not_normalized):
     raise NotImplementedError
+    return data_not_normalized
 
 
-def calculate_stitch_factor():
+def stitch(data_not_stitched):
     raise NotImplementedError
-
-
-def calculate_stitch():
-    raise NotImplementedError
+    return data_not_stitched

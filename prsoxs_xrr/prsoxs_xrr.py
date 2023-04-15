@@ -48,7 +48,7 @@ class XRR:
         thommas = pd.read_csv(f"{os.getcwd()}/tests/TestData/test.csv")
 
         plt.errorbar(q, R, yerr=R_err)
-        # plt.errorbar(thommas["Q"], thommas["R"], yerr=thommas["R_err"])
+        plt.errorbar(thommas["Q"], thommas["R"], yerr=thommas["R_err"])
         plt.yscale("log")
         plt.show()
 

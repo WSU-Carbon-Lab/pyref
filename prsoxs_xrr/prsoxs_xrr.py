@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from astropy.io import fits
 import matplotlib.pyplot as plt
-from tenacity import Retrying
 from uncertainties import unumpy, ufloat
 
 from xrr_toolkit import scattering_vector
@@ -46,7 +45,10 @@ class XRR:
         R = unumpy.nominal_values(self.reduced_data["R"])
         R_err = unumpy.std_devs(self.reduced_data["R"])
 
+        thommas = pd.read_csv(f"{os.getcwd()}/tests/TestData/test.csv")
+
         plt.errorbar(q, R, yerr=R_err)
+        # plt.errorbar(thommas["Q"], thommas["R"], yerr=thommas["R_err"])
         plt.yscale("log")
         plt.show()
 

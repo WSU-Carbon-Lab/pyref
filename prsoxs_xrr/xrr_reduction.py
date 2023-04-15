@@ -8,12 +8,10 @@ import abc
 from uncertainties import unumpy, ufloat
 import matplotlib.pyplot as plt
 
-from pyFAI.azimuthalIntegrator import AzimuthalIntegrator
-
 from xrr_toolkit import scattering_vector
 
 
-def reduce(meta_data: pd.DataFrame, image: list, edge_cut: int = 5) -> pd.DataFrame:
+def reduce(meta_data: pd.DataFrame, images: list, edge_cut: int = 5) -> pd.DataFrame:
     """
     Reduces Images to 1d intensity values for each Q and Current
 
@@ -40,27 +38,31 @@ def reduce(meta_data: pd.DataFrame, image: list, edge_cut: int = 5) -> pd.DataFr
         Q : float
             scattering vector
     """
-    # unpack meta_data
 
+    # unpack meta data
     currents = meta_data["Beam Current"]
     Q = meta_data["Q"]
 
-    # locate Beam and Dark Spot and make areas of integration about them
-
-    bright_spot, dark_spot = locate_spots(image, edge_cut)
+    # locate beam on each frame
+    bright_spot, dark_spot = locate_spots(images, edge_cut)
 
     # Integrate bright and dark intensity, background subtract.
+    for b_idx in range(len(bright_spot)):
+        i_bright_n = np.nansum(np.ravel(bright_spot[:, b_idx])), np.sqrt(
+            np.nansum(np.ravel(bright_spot[:, b_idx]))
+        )
 
-    i_bright_n = np.sum(np.ravel(bright_spot)), np.sqrt(np.sum(np.ravel(bright_spot)))
-    i_dark_n = np.sum(np.ravel(dark_spot)) / len(np.ravel(dark_spot))
+        i_dark_n = np.nansum(np.ravel(dark_spot[:, b_idx])) / len(
+            ~np.isnan(np.ravel(dark_spot[:, b_idx]))
+        )
 
-    i_bright = ufloat(i_bright_n, np.sqrt(i_bright_n))
-    i_dark = ufloat(i_dark_n, np.sqrt(i_dark_n))
+        i_bright = ufloat(i_bright_n, np.sqrt(i_bright_n))
+        i_dark = ufloat(i_dark_n, np.sqrt(i_dark_n))
 
-    pre_norm_intensities = (i_bright - i_dark) / currents
+        pre_norm_intensities = (i_bright - i_dark) / currents[b_idx]
 
-    # pack array into desired output format
-    #   Reflectivity = [Q, R]
+        # pack array into desired output format
+        #   Reflectivity = [Q, R]
 
     pre_stitch_normal = pd.DataFrame(columns=["Q", "R"])
     pre_stitch_normal["Q"] = Q
@@ -68,7 +70,9 @@ def reduce(meta_data: pd.DataFrame, image: list, edge_cut: int = 5) -> pd.DataFr
 
     # normalize, and stitch
 
-    Reflectivity: pd.DataFrame = stitch(normalize(pre_stitch_normal))
+    Reflectivity: pd.DataFrame = normalize(
+        pre_stitch_normal
+    )  # stitch(pre_stitch_normal)
 
     return Reflectivity
 
@@ -76,9 +80,10 @@ def reduce(meta_data: pd.DataFrame, image: list, edge_cut: int = 5) -> pd.DataFr
 def locate_spots(Images: list, edge_cut: int) -> tuple:
     HEIGHT = 4
 
-    for n, image in enumerate(Images):
+    for image in Images:
         # for each image find brightest spot
-        i, j = np.unravel_index(np.max(image), image.shape)
+
+        i, j = np.unravel_index(np.ravel(image).argmax(), image.shape)
 
         left = i - HEIGHT
         right = i + HEIGHT
@@ -96,7 +101,7 @@ def locate_spots(Images: list, edge_cut: int) -> tuple:
                 else:
                     pass
 
-    return u_light, u_dark
+    return np.array(u_light), np.array(u_dark)
 
 
 def normalize(pre_norm: pd.DataFrame) -> pd.DataFrame:
@@ -124,10 +129,10 @@ def normalize(pre_norm: pd.DataFrame) -> pd.DataFrame:
 
 
 def close_to_any(array, a):
-    return ~np.isclose(array, a, atol=0.00001).any()
+    return ~np.isclose(array, a, atol=0.0001).any()
 
 
-def stitch(data_not_stitched: pd.DataFrame) -> pd.DataFrame | None:
+def stitch(data_not_stitched: pd.DataFrame) -> pd.DataFrame:
     Q_values = data_not_stitched["Q"]
     prior_qs = []
     INDICATOR = False
@@ -149,15 +154,17 @@ def stitch(data_not_stitched: pd.DataFrame) -> pd.DataFrame | None:
 
         # while the indicator is true stitch
         while INDICATOR == True:
-            scale_factors_n = []
+            scale_factors = []
             scale_factors_std = []
 
             # check if there exists a similar near neighbor if not then undo indicator and scale reflectivity data
             if not close_to_any(prior_qs, q):
-                weighted_scale_factors = np.average(
-                    scale_factors_n, weights=scale_factors_std
+                weighted_scale_factors = np.sum(
+                    scale_factors * 1 / (scale_factors_std)
+                ) / sum(1 / scale_factors_std)
+                future_data = (
+                    data_not_stitched["R"].iloc[INDEX:] / weighted_scale_factors
                 )
-                future_data = data_not_stitched["R"].iloc[INDEX:]
                 INDICATOR = False
 
             # if we are at the first indicator check all data before it for stitch points
@@ -171,7 +178,7 @@ def stitch(data_not_stitched: pd.DataFrame) -> pd.DataFrame | None:
                     data_not_stitched["Q"] == nearest_q
                 )
                 scale_factor = nearest_q_int / current_intensity
-                scale_factors_n.append(unumpy.nominal_values(scale_factor))
+                scale_factors.append(scale_factor)
                 scale_factors_std.append(unumpy.std_devs(scale_factor))
             # else only check last set of angles
             else:

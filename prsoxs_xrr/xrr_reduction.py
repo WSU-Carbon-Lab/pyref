@@ -8,7 +8,7 @@ import abc
 from uncertainties import unumpy, ufloat
 import matplotlib.pyplot as plt
 
-from xrr_toolkit import scattering_vector
+from xrr_toolkit import uaverage
 
 
 def reduce(meta_data: pd.DataFrame, images: list, edge_cut: int = 5) -> pd.DataFrame:
@@ -44,156 +44,61 @@ def reduce(meta_data: pd.DataFrame, images: list, edge_cut: int = 5) -> pd.DataF
     Q = meta_data["Q"]
 
     # locate beam on each frame
-    bright_spot, dark_spot = locate_spots(images, edge_cut)
+    R = []
 
     # Integrate bright and dark intensity, background subtract.
-    for b_idx in range(len(bright_spot)):
-        i_bright_n = np.nansum(np.ravel(bright_spot[:, b_idx])), np.sqrt(
-            np.nansum(np.ravel(bright_spot[:, b_idx]))
-        )
+    for i, u in enumerate(images):
+        bright_spot, dark_spot = locate_spot(u, edge_cut)
 
-        i_dark_n = np.nansum(np.ravel(dark_spot[:, b_idx])) / len(
-            ~np.isnan(np.ravel(dark_spot[:, b_idx]))
-        )
+        Bright = np.nansum(np.ravel(bright_spot))
+        i_bright = ufloat(Bright, np.sqrt(Bright))
 
-        i_bright = ufloat(i_bright_n, np.sqrt(i_bright_n))
-        i_dark = ufloat(i_dark_n, np.sqrt(i_dark_n))
+        Dark = np.nansum(np.ravel(dark_spot)) / len(~np.isnan(np.ravel(dark_spot)))
+        i_dark = ufloat(Dark, np.sqrt(Dark))
 
-        pre_norm_intensities = (i_bright - i_dark) / currents[b_idx]
-
-        # pack array into desired output format
-        #   Reflectivity = [Q, R]
+        int = (i_bright - i_dark) / currents[i]  # type: ignore
+        R.append(int)
 
     pre_stitch_normal = pd.DataFrame(columns=["Q", "R"])
     pre_stitch_normal["Q"] = Q
-    pre_stitch_normal["R"] = pre_norm_intensities
+    pre_stitch_normal["R"] = R
 
-    # normalize, and stitch
+    pre_stitch = normalization(pre_stitch_normal)
 
-    Reflectivity: pd.DataFrame = normalize(
-        pre_stitch_normal
-    )  # stitch(pre_stitch_normal)
-
-    return Reflectivity
+    return pre_stitch
 
 
-def locate_spots(Images: list, edge_cut: int) -> tuple:
-    HEIGHT = 4
+def locate_spot(image: np.ndarray, edge_cut: int) -> tuple:
+    HEIGHT = 4  # hard coded dimensions of the spot on the image
+    i, j = np.unravel_index(np.ravel(image).argmax(), image.shape)
 
-    for image in Images:
-        # for each image find brightest spot
+    left = i - HEIGHT
+    right = i + HEIGHT
+    top = j - HEIGHT
+    bottom = j + HEIGHT
 
-        i, j = np.unravel_index(np.ravel(image).argmax(), image.shape)
+    u_slice: tuple[slice, slice] = (slice(left, right), slice(top, bottom))
+    u_light = image[u_slice]
 
-        left = i - HEIGHT
-        right = i + HEIGHT
-        top = j - HEIGHT
-        bottom = j + HEIGHT
-
-        u_slice: tuple[slice, slice] = (slice(left, right), slice(top, bottom))
-        u_light = image[u_slice]
-
-        u_dark = image.copy()
-        for k in range(len(image[0])):
-            for l in range(len(image[1])):
-                if top < k < bottom and right < l < left:
-                    u_dark[k][l] = np.nan
-                else:
-                    pass
+    u_dark = image.copy()
+    for k in range(len(image[0])):
+        for l in range(len(image[1])):
+            if top < k < bottom and right < l < left:
+                u_dark[k][l] = np.nan
+            else:
+                pass
 
     return np.array(u_light), np.array(u_dark)
 
 
-def normalize(pre_norm: pd.DataFrame) -> pd.DataFrame:
-    """
-    _summary_
+def normalization(refl: pd.DataFrame):
+    # find the cutoff for i_zero points
+    izero_count = refl["Q"].where(refl["Q"] == 0).count()
 
-    Parameters
-    ----------
-    pre_norm : pd.DataFrame
-        _description_
+    if izero_count == 0:
+        izero = ufloat(1, 0)
+    else:
+        izero = uaverage(refl["R"].iloc[:izero_count])
 
-    Returns
-    -------
-    pd.DataFrame
-        _description_
-    """
-    # pre_norm = ['Q', 'R']
-
-    num_i_zeros = pre_norm["Q"].where(pre_norm["Q"] == 0).count()
-    i_zero = np.sum(pre_norm["R"].where(pre_norm["Q"] == 0)) / num_i_zeros
-
-    pre_norm["R"] = pre_norm["R"] / i_zero
-
-    return pre_norm.drop(pre_norm.index[:num_i_zeros])
-
-
-def close_to_any(array, a):
-    return ~np.isclose(array, a, atol=0.0001).any()
-
-
-def stitch(data_not_stitched: pd.DataFrame) -> pd.DataFrame:
-    Q_values = data_not_stitched["Q"]
-    prior_qs = []
-    INDICATOR = False
-    INDICATOR_index = []
-
-    for i, q in enumerate(Q_values):
-        if i == 0:
-            last_q = 0
-        else:
-            last_q = Q_values[i - 1]
-
-        current_intensity = data_not_stitched["R"]
-
-        # if q is less than q old, set off indicator to start stitching
-        if q < last_q:
-            INDICATOR = True
-            INDEX = i
-            INDICATOR_index.append(i)
-
-        # while the indicator is true stitch
-        while INDICATOR == True:
-            scale_factors = []
-            scale_factors_std = []
-
-            # check if there exists a similar near neighbor if not then undo indicator and scale reflectivity data
-            if not close_to_any(prior_qs, q):
-                weighted_scale_factors = np.sum(
-                    scale_factors * 1 / (scale_factors_std)
-                ) / sum(1 / scale_factors_std)
-                future_data = (
-                    data_not_stitched["R"].iloc[INDEX:] / weighted_scale_factors
-                )
-                INDICATOR = False
-
-            # if we are at the first indicator check all data before it for stitch points
-            if len(INDICATOR_index) == 1:
-                # find nearest q
-                myList = data_not_stitched["Q"].iloc[:i]
-                nearest_q = min(myList, key=lambda x: abs(x - q))
-
-                # determine scale factor
-                nearest_q_int = data_not_stitched["R"].where(
-                    data_not_stitched["Q"] == nearest_q
-                )
-                scale_factor = nearest_q_int / current_intensity
-                scale_factors.append(scale_factor)
-                scale_factors_std.append(unumpy.std_devs(scale_factor))
-            # else only check last set of angles
-            else:
-                myList = data_not_stitched["Q"].iloc[
-                    INDICATOR_index[INDEX - 1] : INDICATOR_index[INDEX]
-                ]
-                nearest_q = min(myList, key=lambda x: abs(x - q))
-
-                # determine scale factor
-                nearest_q_int = data_not_stitched["R"].where(
-                    data_not_stitched["Q"] == nearest_q
-                )
-                scale_factor = nearest_q_int / current_intensity
-                scale_factors_n.append(unumpy.nominal_values(scale_factor))
-                scale_factors_std.append(unumpy.std_devs(scale_factor))
-
-        prior_qs.append(q)
-        return data_not_stitched
+    refl["R"] = refl["R"] / izero
+    return refl

@@ -92,6 +92,19 @@ def locate_spot(image: np.ndarray, edge_cut: int) -> tuple:
 
 
 def normalization(refl: pd.DataFrame):
+    """
+    _summary_
+
+    Parameters
+    ----------
+    refl : pd.DataFrame
+        _description_
+
+    Returns
+    -------
+    _type_
+        _description_
+    """
     # find the cutoff for i_zero points
     izero_count = refl["Q"].where(refl["Q"] == 0).count()
 
@@ -100,5 +113,5 @@ def normalization(refl: pd.DataFrame):
     else:
         izero = uaverage(refl["R"].iloc[:izero_count])
 
-    refl["R"] = refl["R"] / izero
+    refl["R"] = refl["R"] / izero  # type: ignore
     return refl

@@ -1,10 +1,8 @@
 """Main module."""
 
-from array import array
+from cProfile import label
 import os
 from pathlib import PureWindowsPath
-import typing
-import abc
 import numpy as np
 import pandas as pd
 from astropy.io import fits
@@ -16,26 +14,30 @@ from xrr_reduction import reduce
 
 
 class XRR:
-    """
-    General XRR class; for loading, reducing, and plotting xrr data from a fits file.
-    """
-
-    def __init__(self, Directory) -> None:
-        self.Directory = Directory
+    def __init__(self) -> None:
+        self.directory = None
 
         # values from loading
-        self.meta_data = loader(self.Directory)[0]
-        self.images = loader(self.Directory)[1]
+        self.meta_data = None
+        self.images = None
 
         # data reduction variables
-        self.edge_trim = 5
         self.dark_side = "LHS"
-        self.reduced_data: pd.DataFrame = reduce(
-            self.meta_data, self.images, self.edge_trim
-        )
+        self.reduced_data: pd.DataFrame = None
 
         # total results
         self.xrr = None
+
+        # test methods
+        self.std_err = None
+        self.shot_err = None
+
+    def load(self, directory, error_method="shot"):
+        self.directory = directory
+        self.meta_data, self.images = loader(self.directory)
+        self.reduced_data = reduce(
+            self.meta_data, self.images, error_method=error_method
+        )
 
     def show_images(self) -> None:
         pass
@@ -50,6 +52,23 @@ class XRR:
         plt.errorbar(q, R, yerr=R_err)
         plt.errorbar(thommas["Q"], thommas["R"], yerr=thommas["R_err"])
         plt.yscale("log")
+        plt.show()
+
+    def test_errs(self):
+        thommas = pd.read_csv(f"{os.getcwd()}/tests/TestData/test.csv")
+        stds = reduce(self.meta_data, self.images, error_method="std")
+        shot = reduce(self.meta_data, self.images, error_method="shot")
+
+        self.std_err = unumpy.std_devs(stds["R"].to_numpy())
+        self.shot_err = unumpy.std_devs(shot["R"].to_numpy())
+
+        plt.plot(stds["Q"], self.std_err, label="standard error")
+        plt.plot(shot["Q"], self.shot_err, label="shot error")
+        plt.plot(thommas["Q"], thommas["R_err"], label="Thommas")
+        plt.plot(
+            stds["Q"], np.abs(self.std_err - self.shot_err), "--", label="difference"
+        )
+        plt.legend()
         plt.show()
 
 
@@ -87,5 +106,6 @@ def loader(dirr):
 
 if __name__ == "__main__":
     dir = f"{os.getcwd()}/tests/TestData/Sorted/282.5"
-    refl = XRR(dir)
-    refl.plot_data()
+    refl = XRR()
+    refl.load(dir)
+    refl.test_errs()

@@ -1,94 +1,89 @@
-from enum import IntEnum
-from turtle import right
-from matplotlib import axes
 import numpy as np
 import pandas as pd
-import typing
-import abc
-from sympy import is_monotonic
-from sympy import is_monotonic
-from uncertainties import unumpy, ufloat
 import matplotlib.pyplot as plt
+from uncertainties import ufloat
 
 from xrr_toolkit import uaverage
 
 
-def reduce(meta_data: pd.DataFrame, images: list, edge_cut: int = 5) -> pd.DataFrame:
+def reduce(
+    meta_data: pd.DataFrame, images: list, error_method: str = "shot"
+) -> pd.DataFrame:
     """
-    Reduces Images to 1d intensity values for each Q and Current
+    Reduce Images to 1d intensity values for each Q and Current.
 
     Parameters
     ----------
-    meta_data : DataFrame
-        DataFrame packed as
-
-            meta_data = ["Beam Current", "Sample Theta", "Beamline Energy", "Q"]
-
+    meta_data : pd.DataFrame
+        DataFrame containing "Beam Current", "Sample Theta", "Beamline Energy", "Q".
     images : list
-        list of images collected from fits files
+        List of images collected from fits files.
+    error_method : str, optional
+        The error method to use: "shot" or "std" (default is "shot").
 
     Returns
     -------
-    Reflectivity : DataFrame
-        DataFrame packed as
-
-            Reflectivity = ['Q', 'Intensity']
-
-        Intensity : ufloat64
-            Computed Intensity and its uncertianty
-
-        Q : float
-            scattering vector
+    pd.DataFrame
+        DataFrame packed as ["Q", "R"] with "R" as computed intensity and its uncertainty.
     """
-
-    # unpack meta data
-    currents = meta_data["Beam Current"]
-    Q = meta_data["Q"]
-
-    # locate beam on each frame
+    currents, Q = meta_data["Beam Current"], meta_data["Q"]
     R = []
 
     # Integrate bright and dark intensity, background subtract.
     for i, u in enumerate(images):
-        bright_spot, dark_spot = locate_spot(u, edge_cut)
-
+        bright_spot, dark_spot = locate_spot(u)
         Bright = np.nansum(np.ravel(bright_spot))
-        i_bright = ufloat(Bright, np.sqrt(Bright))
-
-        Dark = np.nansum(np.ravel(dark_spot)) / len(~np.isnan(np.ravel(dark_spot)))
-        i_dark = ufloat(Dark, np.sqrt(Dark))
-
-        int = (i_bright - i_dark) / currents[i]  # type: ignore
+        Dark = np.nansum(np.ravel(dark_spot))
+        if error_method == "std":
+            Bright_std = np.nanstd(np.ravel(bright_spot)) / np.sqrt(
+                len(np.ravel(bright_spot))
+            )
+            Dark_std = np.nanstd(np.ravel(dark_spot)) / np.sqrt(
+                len(np.ravel(dark_spot))
+            )
+            i_bright = ufloat(Bright, Bright_std)
+            i_dark = ufloat(Dark, np.sqrt(Dark))
+        else:
+            i_bright = ufloat(Bright, np.sqrt(Bright))
+            i_dark = ufloat(Dark, np.sqrt(Dark))
+        int = (i_bright - i_dark) / currents[i]
         R.append(int)
 
-    pre_stitch_normal = pd.DataFrame(columns=["Q", "R"])
-    pre_stitch_normal["Q"] = Q
-    pre_stitch_normal["R"] = R
-
+    pre_stitch_normal = pd.DataFrame({"Q": Q, "R": R})
     pre_stitch = normalization(pre_stitch_normal)
-
     return pre_stitch
 
 
-def locate_spot(image: np.ndarray, edge_cut: int) -> tuple:
+def locate_spot(image: np.ndarray) -> tuple:
+    """
+    Locate the bright and dark images of the sample.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Numpy array of the sample image.
+    edge_cut : int
+        Number of pixels to cut from image edges.
+
+    Returns
+    -------
+    tuple
+        Tuple of the bright and dark image arrays.
+    """
     HEIGHT = 4  # hard coded dimensions of the spot on the image
-    i, j = np.unravel_index(np.ravel(image).argmax(), image.shape)
+    i, j = np.unravel_index(image.argmax(), image.shape)
 
-    left = i - HEIGHT
-    right = i + HEIGHT
-    top = j - HEIGHT
-    bottom = j + HEIGHT
+    left, right = i - HEIGHT, i + HEIGHT
+    top, bottom = j - HEIGHT, j + HEIGHT
 
-    u_slice: tuple[slice, slice] = (slice(left, right), slice(top, bottom))
-    u_light = image[u_slice]
+    u_slice_l = (slice(left, right), slice(top, bottom))
+    u_light = image[u_slice_l]
 
-    u_dark = image.copy()
-    for k in range(len(image[0])):
-        for l in range(len(image[1])):
-            if top < k < bottom and right < l < left:
-                u_dark[k][l] = np.nan
-            else:
-                pass
+    left_d, right_d = -(i + 1) - HEIGHT, -(i + 1) + HEIGHT
+    top_d, bottom_d = -(i + 1) - HEIGHT, -(i + 1) + HEIGHT
+
+    u_slice_d = (slice(left_d, right_d), slice(top_d, bottom_d))
+    u_dark = image[u_slice_d]
 
     return np.array(u_light), np.array(u_dark)
 
@@ -140,45 +135,56 @@ def stitching(refl: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    refl = pd.DataFrame(columns=["Q", "R"])
-    refl["Q"] = [
-        0,
-        1,
-        2,
-        3,
-        4,
-        1,
-        1,
-        2,
-        3,
-        4,
-        5,
-        2,
-        2,
-        3,
-        4,
-        5,
-        6,
-    ]
-    refl["R"] = [
-        10,
-        11,
-        12,
-        13,
-        14,
-        11,
-        11,
-        12,
-        13,
-        14,
-        15,
-        12,
-        12,
-        13,
-        14,
-        15,
-        16,
-    ]
-    stitches = stitching(refl)
+    from astropy.io import fits
+    import os
+    from uncertainties import unumpy
 
-    print(stitches)
+    file = f"{os.getcwd()}/tests/TestData/Sorted/282.5"
+    refl = loader(file)
+
+    q = refl["Q"]
+    R = unumpy.nominal_values(refl["R"])
+    R_err = unumpy.std_devs(refl["R"])
+
+    thommas = pd.read_csv(f"{os.getcwd()}/tests/TestData/test.csv")
+
+    plt.errorbar(q, R, yerr=R_err)
+    plt.errorbar(thommas["Q"], thommas["R"], yerr=thommas["R_err"])
+    plt.yscale("log")
+    plt.show()
+
+
+def locate_spot_old(image: np.ndarray) -> tuple:  # older version
+    """
+    Locate the bright and dark images of the sample.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Numpy array of the sample image.
+    edge_cut : int
+        Number of pixels to cut from image edges.
+
+    Returns
+    -------
+    tuple
+        Tuple of the bright and dark image arrays.
+    """
+    HEIGHT = 4  # hard coded dimensions of the spot on the image
+    i, j = np.unravel_index(image.argmax(), image.shape)
+
+    left, right = i - HEIGHT, i + HEIGHT
+    top, bottom = j - HEIGHT, j + HEIGHT
+
+    u_slice = (slice(left, right), slice(top, bottom))
+    u_light = image[u_slice]
+
+    u_dark = image.copy()
+    for k in range(len(image[0])):
+        for l in range(len(image[1])):
+            if top < k < bottom and right < l < left:
+                u_dark[k][l] = np.nan
+            else:
+                pass
+
+    return np.array(u_light), np.array(u_dark)

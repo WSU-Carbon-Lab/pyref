@@ -1,44 +1,33 @@
 """Main module."""
 
-from cProfile import label
 import os
-from pathlib import PureWindowsPath
 import numpy as np
 import pandas as pd
 from astropy.io import fits
 import matplotlib.pyplot as plt
-from uncertainties import unumpy, ufloat
+from uncertainties import unumpy
 
 from xrr_toolkit import scattering_vector
 from xrr_reduction import reduce
 
 
 class XRR:
-    def __init__(self) -> None:
+    def __init__(self):
         self.directory = None
-
-        # values from loading
-        self.images: np.ndarray = []
-        self.energies: np.ndarray = []
-        self.sample_theta: np.ndarray = []
-        self.beam_current: np.ndarray = []
-
-        # data reduction variables
-        self.q: np.ndarray = []
-        self.r: np.ndarray = []
-
-        # total results
-        self.xrr: pd.DataFrame = None
-
-        # test methods
+        self.images = np.empty(0)
+        self.energies = np.empty(0)
+        self.sample_theta = np.empty(0)
+        self.beam_current = np.empty(0)
+        self.q = np.empty(0)
+        self.r = np.empty(0)
+        self.xrr = pd.DataFrame()
         self.std_err = None
         self.shot_err = None
 
     def load(self, directory, error_method="shot", stitch_color="yes"):
         self.directory = directory
-        file_list: list = [f for f in os.listdir(self.directory) if f.endswith(".fits")]
+        file_list = [f for f in os.listdir(self.directory) if f.endswith(".fits")]
 
-        # loop over all fits files in the directory and extract information
         for file in file_list:
             with fits.open(os.path.join(self.directory, file)) as hdul:
                 header = hdul[0].header
@@ -47,27 +36,20 @@ class XRR:
                 beam_current = header["Beam Current"]
                 image_data = hdul[2].data
 
-                # Append the extracted information to the respective arrays
-                self.energies.append(energy)
-                self.sample_theta.append(sample_theta)
-                self.beam_current.append(beam_current)
-                self.images.append(image_data)
-        # convert lists to np arrays
-        self.energies = np.array(self.energies)
-        self.sample_theta = np.array(self.sample_theta)
-        self.beam_current = np.array(self.beam_current)
-        self.images = np.array(self.images)
+                self.energies = np.append(self.energies, energy)
+                self.sample_theta = np.append(self.sample_theta, sample_theta)
+                self.beam_current = np.append(self.beam_current, beam_current)
+                self.images = np.append(self.images, image_data)
 
-        # convert thetas to q's
         self.q = scattering_vector(self.energies, self.sample_theta)
         self.q, self.r = reduce(self.q, self.beam_current, self.images)
 
-    def plot(self) -> None:
+    def plot(self):
         R = unumpy.nominal_values(self.r)
         R_err = unumpy.std_devs(self.r)
 
         thommas = np.loadtxt(
-            f"{os.getcwd()}/tests/TestData/test.csv",
+            os.path.join(os.getcwd(), "tests", "TestData", "test.csv"),
             skiprows=1,
             delimiter=",",
             usecols=(1, 2, 3),
@@ -80,7 +62,7 @@ class XRR:
 
 
 if __name__ == "__main__":
-    dir = f"{os.getcwd()}/tests/TestData/Sorted/282.5"
+    dir = os.path.join(os.getcwd(), "tests", "TestData", "Sorted", "282.5")
     refl = XRR()
     refl.load(dir)
     refl.plot()

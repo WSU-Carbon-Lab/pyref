@@ -18,94 +18,69 @@ class XRR:
         self.directory = None
 
         # values from loading
-        self.meta_data = None
-        self.images = None
+        self.images: np.ndarray = []
+        self.energies: np.ndarray = []
+        self.sample_theta: np.ndarray = []
+        self.beam_current: np.ndarray = []
 
         # data reduction variables
-        self.dark_side = "LHS"
-        self.reduced_data: pd.DataFrame = None
+        self.q: np.ndarray = []
+        self.r: np.ndarray = []
 
         # total results
-        self.xrr = None
+        self.xrr: pd.DataFrame = None
 
         # test methods
         self.std_err = None
         self.shot_err = None
 
-    def load(self, directory, error_method="shot"):
+    def load(self, directory, error_method="shot", stitch_color="yes"):
         self.directory = directory
-        self.meta_data, self.images = loader(self.directory)
-        self.reduced_data = reduce(
-            self.meta_data, self.images, error_method=error_method
+        file_list: list = [f for f in os.listdir(self.directory) if f.endswith(".fits")]
+
+        # loop over all fits files in the directory and extract information
+        for file in file_list:
+            with fits.open(os.path.join(self.directory, file)) as hdul:
+                header = hdul[0].header
+                energy = header["Beamline Energy"]
+                sample_theta = header["Sample Theta"]
+                beam_current = header["Beam Current"]
+                image_data = hdul[2].data
+
+                # Append the extracted information to the respective arrays
+                self.energies.append(energy)
+                self.sample_theta.append(sample_theta)
+                self.beam_current.append(beam_current)
+                self.images.append(image_data)
+        # convert lists to np arrays
+        self.energies = np.array(self.energies)
+        self.sample_theta = np.array(self.sample_theta)
+        self.beam_current = np.array(self.beam_current)
+        self.images = np.array(self.images)
+
+        # convert thetas to q's
+        self.q = scattering_vector(self.energies, self.sample_theta)
+        self.q, self.r = reduce(self.q, self.beam_current, self.images)
+
+    def plot(self) -> None:
+        R = unumpy.nominal_values(self.r)
+        R_err = unumpy.std_devs(self.r)
+
+        thommas = np.loadtxt(
+            f"{os.getcwd()}/tests/TestData/test.csv",
+            skiprows=1,
+            delimiter=",",
+            usecols=(1, 2, 3),
         )
 
-    def show_images(self) -> None:
-        pass
-
-    def plot_data(self) -> None:
-        q = self.reduced_data["Q"]
-        R = unumpy.nominal_values(self.reduced_data["R"])
-        R_err = unumpy.std_devs(self.reduced_data["R"])
-
-        thommas = pd.read_csv(f"{os.getcwd()}/tests/TestData/test.csv")
-
-        plt.errorbar(q, R, yerr=R_err)
-        plt.errorbar(thommas["Q"], thommas["R"], yerr=thommas["R_err"])
+        plt.errorbar(self.q, R, yerr=R_err)
+        plt.errorbar(thommas[:, 0], thommas[:, 1], yerr=thommas[:, 2])
         plt.yscale("log")
         plt.show()
-
-    def test_errs(self):
-        thommas = pd.read_csv(f"{os.getcwd()}/tests/TestData/test.csv")
-        stds = reduce(self.meta_data, self.images, error_method="std")
-        shot = reduce(self.meta_data, self.images, error_method="shot")
-
-        self.std_err = unumpy.std_devs(stds["R"].to_numpy())
-        self.shot_err = unumpy.std_devs(shot["R"].to_numpy())
-
-        plt.plot(stds["Q"], self.std_err, label="standard error")
-        plt.plot(shot["Q"], self.shot_err, label="shot error")
-        plt.plot(thommas["Q"], thommas["R_err"], label="Thommas")
-        plt.plot(
-            stds["Q"], np.abs(self.std_err - self.shot_err), "--", label="difference"
-        )
-        plt.legend()
-        plt.show()
-
-
-def loader(dirr):
-    files: list[str] = [f"{dirr}/{filename}" for filename in os.listdir(dirr)]
-
-    # init dictionary for meta data, list for images
-
-    temp_meta = {}
-    images = []
-    meta_data = None
-
-    # generate list of import meta data information
-
-    HEADER_MASTER_LIST = ["Sample Theta", "Beamline Energy", "Beam Current"]
-
-    for i, filename in enumerate(files):
-        with fits.open(filename) as hdul:
-            header = hdul[0].header  # type: ignore
-            for item in header:
-                if item in HEADER_MASTER_LIST:
-                    temp_meta[item] = header[item]
-                else:
-                    pass
-            images.append(hdul[2].data)  # type: ignore
-        if i == 0:
-            meta_data = pd.DataFrame(temp_meta, index=[i])
-        else:
-            meta_data = pd.concat([meta_data, pd.DataFrame(temp_meta, index=[i])])
-    meta_data["Q"] = scattering_vector(  # type: ignore
-        meta_data["Beamline Energy"], meta_data["Sample Theta"]  # type: ignore
-    )
-    return [meta_data, images]
 
 
 if __name__ == "__main__":
     dir = f"{os.getcwd()}/tests/TestData/Sorted/282.5"
     refl = XRR()
     refl.load(dir)
-    refl.test_errs()
+    refl.plot()

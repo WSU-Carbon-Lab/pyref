@@ -12,24 +12,28 @@ from xrr_reduction import reduce
 
 
 class XRR:
+    """Class for X-ray reflectometry data analysis."""
+
     def __init__(self):
         self.directory = None
-        self.images = np.empty(0)
-        self.energies = np.empty(0)
-        self.sample_theta = np.empty(0)
-        self.beam_current = np.empty(0)
-        self.q = np.empty(0)
-        self.r = np.empty(0)
+        self.images = []
+        self.energies = []
+        self.sample_theta = []
+        self.beam_current = []
+        self.q = []
+        self.r = []
         self.xrr = pd.DataFrame()
         self.std_err = None
         self.shot_err = None
 
-    def load(self, directory, error_method="shot", stitch_color="yes"):
+    def load(self, directory: str, error_method="shot", stitch_color="yes") -> None:
+        """Load X-ray reflectometry data from FITS files in the specified directory."""
+
         self.directory = directory
-        file_list = [f for f in os.listdir(self.directory) if f.endswith(".fits")]
+        file_list = [f for f in os.scandir(self.directory) if f.name.endswith(".fits")]
 
         for file in file_list:
-            with fits.open(os.path.join(self.directory, file)) as hdul:
+            with fits.open(file.path) as hdul:
                 header = hdul[0].header
                 energy = header["Beamline Energy"]
                 sample_theta = header["Sample Theta"]
@@ -44,12 +48,19 @@ class XRR:
         self.q = scattering_vector(self.energies, self.sample_theta)
         self.q, self.r = reduce(self.q, self.beam_current, self.images)
 
-    def plot(self):
+    def plot(self) -> None:
+        """Plot the X-ray reflectometry data and a reference curve."""
+
         R = unumpy.nominal_values(self.r)
         R_err = unumpy.std_devs(self.r)
 
         thommas = np.loadtxt(
-            os.path.join(os.getcwd(), "tests", "TestData", "test.csv"),
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "tests",
+                "TestData",
+                "test.csv",
+            ),
             skiprows=1,
             delimiter=",",
             usecols=(1, 2, 3),
@@ -62,7 +73,7 @@ class XRR:
 
 
 if __name__ == "__main__":
-    dir = os.path.join(os.getcwd(), "tests", "TestData", "Sorted", "282.5")
+    dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\282.5"
     refl = XRR()
     refl.load(dir)
     refl.plot()

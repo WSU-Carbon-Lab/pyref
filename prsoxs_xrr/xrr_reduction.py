@@ -1,6 +1,4 @@
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 from uncertainties import ufloat
 
 from xrr_toolkit import uaverage
@@ -9,28 +7,27 @@ from xrr_toolkit import uaverage
 def reduce(
     Q: np.ndarray, currents: np.ndarray, images: np.ndarray, error_method: str = "shot"
 ) -> np.ndarray:
-    R = []
-
-    # Integrate bright and dark intensity, background subtract.
-    for i, u in enumerate(images):
-        bright_spot, dark_spot = locate_spot(u)
-        Bright = np.nansum(np.ravel(bright_spot))
-        Dark = np.nansum(np.ravel(dark_spot))
-        if error_method == "std":
-            Bright_std = np.nanstd(np.ravel(bright_spot)) / np.sqrt(
-                len(np.ravel(bright_spot))
+    R = [
+        (
+            ufloat(
+                np.nansum(np.ravel(locate_spot(u)[0]))
+                - np.nansum(np.ravel(locate_spot(u)[1])),
+                np.sqrt(np.nansum(np.ravel(locate_spot(u)[0])))
+                / np.sqrt(len(np.ravel(locate_spot(u)[0]))),
             )
-            Dark_std = np.nanstd(np.ravel(dark_spot)) / np.sqrt(
-                len(np.ravel(dark_spot))
+        )
+        / currents[i]
+        if error_method == "std"
+        else (
+            ufloat(
+                np.nansum(np.ravel(locate_spot(u)[0]))
+                - np.nansum(np.ravel(locate_spot(u)[1])),
+                np.sqrt(np.nansum(np.ravel(locate_spot(u)[0]))),
             )
-            i_bright = ufloat(Bright, Bright_std)
-            i_dark = ufloat(Dark, np.sqrt(Dark))
-        elif error_method == "shot":
-            i_bright = ufloat(Bright, np.sqrt(Bright))
-            i_dark = ufloat(Dark, np.sqrt(Dark))
-        int = (i_bright - i_dark) / currents[i]
-        R.append(int)
-
+        )
+        / currents[i]
+        for i, u in enumerate(images)
+    ]
     Q, R = normalize(Q, np.array(R))
     return Q, R
 
@@ -61,7 +58,7 @@ def locate_spot(image: np.ndarray) -> tuple:
     u_light = image[u_slice_l]
 
     left_d, right_d = -(i + 1) - HEIGHT, -(i + 1) + HEIGHT
-    top_d, bottom_d = -(i + 1) - HEIGHT, -(i + 1) + HEIGHT
+    top_d, bottom_d = -(j + 1) - HEIGHT, -(j + 1) + HEIGHT
 
     u_slice_d = (slice(left_d, right_d), slice(top_d, bottom_d))
     u_dark = image[u_slice_d]
@@ -69,26 +66,24 @@ def locate_spot(image: np.ndarray) -> tuple:
     return np.array(u_light), np.array(u_dark)
 
 
-def normalize(Q, R):
+def normalize(Q: np.ndarray, R: np.ndarray) -> tuple:
     """
     Normalization
     """
     # find the cutoff for i_zero points
     izero_count = np.count_nonzero(Q == 0)
 
-    if izero_count == 0:
-        izero = ufloat(1, 0)
-    else:
-        izero = uaverage(R[: izero_count - 1])
+    izero = uaverage(R[: izero_count - 1]) if izero_count else ufloat(1, 0)
 
     R = R[izero_count:] / izero
     Q = Q[izero_count:]
+
     return Q, R
 
 
-def stitch_arrays(Q, R):
+def stitch_arrays(Q: np.ndarray, R: np.ndarray) -> tuple:
     """
-    stitch reflectivity curve
+    Stitch reflectivity curve
     """
     split_points = np.where(np.diff(Q) < 0)[0] + 1
 
@@ -100,21 +95,20 @@ def stitch_arrays(Q, R):
 
     # find intersection between subsets
     intersections = []
-    for i in range(0, len(subsets_Q) - 1):
-        intersection = intersection_with_tolerance(
-            subsets_Q[i], subsets_Q[i + 1], assume_unique=False
-        )
+    for i in range(len(subsets_Q) - 1):
+        intersection = intersection_with_tolerance(subsets_Q[i], subsets_Q[i + 1])
         intersections.append(intersection)
+
     return intersections, subsets_Q, subsets_R
 
 
-def intersection_with_tolerance(arr1, arr2, tol=10 ** (-7), *args, **kwargs):
+def intersection_with_tolerance(
+    arr1: np.ndarray, arr2: np.ndarray, tol: float = 10 ** (-7)
+) -> np.ndarray:
     """
     Find the intersection between two arrays to a given tolerance.
     """
-    arr1_rounded = np.round(arr1 / tol) * tol
-    arr2_rounded = np.round(arr2 / tol) * tol
-    return np.intersect1d(arr1_rounded, arr2_rounded, *args, **kwargs)
+    return arr1[np.isclose(arr1, arr2, rtol=0, atol=tol)]
 
 
 if __name__ == "__main__":

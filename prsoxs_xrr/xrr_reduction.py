@@ -7,26 +7,8 @@ from xrr_toolkit import uaverage
 
 
 def reduce(
-    meta_data: pd.DataFrame, images: list, error_method: str = "shot"
-) -> pd.DataFrame:
-    """
-    Reduce Images to 1d intensity values for each Q and Current.
-
-    Parameters
-    ----------
-    meta_data : pd.DataFrame
-        DataFrame containing "Beam Current", "Sample Theta", "Beamline Energy", "Q".
-    images : list
-        List of images collected from fits files.
-    error_method : str, optional
-        The error method to use: "shot" or "std" (default is "shot").
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame packed as ["Q", "R"] with "R" as computed intensity and its uncertainty.
-    """
-    currents, Q = meta_data["Beam Current"], meta_data["Q"]
+    Q: np.ndarray, currents: np.ndarray, images: np.ndarray, error_method: str = "shot"
+) -> np.ndarray:
     R = []
 
     # Integrate bright and dark intensity, background subtract.
@@ -43,15 +25,14 @@ def reduce(
             )
             i_bright = ufloat(Bright, Bright_std)
             i_dark = ufloat(Dark, np.sqrt(Dark))
-        else:
+        elif error_method == "shot":
             i_bright = ufloat(Bright, np.sqrt(Bright))
             i_dark = ufloat(Dark, np.sqrt(Dark))
         int = (i_bright - i_dark) / currents[i]
         R.append(int)
 
-    pre_stitch_normal = pd.DataFrame({"Q": Q, "R": R})
-    pre_stitch = normalization(pre_stitch_normal)
-    return pre_stitch
+    Q, R = normalize(Q, np.array(R))
+    return Q, R
 
 
 def locate_spot(image: np.ndarray) -> tuple:
@@ -88,103 +69,62 @@ def locate_spot(image: np.ndarray) -> tuple:
     return np.array(u_light), np.array(u_dark)
 
 
-def normalization(refl: pd.DataFrame):
+def normalize(Q, R):
     """
     Normalization
     """
     # find the cutoff for i_zero points
-    izero_count = refl["Q"].where(refl["Q"] == 0).count()
+    izero_count = np.count_nonzero(Q == 0)
 
     if izero_count == 0:
         izero = ufloat(1, 0)
     else:
-        izero = uaverage(refl["R"].iloc[:izero_count])
+        izero = uaverage(R[: izero_count - 1])
 
-    refl["R"] = refl["R"] / izero  # type: ignore
-    refl["R"] = refl["R"].drop(refl["R"].index[:izero_count])
-    return refl
+    R = R[izero_count:] / izero
+    Q = Q[izero_count:]
+    return Q, R
 
 
-def stitching(refl: pd.DataFrame):
+def stitch_arrays(Q, R):
     """
     stitch reflectivity curve
     """
+    split_points = np.where(np.diff(Q) < 0)[0] + 1
 
-    # unpack refl
-    Q = refl["Q"].to_numpy()
-    R = refl["R"].to_numpy()
+    subsets_Q = np.split(Q, split_points)
+    subsets_R = np.split(R, split_points)
 
-    def split_increasing(arr, image):
-        """
-        Splits the given array `arr` into monotonically decreasing subarrays
-        of size at least 2 and first entries being at least `thre`.
-        """
-        split_points = np.where(np.diff(arr) < 0)[0] + 1
+    subsets_Q = [sub for sub in subsets_Q if len(sub) > 1]
+    subsets_R = [sub for sub in subsets_R if len(sub) > 1]
 
-        sub_lists_dom = np.split(arr, split_points)
-        sub_lists_im = np.split(image, split_points)
+    # find intersection between subsets
+    intersections = []
+    for i in range(0, len(subsets_Q) - 1):
+        intersection = intersection_with_tolerance(
+            subsets_Q[i], subsets_Q[i + 1], assume_unique=False
+        )
+        intersections.append(intersection)
+    return intersections, subsets_Q, subsets_R
 
-        result_dom = [sub for sub in sub_lists_dom if sub.size > 1]
-        result_im = [sub for sub in sub_lists_im if sub.size > 1]
 
-        return result_dom, result_im
-
-    subsets = split_increasing(Q, R)
-
-    return subsets
+def intersection_with_tolerance(arr1, arr2, tol=10 ** (-7), *args, **kwargs):
+    """
+    Find the intersection between two arrays to a given tolerance.
+    """
+    arr1_rounded = np.round(arr1 / tol) * tol
+    arr2_rounded = np.round(arr2 / tol) * tol
+    return np.intersect1d(arr1_rounded, arr2_rounded, *args, **kwargs)
 
 
 if __name__ == "__main__":
-    from astropy.io import fits
-    import os
-    from uncertainties import unumpy
-
-    file = f"{os.getcwd()}/tests/TestData/Sorted/282.5"
-    refl = loader(file)
-
-    q = refl["Q"]
-    R = unumpy.nominal_values(refl["R"])
-    R_err = unumpy.std_devs(refl["R"])
-
-    thommas = pd.read_csv(f"{os.getcwd()}/tests/TestData/test.csv")
-
-    plt.errorbar(q, R, yerr=R_err)
-    plt.errorbar(thommas["Q"], thommas["R"], yerr=thommas["R_err"])
-    plt.yscale("log")
-    plt.show()
-
-
-def locate_spot_old(image: np.ndarray) -> tuple:  # older version
-    """
-    Locate the bright and dark images of the sample.
-
-    Parameters
-    ----------
-    image : np.ndarray
-        Numpy array of the sample image.
-    edge_cut : int
-        Number of pixels to cut from image edges.
-
-    Returns
-    -------
-    tuple
-        Tuple of the bright and dark image arrays.
-    """
-    HEIGHT = 4  # hard coded dimensions of the spot on the image
-    i, j = np.unravel_index(image.argmax(), image.shape)
-
-    left, right = i - HEIGHT, i + HEIGHT
-    top, bottom = j - HEIGHT, j + HEIGHT
-
-    u_slice = (slice(left, right), slice(top, bottom))
-    u_light = image[u_slice]
-
-    u_dark = image.copy()
-    for k in range(len(image[0])):
-        for l in range(len(image[1])):
-            if top < k < bottom and right < l < left:
-                u_dark[k][l] = np.nan
-            else:
-                pass
-
-    return np.array(u_light), np.array(u_dark)
+    q = np.array([1, 2.00000001, 3, 2, 2, 3, 4, 3, 3, 4, 5, 4, 4, 5, 6])
+    r = np.array([10, 20, 30, 20, 20, 30, 40, 30, 30, 40, 50, 40, 40, 50, 60])
+    intersections, subset_q, subset_r = stitch_arrays(q, r)
+    rpoints = stitch(q, r)
+    print(q)
+    print(r)
+    print(subset_q)
+    print(subset_r)
+    print(intersections)
+    print(rpoints)

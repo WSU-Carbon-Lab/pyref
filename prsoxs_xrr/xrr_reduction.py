@@ -1,5 +1,5 @@
 import numpy as np
-from uncertainties import ufloat
+from uncertainties import ufloat, unumpy
 
 from xrr_toolkit import uaverage
 
@@ -7,29 +7,18 @@ from xrr_toolkit import uaverage
 def reduce(
     Q: np.ndarray, currents: np.ndarray, images: np.ndarray, error_method: str = "shot"
 ) -> np.ndarray:
-    R = [
-        (
-            ufloat(
-                np.nansum(np.ravel(locate_spot(u)[0]))
-                - np.nansum(np.ravel(locate_spot(u)[1])),
-                np.sqrt(np.nansum(np.ravel(locate_spot(u)[0])))
-                / np.sqrt(len(np.ravel(locate_spot(u)[0]))),
-            )
-        )
-        / currents[i]
-        if error_method == "std"
-        else (
-            ufloat(
-                np.nansum(np.ravel(locate_spot(u)[0]))
-                - np.nansum(np.ravel(locate_spot(u)[1])),
-                np.sqrt(np.nansum(np.ravel(locate_spot(u)[0]))),
-            )
-        )
-        / currents[i]
-        for i, u in enumerate(images)
-    ]
-    Q, R = normalize(Q, np.array(R))
-    return Q, R
+    R_top = np.nansum(np.ravel(locate_spot(images)[0]), axis=1) - np.nansum(
+        np.ravel(locate_spot(images)[1]), axis=1
+    )
+    R_bottom = np.sqrt(np.nansum(np.ravel(locate_spot(images)[0]), axis=1))
+    if error_method == "std":
+        R_err = R_bottom / np.sqrt(len(np.ravel(locate_spot(images)[0])))
+    else:
+        R_err = R_bottom
+    R = unumpy.uarray(R_top, R_err) / currents[:, np.newaxis]
+    Q, R_norm = normalize(Q, R)
+    fancy_image = None
+    return Q, R_norm, fancy_image
 
 
 def locate_spot(image: np.ndarray) -> tuple:
@@ -40,8 +29,6 @@ def locate_spot(image: np.ndarray) -> tuple:
     ----------
     image : np.ndarray
         Numpy array of the sample image.
-    edge_cut : int
-        Number of pixels to cut from image edges.
 
     Returns
     -------
@@ -112,13 +99,14 @@ def intersection_with_tolerance(
 
 
 if __name__ == "__main__":
-    q = np.array([1, 2.00000001, 3, 2, 2, 3, 4, 3, 3, 4, 5, 4, 4, 5, 6])
-    r = np.array([10, 20, 30, 20, 20, 30, 40, 30, 30, 40, 50, 40, 40, 50, 60])
-    intersections, subset_q, subset_r = stitch_arrays(q, r)
-    rpoints = stitch(q, r)
-    print(q)
-    print(r)
-    print(subset_q)
-    print(subset_r)
-    print(intersections)
-    print(rpoints)
+    from astropy.io import fits
+    import os
+    import matplotlib.pyplot as plt
+
+    file = (
+        f"{os.getcwd()}\\tests\\TestData\\Sorted\\282.5\\ZnPc_P100_E180276-00001.fits"
+    )
+    image = fits.getdata(file, ext=2)
+    u_light, u_dark = locate_spot(image)
+    plt.imshow(u_dark)
+    plt.show()

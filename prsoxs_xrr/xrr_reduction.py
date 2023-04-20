@@ -31,7 +31,7 @@ def reduce(
         int = (i_bright - i_dark) / currents[i]
         R.append(int)
 
-    Q, R = normalize(Q, np.array(R))
+    Q, R = stitch_arrays(Q, R)
     return Q, R
 
 
@@ -98,14 +98,7 @@ def stitch_arrays(Q, R):
     subsets_Q = [sub for sub in subsets_Q if len(sub) > 1]
     subsets_R = [sub for sub in subsets_R if len(sub) > 1]
 
-    # find intersection between subsets
-    intersections = []
-    for i in range(0, len(subsets_Q) - 1):
-        intersection = intersection_with_tolerance(
-            subsets_Q[i], subsets_Q[i + 1], assume_unique=False
-        )
-        intersections.append(intersection)
-    return intersections, subsets_Q, subsets_R
+    return subsets_Q, subsets_R
 
 
 def intersection_with_tolerance(arr1, arr2, tol=10 ** (-7), *args, **kwargs):
@@ -117,14 +110,30 @@ def intersection_with_tolerance(arr1, arr2, tol=10 ** (-7), *args, **kwargs):
     return np.intersect1d(arr1_rounded, arr2_rounded, *args, **kwargs)
 
 
-if __name__ == "__main__":
-    q = np.array([1, 2.00000001, 3, 2, 2, 3, 4, 3, 3, 4, 5, 4, 4, 5, 6])
-    r = np.array([10, 20, 30, 20, 20, 30, 40, 30, 30, 40, 50, 40, 40, 50, 60])
-    intersections, subset_q, subset_r = stitch_arrays(q, r)
-    rpoints = stitch(q, r)
+def test_slices():
+    from astropy.io import fits
+    import matplotlib.pyplot as plt
+    import os
+
+    file = f"{os.getcwd()}/tests/TestData/Sorted/282.5/ZnPc_P100_E180276-00001.fits"
+    image = fits.getdata(file, ext=2)
+    u_bright, u_dark = locate_spot(image)
+    fig, axs = plt.subplots(1, 3)
+    axs[0].imshow(image)
+    axs[1].imshow(u_bright)
+    axs[2].imshow(u_dark)
+    plt.show()
+
+
+def test_subsets():
+    q = np.asarray([1, 2, 3, 2, 3, 4, 3, 4, 5])
+    r = 1 / q
+    rs, qs = stitch_arrays(q, r)
     print(q)
     print(r)
-    print(subset_q)
-    print(subset_r)
-    print(intersections)
-    print(rpoints)
+    print(qs)
+    print(rs)
+
+
+if __name__ == "__main__":
+    test_subsets()

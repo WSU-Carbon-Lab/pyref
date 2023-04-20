@@ -15,25 +15,26 @@ from xrr_reduction import reduce
 class XRR:
     """Class for X-ray reflectometry data analysis."""
 
-    def __init__(self):
-        self.directory = None
-        self.images = []
-        self.energies = []
-        self.sample_theta = []
-        self.beam_current = []
+    def __init__(self, directory: str):
+        self.directory = directory
         self.q = []
         self.r = []
         self.xrr = pd.DataFrame()
         self.std_err = None
         self.shot_err = None
 
-    def load(self, directory: str, error_method="shot", stitch_color="yes") -> None:
+    def load(self, error_method="shot", stitch_color="yes") -> None:
         """Load X-ray reflectometry data from FITS files in the specified directory."""
 
-        self.directory = directory
+        # Pre-allocate memory for the numpy arrays
         file_list = [f for f in os.scandir(self.directory) if f.name.endswith(".fits")]
+        num_files = len(file_list)
+        self.energies = np.empty(num_files)
+        self.sample_theta = np.empty(num_files)
+        self.beam_current = np.empty(num_files)
+        self.images = np.empty((num_files, 500, 500))
 
-        for file in file_list:
+        for i, file in enumerate(file_list):
             with fits.open(file.path) as hdul:
                 header = hdul[0].header
                 energy = header["Beamline Energy"]
@@ -41,10 +42,11 @@ class XRR:
                 beam_current = header["Beam Current"]
                 image_data = hdul[2].data
 
-                self.energies = np.append(self.energies, energy)
-                self.sample_theta = np.append(self.sample_theta, sample_theta)
-                self.beam_current = np.append(self.beam_current, beam_current)
-                self.images = np.append(self.images, image_data)
+                # Store data in the pre-allocated numpy arrays
+                self.energies[i] = energy
+                self.sample_theta[i] = sample_theta
+                self.beam_current[i] = beam_current
+                self.images[i] = image_data
 
         self.q = scattering_vector(self.energies, self.sample_theta)
         self.q, self.r = reduce(self.q, self.beam_current, self.images)
@@ -56,18 +58,13 @@ class XRR:
         R_err = unumpy.std_devs(self.r)
 
         thommas = np.loadtxt(
-            os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "tests",
-                "TestData",
-                "test.csv",
-            ),
+            f"{os.getcwd()}\\tests\\TestData\\test.csv ",
             skiprows=1,
             delimiter=",",
             usecols=(1, 2, 3),
         )
 
-        plt.errorbar(self.q, R, yerr=R_err)
+        plt.errorbar(self.q, R, R_err)
         plt.errorbar(thommas[:, 0], thommas[:, 1], yerr=thommas[:, 2])
         plt.yscale("log")
         plt.show()
@@ -83,6 +80,6 @@ def test_stitchs():
 
 if __name__ == "__main__":
     dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\282.5"
-    refl = XRR()
-    refl.load(dir)
-    test_stitchs()
+    refl = XRR(dir)
+    refl.load()
+    refl.plot()

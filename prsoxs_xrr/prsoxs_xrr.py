@@ -1,8 +1,7 @@
 """Main module."""
 
-from cProfile import label
+
 import os
-from pathlib import PureWindowsPath
 import numpy as np
 import pandas as pd
 from astropy.io import fits
@@ -79,8 +78,16 @@ class XRR:
         plt.show()
 
 
+def test_stitchs():
+    Rs = refl.r
+    Qs = refl.q
+    for i, sub in enumerate(Qs):
+        plt.plot(sub, unumpy.std_devs(Rs[i]))
+    plt.show()
+
+
 if __name__ == "__main__":
     dir = f"{os.getcwd()}/tests/TestData/Sorted/282.5"
     refl = XRR()
     refl.load(dir)
-    refl.plot()
+    test_stitchs()

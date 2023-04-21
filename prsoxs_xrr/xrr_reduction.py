@@ -1,5 +1,4 @@
 import numpy as np
-from torch import norm
 from uncertainties import ufloat, unumpy
 
 from xrr_toolkit import uaverage
@@ -16,25 +15,21 @@ def reduce(
     bright_spots = np.stack(bright_spots)
     dark_spots = np.stack(dark_spots)
 
-    bright_sum = np.sum(bright_spots.sum(axis=2, keepdims=True), axis=1)
-    dark_sum = np.sum(dark_spots.sum(axis=2, keepdims=True), axis=1)
+    bright_sum = bright_spots.sum(axis=(2, 1))
+    dark_sum = dark_spots.sum(axis=(2, 1))
 
     if error_method == "std":
-        bright_std = np.std(bright_spots, axis=1) / np.sqrt(
-            bright_spots.shape[1] * bright_spots.shape[2]
-        )
-        dark_std = np.std(dark_spots, axis=1) / np.sqrt(
-            dark_spots.shape[1] * dark_spots.shape[2]
-        )
-        i_bright = unumpy.uarray(bright_sum, bright_std)
+        dark_std = np.array([np.std(np.ravel(u)) for u in dark_spots])
+        i_bright = unumpy.uarray(bright_sum, 0)
         i_dark = unumpy.uarray(dark_sum, dark_std)
     elif error_method == "shot":
         i_bright = unumpy.uarray(bright_sum, np.sqrt(bright_sum))
         i_dark = unumpy.uarray(dark_sum, np.sqrt(dark_sum))
 
-    int = (i_bright - i_dark) / currents[:, np.newaxis]
-    R = np.squeeze(int)
+    intensity = (i_bright - i_dark) / currents
+    R = np.squeeze(intensity)
     Q, R = normalize(Q, R)
+    Q, R = stitch_arrays(Q, R)
     return Q, R
 
 
@@ -94,17 +89,49 @@ def stitch_arrays(Q: np.ndarray, R: np.ndarray) -> tuple:
     subsets_Q = np.split(Q, split_points)
     subsets_R = np.split(R, split_points)
 
-    subsets_Q = [sub for sub in subsets_Q if len(sub) > 1]
-    subsets_R = [sub for sub in subsets_R if len(sub) > 1]
+    q_sub = np.squeeze([sub for sub in subsets_Q if len(sub) > 1])
+    r_sub = np.squeeze([sub for sub in subsets_R if len(sub) > 1])
+    # We could assume that every set of angles has the same number of stitch points but this is in general not correct,
+    # we want to be more robust so instead we compute the number of stitch points for each set of angles in the dataset,
+    # if they all have the same number of stitch pints then we will reduce this to a scalar funciton
 
-    matching_indices = [
-        np.where(np.in1d(subsets_Q[i], subsets_Q[i + 1]))
-        for i in range(0, len(subsets_Q) - 1)
-    ]
-    
-    stitch_points = 
+    for i in range(0, np.shape(q_sub)[0] - 1):
+        curr_q_sub = q_sub[i]
+        curr_r_sub = r_sub[i]
+        next_r_sub = r_sub[i + 1]
+        next_q_sub = q_sub[i + 1]
+        ratio = []
+        for j, q in enumerate(curr_q_sub):
+            if q in next_q_sub:
+                index = np.squeeze(np.where(next_q_sub == q))
+                if index.size == 1:
+                    ratio.append(
+                        min(
+                            curr_r_sub[j] / next_r_sub[index],
+                            next_r_sub[index] / curr_r_sub[j],
+                        )
+                    )
+                else:
+                    ratio.append(
+                        min(
+                            curr_r_sub[j] / next_r_sub[index[0]],
+                            next_r_sub[index[0]] / curr_r_sub[j],
+                        )
+                    )
+                    ratio.append(
+                        min(
+                            curr_r_sub[j] / next_r_sub[index[1]],
+                            next_r_sub[index[1]] / curr_r_sub[j],
+                        )
+                    )
 
-    return subsets_Q, subsets_R, matching_indices
+            else:
+                pass
+        ratio = np.squeeze(ratio)
+        scale_factor = uaverage(np.squeeze(ratio))
+        r_sub[i + 1] = next_r_sub * scale_factor
+
+    return np.concatenate(r_sub), np.concatenate(r_sub)
 
 
 def test_slices():
@@ -125,16 +152,43 @@ def test_slices():
         plt.show()
 
 
-def test_subsets():
-    q = np.asarray([1, 2, 3, 2, 3, 4, 3, 4, 5])
-    r = 1 / q
-    rs, qs, indices = stitch_arrays(q, r)
-    print(q)
-    print(r)
-    print(qs)
-    print(rs)
-    print(indices)
+def test_subsets(test_case):
+    import matplotlib.pyplot as plt
+
+    q = test_case["q"]
+    r = test_case["r"]
+    correct_results = test_case["correct_r"]
+    correct_scales = test_case["correct_scales"]
+    qs, rs = stitch_arrays(q, r)
+    print(f"q = {q}\n")
+    print(f"r = {r}\n")
+    print(f"Func output q = {qs}\n")
+    print(f"Func output r = {rs}\n")
+    print(f"Correct output r = {correct_results}\n")
+    for _q, _r in zip(qs, rs):
+        plt.plot(_q, unumpy.nominal_values(_r))
+    plt.plot(q, unumpy.nominal_values(r))
+    plt.show()
+
+
+# test stitch factors
+subset_test_1 = {
+    "q": np.asarray([1, 2, 3, 2, 2, 3, 4, 3, 3, 4, 5, 4, 4, 5, 6]),
+    "r": np.asarray([6, 5, 4, 10, 10, 8, 6, 16, 16, 12, 8, 24, 24, 16, 8]),
+    "correct_r": np.flip([1, 2, 3, 2, 2, 3, 4, 3, 4, 5, 4, 5, 6]),
+    "correct_scales": [1, 2, 3, 4],
+}
+
+subset_test_2 = {
+    "q": np.asarray([1, 2, 3, 2, 2, 3, 4, 3, 3, 4, 5, 4, 4, 5, 6]),
+    "r": unumpy.uarray(
+        np.asarray([6, 5, 4, 10, 10, 8, 6, 16, 16, 12, 8, 24, 24, 16, 8]),
+        np.sqrt(np.asarray([6, 5, 4, 10, 10, 8, 6, 16, 16, 12, 8, 24, 24, 16, 8])),
+    ),
+    "correct_r": np.flip([1, 2, 3, 2, 2, 3, 4, 3, 4, 5, 4, 5, 6]),
+    "correct_scales": [1, 2, 3, 4],
+}
 
 
 if __name__ == "__main__":
-    test_subsets()
+    test_subsets(subset_test_2)

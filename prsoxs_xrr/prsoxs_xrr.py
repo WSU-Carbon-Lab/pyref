@@ -8,8 +8,7 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy
 
-from xrr_toolkit import scattering_vector
-from xrr_reduction import reduce
+from xrr_toolkit import scattering_vector, uaverage
 
 
 class XRR:
@@ -22,6 +21,7 @@ class XRR:
         self.xrr = pd.DataFrame()
         self.std_err = None
         self.shot_err = None
+        self.currents = None
 
     def load(self, error_method="shot", stitch_color="yes") -> None:
         """Load X-ray reflectometry data from FITS files in the specified directory."""
@@ -49,7 +49,32 @@ class XRR:
                 self.images[i] = image_data
 
         self.q = scattering_vector(self.energies, self.sample_theta)
-        self.q, self.r = reduce(self.q, self.beam_current, self.images)
+        if stitch_color == "yes":
+            self.currents = 1
+        else:
+            self.currents = self.beam_current.mean()
+
+    def reduce(self, error_method="shot") -> None:
+        bright_spots, dark_spots = zip(*[locate_spot(image) for image in self.images])
+        bright_spots = np.stack(bright_spots)
+        dark_spots = np.stack(dark_spots)
+
+        bright_sum = bright_spots.sum(axis=(2, 1))
+        dark_sum = dark_spots.sum(axis=(2, 1))
+
+        dark_std = np.array([np.std(np.ravel(u)) for u in dark_spots])
+
+        intensity = bright_sum - dark_sum
+
+        self.std_err = dark_std / self.q.size
+        self.shot_err = np.sqrt(bright_sum + dark_sum)
+        if error_method == "shot" or error_method == None:
+            self.q, self.r = normalize(self.q, unumpy.uarray(intensity, self.shot_err))
+        if error_method == "std":
+            self.q, self.r = normalize(self.q, unumpy.uarray(intensity, self.std_err))
+
+    def stitch(self):
+        self.q, self.r = stitch_arrays(self.q, self.r)
 
     def plot(self) -> None:
         """Plot the X-ray reflectometry data and a reference curve."""
@@ -70,11 +95,101 @@ class XRR:
         plt.show()
 
 
+def locate_spot(image: np.ndarray) -> tuple:
+    """
+    Locate the bright and dark images of the sample.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Numpy array of the sample image.
+
+    Returns
+    -------
+    tuple
+        Tuple of the bright and dark image arrays.
+    """
+    HEIGHT = 4  # hard coded dimensions of the spot on the image
+
+    # Get the indices of the maximum and minimum values in the image
+    max_idx = np.unravel_index(image.argmax(), image.shape)
+
+    # Define the regions of interest for the bright and dark spots
+    roi = (
+        slice(max_idx[0] - HEIGHT, max_idx[0] + HEIGHT + 1),
+        slice(max_idx[1] - HEIGHT, max_idx[1] + HEIGHT + 1),
+    )
+
+    # Extract the bright and dark spots from the image using the ROIs
+    u_light = image[roi]
+    u_dark = np.flip(image)[roi]
+
+    return u_light, u_dark
+
+
+def normalize(Q: np.ndarray, R: np.ndarray) -> tuple:
+    """
+    Normalization
+    """
+    # find the cutoff for i_zero points
+    izero_count = np.count_nonzero(Q == 0)
+
+    izero = uaverage(R[: izero_count - 1]) if izero_count else ufloat(1, 0)
+
+    R = R[izero_count:] / izero
+    Q = Q[izero_count:]
+
+    return Q, R
+
+
+def stitch_arrays(Q: np.ndarray, R: np.ndarray, tol: float = 1e-6) -> tuple:
+    """
+    Stitch reflectivity curve
+    """
+    split_points = np.where(np.diff(Q) < 0)[0] + 1
+
+    subsets_Q = np.split(Q, split_points)
+    subsets_R = np.split(R, split_points)
+
+    q_sub = [sub for sub in subsets_Q if len(sub) > 3]
+    r_sub = [sub for sub in subsets_R if len(sub) > 3]
+
+    for i in range(0, np.shape(q_sub)[0] - 1):
+        curr_q_sub = q_sub[i]
+        curr_r_sub = r_sub[i]
+        next_r_sub = r_sub[i + 1]
+        next_q_sub = q_sub[i + 1]
+        ratio = []
+
+        # Create a boolean mask indicating where elements of curr_q_sub appear in next_q_sub within the given tolerance
+        mask = np.zeros((len(next_q_sub), len(curr_q_sub)), dtype=bool)
+        for j in range(len(next_q_sub)):
+            for k in range(len(curr_q_sub)):
+                mask[j, k] = np.isclose(
+                    next_q_sub[j], curr_q_sub[k], rtol=tol, atol=tol
+                )
+
+        # Calculate ratios using broadcasting
+        ratios = np.minimum.outer(curr_r_sub, next_r_sub[mask]) / np.maximum.outer(
+            curr_r_sub, next_r_sub[mask]
+        )
+
+        # Add ratios to list and flatten
+        ratio.append(ratios.flatten())
+
+        # Scale next_r_sub by mean of ratios along axis 0
+        scale_factor = uaverage(np.array(ratio), axis=0)
+        r_sub[i + 1] = next_r_sub * scale_factor
+
+    return np.concatenate(q_sub), np.concatenate(r_sub)
+
+
 def test_stitchs():
     Rs = refl.r
     Qs = refl.q
     for i, sub in enumerate(Qs):
-        plt.plot(sub, unumpy.std_devs(Rs[i]))
+        plt.plot(sub, unumpy.nominal_values(Rs[i]))
+    plt.yscale("log")
     plt.show()
 
 
@@ -82,4 +197,6 @@ if __name__ == "__main__":
     dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\282.5"
     refl = XRR(dir)
     refl.load()
-    refl.plot()
+    refl.reduce()
+    refl.stitch()
+    print(refl.r)

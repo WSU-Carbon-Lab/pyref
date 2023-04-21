@@ -1,9 +1,9 @@
-import os, tkinter, glob, numpy as np
+import os
 from pathlib import Path
-from astropy.io import fits
 from shutil import copy2
 from tqdm import tqdm
 from tkinter import *
+from astropy.io import fits
 
 
 def restartable(func):
@@ -21,25 +21,24 @@ def restartable(func):
     return wrapper
 
 
-def check_parent(dir) -> None:
+def check_parent(dir: Path) -> None:
     """
     Makes a new directory for the sorted data
 
     Parameters
     ----------
-    dir : Windows path object
+    dir : pathlib.Path
         Directory of the data that you want sorted
     """
-    p_dir = Path(dir.parent)
+    p_dir = dir.parent
     Directories = [x[0] for x in os.walk(p_dir)]
-    sort_path = os.path.join(p_dir, "Sorted")
-    if not os.path.exists(sort_path):
-        os.makedirs(sort_path)
+    sort_path = p_dir / "Sorted"
+    if not sort_path.exists():
+        sort_path.mkdir()
     else:
         print(
             "The sorted directory already exists - Checking for energy sub-directories"
         )
-        pass
     return
 
 
@@ -51,7 +50,7 @@ def xrr_sorter() -> None:
 
     Parameters
     ----------
-    dir : Windows path object
+    dir : pathlib.Path
         Directory of the data that you want sorted
     """
 
@@ -60,31 +59,27 @@ def xrr_sorter() -> None:
 
     root = Tk()
     root.withdraw()
-    directory = filedialog.askdirectory()
-    dir = Path(directory)
+    directory = Path(filedialog.askdirectory())
 
     # check if the parent directory exist
-    check_parent(dir)
+    check_parent(directory)
 
     # Make a list of all fits files and their full path
-    files = list(dir.glob("*fits"))
-    sort_dir = str(dir.parent) + "\Sorted"
+    files = list(directory.glob("*fits"))
+    sort_dir = directory.parent / "Sorted"
 
     i = 0
     for file in tqdm(files):
         # Opens the file nad reads the energy; round the energy to the nearest energy resolvable by the device
-        headers = fits.open(file)
-        new_en = round(headers[0].header[49], 1)
-        headers.close()
+        with fits.open(file) as headers:
+            new_en = round(headers[0].header[49], 1)
 
         # determine the ending location
-        dest = os.path.join(str(sort_dir), str(new_en))
+        dest = sort_dir / str(new_en)
 
         # makes a new directory for the new energy
-        if not os.path.exists(dest):
-            os.makedirs(dest)
-        else:
-            pass
+        if not dest.exists():
+            dest.mkdir()
 
         # copies the file to the new directory
         copy2(file, dest)

@@ -111,8 +111,11 @@ class XRR:
 
         q_split = np.split(self.q, ind)
         r_split = np.split(self.r, ind)
-        self.q_split = [sub for sub in q_split if len(sub) > 3]
-        self.r_split = [sub for sub in r_split if len(sub) > 3]
+
+        stitch_points = min([len(sub) for sub in q_split]) + 1
+
+        self.q_split = [sub for sub in q_split if len(sub) > stitch_points]
+        self.r_split = [sub for sub in r_split if len(sub) > stitch_points]
 
         for i, (sub_q, sub_r) in enumerate(zip(self.q_split, self.r_split)):
             if i == len(self.q_split) - 1:

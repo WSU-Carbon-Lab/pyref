@@ -165,12 +165,28 @@ def locate_spot(image: np.ndarray) -> tuple:
 
     # Get the indices of the maximum and minimum values in the image
     max_idx = np.unravel_index(image.argmax(), image.shape)
+    # _min = np.array(max_idx) - HEIGHT
+    # _max = np.array(max_idx) + HEIGHT
 
-    # Define the regions of interest for the bright and dark spots
+    # correction = np.zeros(2)
+    # if np.any(_min < 0):
+    #     loc = np.where(_min < 0)
+    #     correction[loc] = -1 * _min[loc]
+    # if np.any(_max > image.shape[0]):
+    #     loc = np.where(_max > image.shape[0])
+    #     correction[loc] = _max[loc] - image.shape[0]
+    # else:
+    #     pass
+    # max_idx = max_idx + correction
+
     roi = (
         slice(max_idx[0] - HEIGHT, max_idx[0] + HEIGHT + 1),
         slice(max_idx[1] - HEIGHT, max_idx[1] + HEIGHT + 1),
     )
+
+    # Define the regions of interest for the bright and dark spots
+    # need to check if spot is within HEIGHT of the edges.
+    # If it is, move increase/decrease
 
     # Extract the bright and dark spots from the image using the ROIs
     u_light = image[roi]

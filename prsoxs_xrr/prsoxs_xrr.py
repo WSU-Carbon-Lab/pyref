@@ -17,32 +17,46 @@ class XRR:
     Main class for processing xrr data
     """
 
-    def __init__(self, directory: str, error_method=None, *args, **kwargs):
+    def __init__(self, directory: str, *args, **kwargs):
+        # main properties
         self.directory = directory
         self.q = np.array([], dtype=np.float64)
         self.r = np.array([], dtype=np.float64)
         self.xrr = pd.DataFrame()
         self.std_err = None
         self.shot_err = None
+        # hidden properties
+        self._error_method = "shot"
+
+    @property
+    def error_method(self):
+        return self._error_method
+
+    @error_method.setter
+    def error_method(self, method):
+        methods = ["shot", "std"]
+        if method in methods:
+            self._error_method = method
+        else:
+            raise ValueError(
+                'Choose "shot" for possonian statistics, or "std" for gaussian statistics'
+            )
 
     # define the outcome of the call
 
     def calc_xrr(self, *args, **kwargs):
         # Load fits and perform data reduction, stitching, and normalization
-        self._fits_loader()
+        self._fits_loader()  # move to own function. Perhapse __call__ should perform this task
         self._data_reduction(*args, **kwargs)
         self._normalize()
         self._stitch(*args, **kwargs)
 
         # Assign values to xrr dictionary
         self.xrr["Q"] = self.q
-        self.xrr["R"] = unumpy.nominal_values(self.r)
+        self.xrr["R"] = unumpy.nominal_values(np.concatenate(self.r, axis=None))
         self.xrr["R_err"] = unumpy.std_devs(
-            self.r
+            np.concatenate(self.r, axis=None)
         )  # call std_devs() to calculate standard deviation of self.r
-
-        # Return xrr dictionary
-        return self.xrr
 
     def _fits_loader(self) -> None:
         """Load X-ray reflectometry data from FITS files in the specified directory."""
@@ -69,7 +83,7 @@ class XRR:
         # Calculate the scattering vector
         self.q = scattering_vector(self.energies, self.sample_theta)
 
-    def _data_reduction(self, error_method="shot") -> None:
+    def _data_reduction(self) -> None:
         bright_spots, dark_spots = zip(*[locate_spot(image) for image in self.images])
         bright_spots = np.stack(bright_spots)
         dark_spots = np.stack(dark_spots)
@@ -80,18 +94,17 @@ class XRR:
         dark_std = np.array([np.std(np.ravel(u)) for u in dark_spots])
 
         r = (bright_sum - dark_sum) / self.beam_current
-        self.std_err = dark_std / self.q.size
-        self.shot_err = np.sqrt(bright_sum + dark_sum)
-        if error_method == "shot":
+        self.std_err = dark_std / np.sqrt(
+            bright_spots.shape[0]
+        )  # only includes std of dark not of bright spot
+        self.shot_err = np.sqrt(bright_sum + dark_sum) / self.beam_current
+        if self._error_method == "shot":
             self.r = unumpy.uarray(r, self.shot_err)
-        elif error_method == "std":
+        elif self._error_method == "std":
             self.r = unumpy.uarray(r, self.std_err)
-        elif error_method == "compare":
-            self.r1 = unumpy.uarray(r, self.shot_err)
-            self.r2 = unumpy.uarray(r, self.std_err)
         else:
             raise Exception(
-                'Choose "shot" for possonian statistics, "std" for gaussian statistics, or "compare" to compare the two methods'
+                'Choose "shot" for possonian statistics, or "std" for gaussian statistics'
             )
 
     def _normalize(self):
@@ -103,8 +116,8 @@ class XRR:
 
         izero = uaverage(self.r[: izero_count - 1]) if izero_count > 0 else ufloat(1, 0)
 
-        self.r = self.r / izero  # self.r[izero_count:] / izero
-        # self.q = self.q[izero_count:]
+        self.r = self.r[izero_count:] / izero
+        self.q = self.q[izero_count:]
 
     def _stitch(self, tol=0.1):
         # split self.q and self.r into sections that are monotonically increasing
@@ -145,6 +158,15 @@ class XRR:
             )
         plt.legend()
         plt.yscale("log")
+        plt.show()
+
+    def error_plot(self):
+        methods = ["shot", "std"]
+        for method in methods:
+            self.error_method = method
+            self.calc_xrr()
+            plt.semilogy(self.q, unumpy.std_devs(self.r), label=f"{method}")
+        plt.legend()
         plt.show()
 
 
@@ -202,5 +224,4 @@ if __name__ == "__main__":
     dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\282.5"
     dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\283.7"
     xrr = XRR(dir)
-    xrr.calc_xrr()
-    xrr.plot()
+    xrr.error_plot()

@@ -1,6 +1,7 @@
 """Main module."""
 
 import os
+from types import LambdaType
 import numpy as np
 import pandas as pd
 from astropy.io import fits
@@ -102,8 +103,8 @@ class XRR:
 
         izero = uaverage(self.r[: izero_count - 1]) if izero_count > 0 else ufloat(1, 0)
 
-        self.r = self.r[izero_count:] / izero
-        self.q = self.q[izero_count:]
+        self.r = self.r / izero  # self.r[izero_count:] / izero
+        # self.q = self.q[izero_count:]
 
     def _stitch(self, tol=0.1):
         # split self.q and self.r into sections that are monotonically increasing
@@ -140,7 +141,7 @@ class XRR:
                 unumpy.nominal_values(sub[1]),
                 unumpy.std_devs(sub[1]),
                 fmt=".",
-                label=f"Scan = {i+2}",
+                label=f"Scan = {i+1}",
             )
         plt.legend()
         plt.yscale("log")
@@ -165,23 +166,23 @@ def locate_spot(image: np.ndarray) -> tuple:
 
     # Get the indices of the maximum and minimum values in the image
     max_idx = np.unravel_index(image.argmax(), image.shape)
-    # _min = np.array(max_idx) - HEIGHT
-    # _max = np.array(max_idx) + HEIGHT
+    _min = np.array(max_idx) - HEIGHT
+    _max = np.array(max_idx) + HEIGHT
 
-    # correction = np.zeros(2)
-    # if np.any(_min < 0):
-    #     loc = np.where(_min < 0)
-    #     correction[loc] = -1 * _min[loc]
-    # if np.any(_max > image.shape[0]):
-    #     loc = np.where(_max > image.shape[0])
-    #     correction[loc] = _max[loc] - image.shape[0]
-    # else:
-    #     pass
-    # max_idx = max_idx + correction
+    correction = np.zeros(2, dtype=np.int64)
+    if np.any(_min < 0):
+        loc = np.where(_min < 0)
+        correction[loc] = -1 * _min[loc]
+    if np.any(_max > image.shape[0]):
+        loc = np.where(_max > image.shape[0])
+        correction[loc] = image.shape[0] - _max[loc] - 1
+    else:
+        pass
+    new_idx = tuple(map(lambda x, y: np.int64(x + y), max_idx, correction))
 
     roi = (
-        slice(max_idx[0] - HEIGHT, max_idx[0] + HEIGHT + 1),
-        slice(max_idx[1] - HEIGHT, max_idx[1] + HEIGHT + 1),
+        slice(new_idx[0] - HEIGHT, new_idx[0] + HEIGHT + 1),
+        slice(new_idx[1] - HEIGHT, new_idx[1] + HEIGHT + 1),
     )
 
     # Define the regions of interest for the bright and dark spots
@@ -191,12 +192,15 @@ def locate_spot(image: np.ndarray) -> tuple:
     # Extract the bright and dark spots from the image using the ROIs
     u_light = image[roi]
     u_dark = np.flip(image)[roi]
+    # if np.any(correction) != 0:
+    #     raise Exception("We found the image where the beam runs off!")
 
     return u_light, u_dark
 
 
 if __name__ == "__main__":
     dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\282.5"
+    dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\283.7"
     xrr = XRR(dir)
     xrr.calc_xrr()
     xrr.plot()

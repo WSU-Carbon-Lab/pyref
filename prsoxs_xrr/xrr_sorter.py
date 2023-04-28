@@ -4,6 +4,7 @@ from shutil import copy2
 from tqdm import tqdm
 from tkinter import *
 from astropy.io import fits
+from xrr_toolkit import *
 
 
 def restartable(func):
@@ -43,7 +44,7 @@ def check_parent(dir: Path) -> None:
 
 
 @restartable
-def xrr_sorter() -> None:
+def xrr_sorter(directory) -> None:
     """
     Collects the energies each fits was collected at and makes subfolder for each energy
     Generates a dictionary containing the current file location, and its destination.
@@ -53,13 +54,6 @@ def xrr_sorter() -> None:
     dir : pathlib.Path
         Directory of the data that you want sorted
     """
-
-    # get the data directory from user input using tkinter
-    from tkinter import filedialog
-
-    root = Tk()
-    root.withdraw()
-    directory = Path(filedialog.askdirectory())
 
     # check if the parent directory exist
     check_parent(directory)
@@ -88,4 +82,4 @@ def xrr_sorter() -> None:
 
 
 if __name__ == "__main__":
-    xrr_sorter()
+    xrr_sorter(file_dialog())

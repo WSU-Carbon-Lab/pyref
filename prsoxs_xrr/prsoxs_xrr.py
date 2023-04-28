@@ -9,7 +9,6 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy
 import glob
-from prsoxs_xrr.xrr_sorter import xrr_sorter
 
 from xrr_toolkit import *
 
@@ -52,6 +51,7 @@ class XRR:
         self._fits_loader()  # move to own function. Perhapse __call__ should perform this task
         self._data_reduction(*args, **kwargs)
         self._normalize()
+        self._update_stats()
         self._stitch(*args, **kwargs)
         self.r = np.concatenate(self.r_split, axis=None)
 
@@ -116,20 +116,41 @@ class XRR:
 
         self.r = self.r[izero_count:] / izero
         self.q = self.q[izero_count:]
+        self.images = self.images[izero_count:]
         assert self.r.size == self.q.size
 
+    def _update_stats(self):
+        """
+        Internal function to update the stats based on the first frame in the data set.
+        """
+        self._repeat_index = np.where(np.absolute(np.diff(self.q)) < 1e-3)[0] + 1
+
+    def _calculate_stitch_points(self):
+        """
+        Internal function for computing the stitch points in the dataset.
+        The function splits self.r, self.q, and self.images into
+        self.r_split, self.q_split, and self.image_split
+        """
+
     def _stitch(self, tol=0.1):
-        # split self.q and self.r into sections that are monotonically increasing
+        """
+        Internal function used to stitch each of the subsets together.
+        The function uses the backend intersect1d numpy function to
+        determine intersct points between subsequent sets
+
+        """
         ind = np.where(np.diff(self.q) < 0)[0] + 1
 
         q_split = np.split(self.q, ind)
         r_split = np.split(self.r, ind)
+        self._image_split = np.split(self.images, ind)
 
         stitch_points = min([len(sub) for sub in q_split]) + 1
 
         self.q_split = [sub for sub in q_split if len(sub) > stitch_points]
         self.r_split = [sub for sub in r_split if len(sub) > stitch_points]
         self._ratios = []
+        self._overlap = []
         for i, (sub_q, sub_r) in enumerate(zip(self.q_split, self.r_split)):
             if i == len(self.q_split) - 1:
                 pass
@@ -256,4 +277,8 @@ def locate_spot(image: np.ndarray) -> tuple:
 
 
 if __name__ == "__main__":
-    multi_loader()
+    # multi_loader()
+    dir = file_dialog()
+    xrr1 = XRR(dir)
+    xrr1.error_method = "std"
+    xrr1.calc_xrr()

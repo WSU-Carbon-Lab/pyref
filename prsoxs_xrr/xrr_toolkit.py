@@ -48,12 +48,11 @@ def uaverage(uarray: np.ndarray) -> ufloat:
     """
     if uarray.dtype.char == "0":
         nominal_values = unumpy.nominal_values(uarray)
-        std_devs = unumpy.std_devs(uarray)
+        weights = (1 / unumpy.std_devs(uarray)) ** 2
 
-        top = nominal_values / std_devs**2
-        bot = 1 / (std_devs**2)
+        avg = np.average(nominal_values, weights=weights)
+        wavg = ufloat(avg, 1 / np.sqrt(np.sum(weights)))
 
-        wavg = ufloat(np.sum(top) / np.sum(bot), np.sqrt(2 / np.sum(bot)))
     else:
         wavg = uarray.mean()
     return wavg

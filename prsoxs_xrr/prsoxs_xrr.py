@@ -9,6 +9,7 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy
 import glob
+from prsoxs_xrr.xrr_sorter import xrr_sorter
 
 from xrr_toolkit import *
 
@@ -188,6 +189,21 @@ class XRR:
         plt.show()
 
 
+def multi_loader(sort=False):
+    parent_dir = file_dialog()
+    if sort == True:
+        xrr_sorter(parent_dir)
+
+    multi_xrr = []
+    for energy in os.listdir(parent_dir):
+        full_file_path = os.path.join(parent_dir, energy)
+        xrr = XRR(full_file_path)
+        xrr.calc_xrr()
+        xrr.plot()
+        multi_xrr.append(xrr)
+    return multi_xrr
+
+
 def locate_spot(image: np.ndarray) -> tuple:
     """
     Locate the bright and dark images of the sample.
@@ -240,7 +256,4 @@ def locate_spot(image: np.ndarray) -> tuple:
 
 
 if __name__ == "__main__":
-    dir = file_dialog()
-    xrr = XRR(dir)
-    xrr.calc_xrr()
-    xrr.full_plot()
+    multi_loader()

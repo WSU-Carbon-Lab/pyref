@@ -1,9 +1,19 @@
 import os
 import numpy as np
 from uncertainties import unumpy, ufloat
+from pathlib import Path
+from tkinter import filedialog
+from tkinter import *
 
 c = 299_792_458 * 10**10  # \AA s-2
 ħ = 6.582_119_569 * 10 ** (-16)  # eV s
+
+
+def file_dialog():
+    root = Tk()
+    root.withdraw()
+    directory = Path(filedialog.askdirectory())
+    return directory
 
 
 def scattering_vector(energy, theta):
@@ -11,6 +21,15 @@ def scattering_vector(energy, theta):
     k = energy / (ħ * c)
     Q = 2 * k * np.sin(np.radians(theta))
     return Q
+
+
+def is_valid_index(arr, index):
+    i, j = index
+    if i < 0 or i >= arr.shape[0]:
+        return False
+    if j < 0 or j >= arr.shape[1]:
+        return False
+    return True
 
 
 def uaverage(uarray: np.ndarray) -> ufloat:

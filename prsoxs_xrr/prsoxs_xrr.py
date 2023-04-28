@@ -1,5 +1,6 @@
 """Main module."""
 
+from numbers import Rational
 import os
 from types import LambdaType
 import numpy as np
@@ -8,14 +9,17 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy
 import glob
+from prsoxs_xrr.xrr_sorter import xrr_sorter
 
-from xrr_toolkit import scattering_vector, uaverage
+from xrr_toolkit import *
 
 
 class XRR:
     """
     Main class for processing xrr data
     """
+
+    METHODS = ["shot", "std"]
 
     def __init__(self, directory: str, *args, **kwargs):
         # main properties
@@ -34,8 +38,7 @@ class XRR:
 
     @error_method.setter
     def error_method(self, method):
-        methods = ["shot", "std"]
-        if method in methods:
+        if method in self.METHODS:
             self._error_method = method
         else:
             raise ValueError(
@@ -50,13 +53,7 @@ class XRR:
         self._data_reduction(*args, **kwargs)
         self._normalize()
         self._stitch(*args, **kwargs)
-
-        # Assign values to xrr dictionary
-        self.xrr["Q"] = self.q
-        self.xrr["R"] = unumpy.nominal_values(np.concatenate(self.r, axis=None))
-        self.xrr["R_err"] = unumpy.std_devs(
-            np.concatenate(self.r, axis=None)
-        )  # call std_devs() to calculate standard deviation of self.r
+        self.r = np.concatenate(self.r_split, axis=None)
 
     def _fits_loader(self) -> None:
         """Load X-ray reflectometry data from FITS files in the specified directory."""
@@ -106,6 +103,7 @@ class XRR:
             raise Exception(
                 'Choose "shot" for possonian statistics, or "std" for gaussian statistics'
             )
+        assert self.q.size == self.r.size
 
     def _normalize(self):
         """
@@ -118,6 +116,7 @@ class XRR:
 
         self.r = self.r[izero_count:] / izero
         self.q = self.q[izero_count:]
+        assert self.r.size == self.q.size
 
     def _stitch(self, tol=0.1):
         # split self.q and self.r into sections that are monotonically increasing
@@ -130,7 +129,7 @@ class XRR:
 
         self.q_split = [sub for sub in q_split if len(sub) > stitch_points]
         self.r_split = [sub for sub in r_split if len(sub) > stitch_points]
-
+        self._ratios = []
         for i, (sub_q, sub_r) in enumerate(zip(self.q_split, self.r_split)):
             if i == len(self.q_split) - 1:
                 pass
@@ -145,29 +144,64 @@ class XRR:
                     ratio = np.append(ratio, r_value / next_r_values)
                 ratio = uaverage(ratio)
                 self.r_split[i + 1] = self.r_split[i + 1] * ratio
+                self._ratios.append(ratio)
+        self.r = np.concatenate(self.r_split)
+        self.q = np.concatenate(self.q_split)
+        assert self.r.size == self.q.size
 
     def plot(self) -> None:
         """Plot the X-ray reflectometry data and a reference curve."""
-        for i, sub in enumerate(zip(self.q_split, self.r_split)):
-            plt.errorbar(
-                sub[0],
-                unumpy.nominal_values(sub[1]),
-                unumpy.std_devs(sub[1]),
-                fmt=".",
-                label=f"Scan = {i+1}",
-            )
+        plt.errorbar(
+            self.q, unumpy.nominal_values(self.r), unumpy.std_devs(self.r), fmt="."
+        )
         plt.legend()
         plt.yscale("log")
         plt.show()
 
-    def error_plot(self):
-        methods = ["shot", "std"]
-        for method in methods:
+    def full_plot(self):
+        import seaborn as sns
+
+        fig, axs = plt.subplots(3, 1, sharex=True)
+        plt.tick_params(which="both", right=True, top=True)
+        plt.minorticks_on()
+
+        for j, method in enumerate(self.METHODS):
             self.error_method = method
             self.calc_xrr()
-            plt.semilogy(self.q, unumpy.std_devs(self.r), label=f"{method}")
+            for i, sub in enumerate(zip(self.q_split, self.r_split)):
+                axs[1 + j].errorbar(
+                    sub[0],
+                    unumpy.nominal_values(sub[1]),
+                    unumpy.std_devs(sub[1]),
+                    fmt=".",
+                    label=f"Scan = {i+1}",
+                )
+                axs[1 + j].set_ylabel(f"Specular Reflectivity {method}")
+            axs[0].plot(self.q, unumpy.std_devs(self.r), "--", label=f"{method}")
+        axs[0].set_ylabel(r"Uncertianties $\sigma_R$")
+
+        plt.xlabel(r"q $[\AA]$")
+
+        for i in range(len(axs)):
+            axs[i].legend()
+            axs[i].set_yscale("log")
         plt.legend()
         plt.show()
+
+
+def multi_loader(sort=False):
+    parent_dir = file_dialog()
+    if sort == True:
+        xrr_sorter(parent_dir)
+
+    multi_xrr = []
+    for energy in os.listdir(parent_dir):
+        full_file_path = os.path.join(parent_dir, energy)
+        xrr = XRR(full_file_path)
+        xrr.calc_xrr()
+        xrr.plot()
+        multi_xrr.append(xrr)
+    return multi_xrr
 
 
 def locate_spot(image: np.ndarray) -> tuple:
@@ -201,6 +235,7 @@ def locate_spot(image: np.ndarray) -> tuple:
     else:
         pass
     new_idx = tuple(map(lambda x, y: np.int64(x + y), max_idx, correction))
+    assert is_valid_index(image, new_idx)
 
     roi = (
         slice(new_idx[0] - HEIGHT, new_idx[0] + HEIGHT + 1),
@@ -221,7 +256,4 @@ def locate_spot(image: np.ndarray) -> tuple:
 
 
 if __name__ == "__main__":
-    dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\282.5"
-    dir = f"{os.getcwd()}\\tests\\TestData\\Sorted\\283.7"
-    xrr = XRR(dir)
-    xrr.error_plot()
+    multi_loader()

@@ -2,13 +2,13 @@
 
 from numbers import Rational
 import os
-from types import LambdaType
 import numpy as np
 import pandas as pd
 from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy
 import glob
+import json
 
 from xrr_toolkit import *
 
@@ -18,9 +18,7 @@ class XRR:
     Main class for processing xrr data
     """
 
-    METHODS = ["shot", "std"]
-
-    def __init__(self, directory: str, *args, **kwargs):
+    def __init__(self, directory: str, error_method, height, *args, **kwargs):
         # main properties
         self.directory = directory
         self.q = np.array([], dtype=np.float64)
@@ -28,40 +26,28 @@ class XRR:
         self.xrr = pd.DataFrame()
         self.std_err = None
         self.shot_err = None
+
         # hidden properties
-        self._error_method = "shot"
-
-    @property
-    def error_method(self):
-        return self._error_method
-
-    @error_method.setter
-    def error_method(self, method):
-        if method in self.METHODS:
-            self._error_method = method
-        else:
-            raise ValueError(
-                'Choose "shot" for possonian statistics, or "std" for gaussian statistics'
-            )
-
-    # define the outcome of the call
+        self._error_method = error_method
 
     def calc_xrr(self, *args, **kwargs):
-        # Load fits and perform data reduction, stitching, and normalization
-        self._fits_loader()  # move to own function. Perhapse __call__ should perform this task
+        """Main process for loading and calculating reflectivity curves"""
+        self._fits_loader()
         self._data_reduction(*args, **kwargs)
         self._normalize()
-        self._update_stats()
         self._stitch(*args, **kwargs)
         self.r = np.concatenate(self.r_split, axis=None)
 
     def _fits_loader(self) -> None:
-        """Load X-ray reflectometry data from FITS files in the specified directory."""
+        """Load X-ray reflectometry data from FITS files in the specified directory.
 
-        # Get list of .fits files in the directory
+        Computing the xrr profile requires Beamline Energy, Sample Theta, and Beam Current
+        Files are opened with astropy and those values are extracted from the header data
+        The images are collected from the image data
+
+        """
         file_list = sorted(glob.glob(os.path.join(self.directory, "*.fits")))
 
-        # Pre-allocate memory for the numpy arrays
         arrays = [
             [
                 fits.getheader(f, 0)["Beamline Energy"],
@@ -70,6 +56,7 @@ class XRR:
             ]
             for f in file_list
         ]
+
         self.images = np.squeeze(np.array([[fits.getdata(f, 2) for f in file_list]]))
         (
             self.energies,
@@ -77,8 +64,29 @@ class XRR:
             self.beam_current,
         ) = np.column_stack(arrays)
 
-        # Calculate the scattering vector
         self.q = scattering_vector(self.energies, self.sample_theta)
+
+    def _image_slicer(self):
+        max_idx = np.unravel_index(image.argmax(), image.shape)
+        _min = np.array(max_idx) - HEIGHT
+        _max = np.array(max_idx) + HEIGHT
+
+        correction = np.zeros(2, dtype=np.int64)
+        if np.any(_min < 0):
+            loc = np.where(_min < 0)
+            correction[loc] = -1 * _min[loc]
+        if np.any(_max > image.shape[0]):
+            loc = np.where(_max > image.shape[0])
+            correction[loc] = image.shape[0] - _max[loc] - 1
+        else:
+            pass
+        new_idx = tuple(map(lambda x, y: np.int64(x + y), max_idx, correction))
+        assert is_valid_index(image, new_idx)
+
+        roi = (
+            slice(new_idx[0] - HEIGHT, new_idx[0] + HEIGHT + 1),
+            slice(new_idx[1] - HEIGHT, new_idx[1] + HEIGHT + 1),
+        )
 
     def _data_reduction(self) -> None:
         bright_spots, dark_spots = zip(*[locate_spot(image) for image in self.images])
@@ -280,5 +288,5 @@ if __name__ == "__main__":
     # multi_loader()
     dir = file_dialog()
     xrr1 = XRR(dir)
-    xrr1.error_method = "std"
     xrr1.calc_xrr()
+    xrr1.plot()

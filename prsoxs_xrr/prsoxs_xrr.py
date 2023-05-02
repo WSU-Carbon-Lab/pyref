@@ -8,7 +8,6 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from uncertainties import unumpy
 import glob
-import json
 
 from xrr_toolkit import *
 
@@ -216,6 +215,47 @@ class XRR:
             axs[i].set_yscale("log")
         plt.legend()
         plt.show()
+
+
+#
+#
+#
+
+
+class RawData(XRR):
+    """Raw data collected from file dialog"""
+
+
+#
+#
+#
+
+
+class Reflectivity(xrr_raw_data):
+    """stitched and loaded q and r"""
+
+
+#
+#
+#
+
+
+class Images(xrr_raw_data):
+    """2D Image Data"""
+
+
+#
+#
+#
+
+
+class OneDVisualData(Reflectivity):
+    """Contains Visualization Methods of the 1d curves"""
+
+
+#
+#
+#
 
 
 def multi_loader(sort=False):

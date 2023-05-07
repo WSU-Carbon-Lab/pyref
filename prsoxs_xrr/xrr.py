@@ -1,19 +1,15 @@
 """Main module."""
 
+import copy
+import glob
 import os
+
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
 import numpy as np
 from astropy.io import fits
-import matplotlib.pyplot as plt
-from pkg_resources import ensure_directory
-from sympy import is_zero_dimensional
 from uncertainties import unumpy as unp
-import glob
-import matplotlib.colors as colors
-import copy
-
 from xrr_toolkit import *
-
-# os.environ['OMP_NUM_THREADS'] =
 
 
 class XRR:
@@ -27,11 +23,13 @@ class XRR:
         self.refl = Reflectivity(directory, *args, **kwargs)
 
         # Method applications to save data in readable
-        self.raw_data.save()
 
     def check_spot(self, spot_number):
-        self.images.check_spot(spot_number)
+        self.images.check_spot(spot_number + self.refl._izero_count)
         self.refl.highlight(spot_number)
+
+    def save(self):
+        self.raw_data.save()
 
 
 #
@@ -86,9 +84,8 @@ class RawData:
         self.energies, self.sample_theta, self.beam_current, self.hos = self.header_data
         self.q = scattering_vector(self.energies, self.sample_theta)
 
-    def save(self, file_name: str = None):
-        if file_name == None:
-            file_name == self.directory.name
+    def save(self):
+        file_name = self.directory.name
         scan_info = {
             "Scan ID": self.scan_name,
             "Energy": self.directory.name,
@@ -127,12 +124,11 @@ class Images(RawData):
         self._ignore_drift = ignore_drift
         self._height = height
         self._beam_spots = []
+        self._background_spots = []
         self._roi_generator()
-        self._data_reduction()
 
     def _roi_generator(self):
         """internal function to find the location of the beam spot on each frame"""
-        last_roi = []
         for number, image in enumerate(self.images):
             max_idx = np.unravel_index(image.argmax(), image.shape)
             _min = np.array(max_idx) - self._height
@@ -147,54 +143,74 @@ class Images(RawData):
                 correction[loc] = image.shape[0] - _max[loc] - 1
 
             new_idx = tuple(map(lambda x, y: np.int64(x + y), max_idx, correction))
+            new_idx_dark = (image.shape[0] - new_idx[0], image.shape[1] - new_idx[1])
             assert is_valid_index(image, new_idx)
 
-            roi = (
-                slice(new_idx[0] - self._height, new_idx[0] + self._height + 1),
-                slice(new_idx[1] - self._height, new_idx[1] + self._height + 1),
-            )
+            roi = [
+                (
+                    slice(new_idx[0] - self._height, new_idx[0] + self._height + 1),
+                    slice(new_idx[1] - self._height, new_idx[1] + self._height + 1),
+                ),
+                (
+                    slice(
+                        new_idx_dark[0] - self._height,
+                        new_idx_dark[0] + self._height + 1,
+                    ),
+                    slice(
+                        new_idx_dark[1] - self._height,
+                        new_idx_dark[1] + self._height + 1,
+                    ),
+                ),
+            ]
 
-            last_roi.append(roi)
-            self._beam_spots.append(
-                (new_idx[1] - self._height, new_idx[0] - self._height)
-            )
-            self.bright_spots.append(image[roi])
-            self.dark_spots.append(np.flip(image)[roi])
+            self._beam_spots.append((new_idx[0], new_idx[1]))
+            self._background_spots.append((new_idx_dark[0], new_idx_dark[1]))
+
+            self.bright_spots.append(image[roi[0]])
+            self.dark_spots.append(image[roi[1]])
+
         self.bright_sum = np.sum(self.bright_spots, axis=(2, 1))
         self.dark_sum = np.sum(self.dark_spots, axis=(2, 1))
 
-    def _data_reduction(self):
-        """Internal Function for reducing 2d image data into a 1d reflectivity curve"""
-
-        self.r = unp.uarray(
-            (self.bright_sum - self.dark_sum) / self.beam_current,
-            np.sqrt(self.bright_sum + self.dark_sum) / self.beam_current,
-        )
-
-        assert self.q.size == self.r.size
-
     def check_spot(self, scan_number):
         """external method for checking a scan, and a height"""
+
+        anchor_points = (
+            self._beam_spots[scan_number][1] - self._height - 1,
+            self._beam_spots[scan_number][0] - self._height - 1,
+        )
+        anchor_points_d = (
+            self._background_spots[scan_number][1] - self._height - 1,
+            self._background_spots[scan_number][0] - self._height - 1,
+        )
+
         rect_bright = plt.Rectangle(
-            self._beam_spots[scan_number],
+            anchor_points,
             2 * self._height + 1,
             2 * self._height + 1,
-            edgecolor="red",
-            facecolor="None",
-        )
-        dark_spot = (
-            self.images[scan_number].shape[0] - self._beam_spots[scan_number][0] - 1,
-            self.images[scan_number].shape[1] - self._beam_spots[scan_number][1] - 1,
-        )
-        rect_dark = plt.Rectangle(
-            (dark_spot[0], dark_spot[1]),
-            2 * self._height + 1,
-            2 * self._height + 1,
-            edgecolor="red",
+            edgecolor="blue",
             facecolor="None",
         )
 
+        coursor_style_kw = {"colors": "blue", "linestyles": "dotted"}
+        x_kw = {"xmin": 0, "xmax": self.images[scan_number].shape[0] - 1}
+        y_kw = {"ymin": 0, "ymax": self.images[scan_number].shape[1] - 1}
+
+        rect_dark = plt.Rectangle(
+            anchor_points_d,
+            2 * self._height + 1,
+            2 * self._height + 1,
+            edgecolor="black",
+            facecolor="None",
+        )
+
+        """Build an info dump string that is printed"""
+
         signal_to_noise = self.bright_sum / self.dark_sum
+        background_subtracted = (
+            self.images[scan_number]
+            - self.dark_sum[scan_number] / self.dark_spots[scan_number].size()
+        )
 
         s = []
         s.append(f"Sample: {self.scan_name}")
@@ -208,37 +224,43 @@ class Images(RawData):
         s.append(f"Bright Spot Intensity: {self.bright_sum[scan_number]}")
         s.append(f"Dark Spot Intensity: {self.dark_sum[scan_number]}")
         s.append(
-            f"Absolute Signal: {self.bright_sum[scan_number]-self.dark_sum[scan_number]}"
+            f"Absolute Signal: {self.bright_sum[scan_number] - self.dark_sum[scan_number]}"
         )
         s.append(f"Signal to Noise Ratio: {signal_to_noise[scan_number]}")
         s.append(f"Beam Center: {self._beam_spots[scan_number]}")
         s.append("\n")
 
         kwargs = {"xticks": [], "yticks": []}
-        args = {"cmap": "terrain"}
+
+        """Build the return plot"""
 
         fig, ax = plt.subplots(1, 4, subplot_kw=kwargs, figsize=(12, 12))
-        ax[0].imshow(self.images[scan_number], norm=colors.LogNorm(), cmap="terrain")
+        style_kw = {
+            "norm": colors.LogNorm(
+                vmin=self.images[scan_number].min(), vmax=self.images[scan_number].max()
+            )
+        }
+
+        ax[0].imshow(self.images[scan_number], **style_kw)
         ax[0].set_xlabel("Raw")
-        ax[1].imshow(
-            (self.images[scan_number] - self.dark_sum[scan_number])
-            / self.beam_current[scan_number],
-            norm=colors.LogNorm(),
-            cmap="terrain",
+
+        im = ax[1].imshow(
+            (self.images[scan_number] - self.dark_sum[scan_number]),
+            **style_kw,
         )
         ax[1].set_xlabel("Background Subtracted")
 
+        ax[2].imshow(self.bright_spots[scan_number], **style_kw)
+        ax[2].set_xlabel("Bright Spot")
+
+        ax[3].imshow(self.dark_spots[scan_number], **style_kw)
+        ax[3].set_xlabel("Dark Spot")
+
         ax[0].add_patch(rect_dark)
         ax[0].add_patch(rect_bright)
+        ax[0].hlines(self._beam_spots[scan_number][0], **x_kw, **coursor_style_kw),
+        ax[0].vlines(self._beam_spots[scan_number][1], **y_kw, **coursor_style_kw),
 
-        ax[2].imshow(
-            self.bright_spots[scan_number], norm=colors.LogNorm(), cmap="terrain"
-        )
-        ax[2].set_xlabel("Bright Spot")
-        ax[3].imshow(
-            self.dark_spots[scan_number], norm=colors.LogNorm(), cmap="terrain"
-        )
-        ax[3].set_xlabel("Dark Spot")
         print("\n".join(s))
         plt.show()
 
@@ -253,21 +275,34 @@ class Reflectivity(Images):
 
     def __init__(self, directory, *args, **kwargs):
         super().__init__(directory, *args, **kwargs)
+        self._data_reduction()
         self._normalize()
         self._find_q_series()
         self._stitch_q_series()
 
+    def _data_reduction(self):
+        """Internal Function for reducing 2d image data into a 1d reflectivity curve"""
+
+        self.r = unp.uarray(
+            (self.bright_sum - self.dark_sum) / self.beam_current,
+            np.sqrt(self.bright_sum + self.dark_sum) / self.beam_current,
+        )
+
+        assert self.q.size == self.r.size
+
     def _normalize(self):
         """Internal Function for normalizing reflectivity data"""
 
-        izero_count = np.count_nonzero(self.q == 0)
+        self._izero_count = np.count_nonzero(self.q == 0)
 
-        izero = uaverage(self.r[: izero_count - 1] if izero_count > 0 else 1)
-        izero_err = np.std(unp.std_devs(self.r[: izero_count - 1]))
+        izero = uaverage(
+            self.r[: self._izero_count - 1] if self._izero_count > 0 else 1
+        )
+        izero_err = np.std(unp.std_devs(self.r[: self._izero_count - 1]))
         self.izero = ufloat(izero, izero_err)
 
-        self.r = self.r[izero_count:] / self.izero
-        self.q = self.q[izero_count:]
+        self.r = self.r[self._izero_count :] / self.izero
+        self.q = self.q[self._izero_count :]
 
         assert self.r.size == self.q.size
 
@@ -330,7 +365,6 @@ class Reflectivity(Images):
             self.q[highlight],
             unp.nominal_values(self.r[highlight]),
             unp.std_devs(self.r[highlight]),
-            fmt=".",
             marker="s",
         )
         plt.xlabel(r"q $[\AA^{-1}]$")
@@ -359,10 +393,7 @@ class Reflectivity(Images):
 #
 #
 
-
 if __name__ == "__main__":
-    # multi_loader()
     dir = file_dialog()
-    xrr = XRR(dir)
-    xrr.refl.highlight(54)
-    xrr.images.check_spot(54)
+    xrr1 = XRR(dir)
+    xrr1.check_spot(1)

@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from shutil import copy2
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from tkinter import *
 from astropy.io import fits
 from xrr_toolkit import *

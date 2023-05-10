@@ -7,6 +7,7 @@ import os
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
+from numba import jit
 from astropy.io import fits
 from uncertainties import unumpy as unp
 from xrr_toolkit import *
@@ -72,6 +73,7 @@ class RawData:
                 fits.getheader(f, 0)["Sample Theta"],
                 fits.getheader(f, 0)["Beam Current"],
                 fits.getheader(f, 0)["Higher Order Suppressor"],
+                fits.getheader(f, 0)["EPU Polarization"],
             ]
             for f in self.file_list
         ]
@@ -81,7 +83,13 @@ class RawData:
         )
         self.header_data = np.column_stack(arrays)
 
-        self.energies, self.sample_theta, self.beam_current, self.hos = self.header_data
+        (
+            self.energies,
+            self.sample_theta,
+            self.beam_current,
+            self.hos,
+            self.polarization,
+        ) = self.header_data
         self.q = scattering_vector(self.energies, self.sample_theta)
 
     def save(self):
@@ -172,96 +180,105 @@ class Images(RawData):
         self.bright_sum = np.sum(self.bright_spots, axis=(2, 1))
         self.dark_sum = np.sum(self.dark_spots, axis=(2, 1))
 
+    def _show_scan_info(self, scan_number):
+        """Build an info dump string that is printed"""
+
+        signal_to_noise = self.bright_sum / self.dark_sum
+
+        signal = (
+            self.bright_sum[scan_number] - self.dark_sum[scan_number]
+        ) / self.beam_current[scan_number]
+
+        s = []
+        s.append(f"Sample: {self.scan_name}")
+        s.append(f"Scan Number: {scan_number}")
+        s.append(f"Beam Energy: {self.energies[scan_number]:.2g}")
+        s.append(f"Polarization: {int(self.polarization[scan_number] - 100)}")
+        s.append(f"Beam Current: {self.beam_current[scan_number]:.2g}")
+        s.append(f"Sample Theta: {self.sample_theta[scan_number]:.2g}")
+        s.append(f"Higher Order Suppressor: {self.hos[scan_number]:.2g}")
+        s.append("\n")
+        s.append(f"Scattering Vector q: {self.q[scan_number]:.4g}")
+        s.append(f"Bright Spot Intensity: {self.bright_sum[scan_number]:.4g}")
+        s.append(f"Dark Spot Intensity: {self.dark_sum[scan_number]:.4g}")
+        s.append(f"Absolute Signal: {signal:.4g}")
+        s.append(f"Signal to Noise Ratio: {signal_to_noise[scan_number]:.4g}")
+        s.append(f"Beam Center: {self._beam_spots[scan_number]}")
+        s.append("\n")
+        print("\n".join(s))
+
     def check_spot(self, scan_number):
         """external method for checking a scan, and a height"""
+        self._show_scan_info(scan_number)
 
-        anchor_points = (
-            self._beam_spots[scan_number][1] - self._height - 1,
-            self._beam_spots[scan_number][0] - self._height - 1,
+        background_sub = np.maximum(
+            (self.images[scan_number] - self.dark_spots[scan_number].mean())
+            / self.beam_current[scan_number],
+            np.zeros(self.images[scan_number].shape),
         )
-        anchor_points_d = (
-            self._background_spots[scan_number][1] - self._height - 1,
-            self._background_spots[scan_number][0] - self._height - 1,
-        )
+
+        style_kws = {
+            "subplots": {"xticks": [], "yticks": []},
+            "courser": {"colors": "blue", "lw": 0.8, "ls": "--"},
+            "images": {"cmap": "terrain", "norm": colors.LogNorm()},
+            "horizontal": {"xmin": 0, "xmax": self.images[scan_number].shape[0] - 1},
+            "vertical": {"ymin": 0, "ymax": self.images[scan_number].shape[1] - 1},
+        }
+
+        anchor_points = {
+            "bright": (
+                self._beam_spots[scan_number][1] - self._height - 1,
+                self._beam_spots[scan_number][0] - self._height - 1,
+            ),
+            "dark": (
+                self._background_spots[scan_number][1] - self._height - 1,
+                self._background_spots[scan_number][0] - self._height - 1,
+            ),
+        }
 
         rect_bright = plt.Rectangle(
-            anchor_points,
+            anchor_points["bright"],
             2 * self._height + 1,
             2 * self._height + 1,
             edgecolor="blue",
             facecolor="None",
         )
 
-        coursor_style_kw = {"colors": "blue", "linestyles": "dotted"}
-        x_kw = {"xmin": 0, "xmax": self.images[scan_number].shape[0] - 1}
-        y_kw = {"ymin": 0, "ymax": self.images[scan_number].shape[1] - 1}
-
         rect_dark = plt.Rectangle(
-            anchor_points_d,
+            anchor_points["dark"],
             2 * self._height + 1,
             2 * self._height + 1,
             edgecolor="black",
             facecolor="None",
         )
 
-        """Build an info dump string that is printed"""
-
-        signal_to_noise = self.bright_sum / self.dark_sum
-        background_subtracted = (
-            self.images[scan_number]
-            - self.dark_sum[scan_number] / self.dark_spots[scan_number].size()
-        )
-
-        s = []
-        s.append(f"Sample: {self.scan_name}")
-        s.append(f"Scan Number: {scan_number}")
-        s.append(f"Beam Energy: {self.energies[scan_number]}")
-        s.append(f"Beam Current: {self.beam_current[scan_number]}")
-        s.append(f"Sample Theta: {self.sample_theta[scan_number]}")
-        s.append(f"Higher Order Suppressor: {self.hos[scan_number]}")
-        s.append("\n")
-        s.append(f"Scattering Vector q: {self.q[scan_number]}")
-        s.append(f"Bright Spot Intensity: {self.bright_sum[scan_number]}")
-        s.append(f"Dark Spot Intensity: {self.dark_sum[scan_number]}")
-        s.append(
-            f"Absolute Signal: {self.bright_sum[scan_number] - self.dark_sum[scan_number]}"
-        )
-        s.append(f"Signal to Noise Ratio: {signal_to_noise[scan_number]}")
-        s.append(f"Beam Center: {self._beam_spots[scan_number]}")
-        s.append("\n")
-
-        kwargs = {"xticks": [], "yticks": []}
-
         """Build the return plot"""
 
-        fig, ax = plt.subplots(1, 4, subplot_kw=kwargs, figsize=(12, 12))
-        style_kw = {
-            "norm": colors.LogNorm(
-                vmin=self.images[scan_number].min(), vmax=self.images[scan_number].max()
-            )
-        }
+        fig, ax = plt.subplots(1, 4, subplot_kw=style_kws["subplots"], figsize=(12, 12))
+        axes = ["Raw", "Background Sub", "Bright Spot", "Dark Spot"]
+        for a, label in zip(ax, axes):
+            a.set_xlabel(label)
 
-        ax[0].imshow(self.images[scan_number], **style_kw)
-        ax[0].set_xlabel("Raw")
+        ax[0].imshow(self.image_data[scan_number], **style_kws["images"])
 
-        im = ax[1].imshow(
-            (self.images[scan_number] - self.dark_sum[scan_number]),
-            **style_kw,
-        )
-        ax[1].set_xlabel("Background Subtracted")
+        ax[1].imshow(background_sub, **style_kws["images"])
 
-        ax[2].imshow(self.bright_spots[scan_number], **style_kw)
-        ax[2].set_xlabel("Bright Spot")
+        ax[2].imshow(self.bright_spots[scan_number], **style_kws["images"])
 
-        ax[3].imshow(self.dark_spots[scan_number], **style_kw)
-        ax[3].set_xlabel("Dark Spot")
+        ax[3].imshow(self.dark_spots[scan_number], **style_kws["images"])
 
         ax[0].add_patch(rect_dark)
         ax[0].add_patch(rect_bright)
-        ax[0].hlines(self._beam_spots[scan_number][0], **x_kw, **coursor_style_kw),
-        ax[0].vlines(self._beam_spots[scan_number][1], **y_kw, **coursor_style_kw),
-
-        print("\n".join(s))
+        ax[0].hlines(
+            self._beam_spots[scan_number][0],
+            **style_kws["horizontal"],
+            **style_kws["courser"],
+        )
+        ax[0].vlines(
+            self._beam_spots[scan_number][1],
+            **style_kws["vertical"],
+            **style_kws["courser"],
+        )
         plt.show()
 
 
@@ -367,6 +384,7 @@ class Reflectivity(Images):
             unp.std_devs(self.r[highlight]),
             marker="s",
         )
+        plt.xlim(left=0)
         plt.xlabel(r"q $[\AA^{-1}]$")
         plt.ylabel("Reflectivity")
         plt.show()

@@ -7,8 +7,9 @@ from tkinter import filedialog
 from tkinter import *
 from typing import Type
 
-c = 299_792_458 * 10**10  # \AA s-2
-ħ = 6.582_119_569 * 10 ** (-16)  # eV s
+# c = 299_792_458 * 10**10  # \AA s-2
+# ħ = 6.582_119_569 * 10 ** (-16)  # eV s
+hc = 12400  # ev \AA
 
 
 def file_dialog():
@@ -18,9 +19,16 @@ def file_dialog():
     return directory
 
 
+def save_dialog():
+    root = Tk()
+    root.withdraw()
+    file_save_path = Path(filedialog.asksaveasfilename())
+    return file_save_path if file_save_path else None
+
+
 def scattering_vector(energy, theta):
-    global c, ħ
-    k = energy / (ħ * c)
+    global hc
+    k = 2 * np.pi * energy / (hc)
     Q = 2 * k * np.sin(np.radians(theta))
     return Q
 

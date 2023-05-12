@@ -1,11 +1,10 @@
-import os
 import numpy as np
 from sympy import true
 from uncertainties import unumpy, ufloat
 from pathlib import Path
 from tkinter import filedialog
 from tkinter import *
-from typing import Type
+
 
 # c = 299_792_458 * 10**10  # \AA s-2
 # ħ = 6.582_119_569 * 10 ** (-16)  # eV s

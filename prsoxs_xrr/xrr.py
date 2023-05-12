@@ -18,16 +18,22 @@ class XRR:
     Main class for processing xrr data
     """
 
-    def __init__(self, directory, *args, **kwargs):
+    def __init__(self, directory, mask=None, *args, **kwargs):
+        self.directory = directory
         self.raw_data = RawData(directory, *args, **kwargs)
-        self.images = Images(directory, *args, **kwargs)
+        self.images = Images(directory, mask=mask, *args, **kwargs)
         self.refl = Reflectivity(directory, *args, **kwargs)
 
         # Method applications to save data in readable
 
-    def check_spot(self, spot_number):
+    def check_spot(self, spot_number, ylims=None, xlims=None):
         self.images.check_spot(spot_number + self.refl._izero_count)
-        self.refl.highlight(spot_number)
+        self.refl.highlight(spot_number, ylims=ylims, xlims=xlims)
+
+    def apply_mask(self, *args, **kwargs):
+        self.raw_data.image_data = self.images._apply_mask()
+        self.images = Images(self.directory, *args, **kwargs)
+        self.refl = Reflectivity(self.directory, *args, **kwargs)
 
     def save(self):
         self.raw_data.save()
@@ -137,6 +143,7 @@ class Images(RawData):
 
     def _roi_generator(self):
         """internal function to find the location of the beam spot on each frame"""
+        self.reduced_roi = []
         for number, image in enumerate(self.images):
             max_idx = np.unravel_index(image.argmax(), image.shape)
             _min = np.array(max_idx) - self._height
@@ -170,15 +177,15 @@ class Images(RawData):
                     ),
                 ),
             ]
-
+            self.reduced_roi.append(roi)
             self._beam_spots.append((new_idx[0], new_idx[1]))
             self._background_spots.append((new_idx_dark[0], new_idx_dark[1]))
 
             self.bright_spots.append(image[roi[0]])
             self.dark_spots.append(image[roi[1]])
 
-        self.bright_sum = np.sum(self.bright_spots, axis=(2, 1))
-        self.dark_sum = np.sum(self.dark_spots, axis=(2, 1))
+        self.bright_sum = np.array([np.sum(image) for image in self.bright_spots])
+        self.dark_sum = np.array([np.sum(image) for image in self.dark_spots])
 
     def _show_scan_info(self, scan_number):
         """Build an info dump string that is printed"""
@@ -206,6 +213,11 @@ class Images(RawData):
         s.append(f"Beam Center: {self._beam_spots[scan_number]}")
         s.append("\n")
         print("\n".join(s))
+
+    def generate_mask(self, scan_number):
+        self.mask[self.reduced_roi[scan_number][0]] = 1
+        self.mask[self.reduced_roi[scan_number][1]] = 1
+        return self.mask
 
     def check_spot(self, scan_number):
         """external method for checking a scan, and a height"""
@@ -354,21 +366,23 @@ class Reflectivity(Images):
         self.q = np.concatenate(self.q_split)
         assert self.r.size == self.q.size
 
-    def plot(self, *args, **kwargs):
+    def plot(self, ylims: tuple = None, xlims: tuple = None):
         plt.yscale("log")
         plt.errorbar(
             self.q,
             unp.nominal_values(self.r),
             unp.std_devs(self.r),
             fmt=".",
-            *args,
-            **kwargs,
         )
+        plt.xlim(xlims)
+        plt.ylim(ylims)
         plt.xlabel(r"q $[\AA^{-1}]$")
         plt.ylabel("Reflectivity")
         plt.show()
 
-    def highlight(self, highlight, *args, **kwargs):
+    def highlight(
+        self, highlight, ylims: tuple = None, xlims: tuple = None, *args, **kwargs
+    ):
         plt.yscale("log")
         plt.errorbar(
             self.q,
@@ -384,7 +398,8 @@ class Reflectivity(Images):
             unp.std_devs(self.r[highlight]),
             marker="s",
         )
-        plt.xlim(left=0)
+        plt.xlim(xlims)
+        plt.ylim(ylims)
         plt.xlabel(r"q $[\AA^{-1}]$")
         plt.ylabel("Reflectivity")
         plt.show()
@@ -415,3 +430,5 @@ if __name__ == "__main__":
     dir = file_dialog()
     xrr1 = XRR(dir)
     xrr1.check_spot(1)
+    xrr1.apply_mask()
+    xrr1.check_spot()

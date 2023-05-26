@@ -3,13 +3,13 @@
 import copy
 import glob
 import os
+import scipy.ndimage as sci
 
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
 from numba import jit
 from astropy.io import fits
-from torch import NoneType
 from uncertainties import unumpy as unp
 from xrr_toolkit import *
 import numpy.typing as npt
@@ -20,7 +20,7 @@ class XRR:
     Main class for processing xrr data
     """
 
-    def __init__(self, directory, mask=None, *args, **kwargs):
+    def __init__(self, directory, use_filte=False, mask=None, *args, **kwargs):
         self.directory = directory
         self.raw_data = RawData(directory, mask=mask, *args, **kwargs)
         self.images = Images(directory, mask=mask, *args, **kwargs)
@@ -133,20 +133,31 @@ class Images(RawData):
     """2D Image Data"""
 
     def __init__(
-        self, directory, mask=None, height=10, ignore_drift=True, *args, **kwargs
+        self,
+        directory,
+        use_filter=False,
+        mask=None,
+        height=10,
+        ignore_drift=True,
+        *args,
+        **kwargs,
     ):
-        super().__init__(directory, *args, **kwargs)
+        super().__init__(directory, use_filter=False, *args, **kwargs)
+        self.images = self.image_data
+        self.filterd = sci.median_filter(self.image_data, size=3)
+        if use_filter == True:
+            self.images = self.filterd
         self.bright_spots = []
         self.dark_spots = []
         self.bright_sum = None
         self.dark_sum = None
         if type(mask) is type(None):
             self.mask = None
-            self.images = self.image_data
+            self.masked_image = self.filterd
         elif isinstance(mask, np.ndarray) is True:
             self.mask = mask
-            self.images = np.squeeze(
-                [np.multiply(image, mask) for image in self.image_data]
+            self.masked_image = np.squeeze(
+                [np.multiply(image, mask) for image in self.filterd]
             )
         else:
             raise TypeError("Mask must be a single numpy array")
@@ -170,7 +181,9 @@ class Images(RawData):
         """internal function to find the location of the beam spot on each frame"""
         self.reduced_roi = []
         for number, image in enumerate(self.images):
-            max_idx = np.unravel_index(image.argmax(), image.shape)
+            masked_image = self.masked_image[number]
+
+            max_idx = np.unravel_index(masked_image.argmax(), masked_image.shape)
             _min = np.array(max_idx) - self._height
             _max = np.array(max_idx) + self._height
 
@@ -239,10 +252,12 @@ class Images(RawData):
         s.append("\n")
         print("\n".join(s))
 
-    def generate_mask(self, scan_number):
+    def generate_mask(self, scan_number, height):
+        self._height = height
+        self._roi_generator()
+        roi = self.reduced_roi[scan_number]
         self.mask = np.zeros(self.images[scan_number].shape)
-        self.mask[self.reduced_roi[scan_number][0]] = 1
-        self.mask[self.reduced_roi[scan_number][1]] = 1
+        self.mask[roi[0]] = 1
         return self.mask
 
     def check_spot(self, scan_number):
@@ -250,7 +265,7 @@ class Images(RawData):
         self._show_scan_info(scan_number)
 
         background_sub = np.maximum(
-            (self.images[scan_number] - self.dark_spots[scan_number].mean())
+            (self.masked_image[scan_number] - self.dark_spots[scan_number].mean())
             / self.beam_current[scan_number],
             np.zeros(self.images[scan_number].shape),
         )
@@ -258,7 +273,7 @@ class Images(RawData):
         style_kws = {
             "subplots": {"xticks": [], "yticks": []},
             "courser": {"colors": "blue", "lw": 0.8, "ls": "--"},
-            "images": {"cmap": "terrain", "norm": colors.LogNorm()},
+            "images": {"cmap": "hot", "norm": colors.LogNorm()},
             "horizontal": {"xmin": 0, "xmax": self.images[scan_number].shape[0] - 1},
             "vertical": {"ymin": 0, "ymax": self.images[scan_number].shape[1] - 1},
         }
@@ -292,31 +307,36 @@ class Images(RawData):
 
         """Build the return plot"""
 
-        fig, ax = plt.subplots(1, 4, subplot_kw=style_kws["subplots"], figsize=(12, 12))
-        axes = ["Raw", "Background Sub", "Bright Spot", "Dark Spot"]
+        fig, ax = plt.subplots(1, 5, subplot_kw=style_kws["subplots"], figsize=(12, 12))
+        axes = ["Raw", "Median", "Median", "Bright Spot", "Dark Spot"]
         for a, label in zip(ax, axes):
             a.set_xlabel(label)
 
         ax[0].imshow(self.images[scan_number], **style_kws["images"])
 
-        ax[1].imshow(background_sub, **style_kws["images"])
+        ax[1].imshow(self.masked_image[scan_number], **style_kws["images"])
 
-        ax[2].imshow(self.bright_spots[scan_number], **style_kws["images"])
-
-        ax[3].imshow(self.dark_spots[scan_number], **style_kws["images"])
-
-        ax[0].add_patch(rect_dark)
-        ax[0].add_patch(rect_bright)
-        ax[0].hlines(
-            self._beam_spots[scan_number][0],
-            **style_kws["horizontal"],
-            **style_kws["courser"],
+        ax[2].imshow(
+            self.filterd[scan_number][self.reduced_roi[scan_number][0]],
+            **style_kws["images"],
         )
-        ax[0].vlines(
-            self._beam_spots[scan_number][1],
-            **style_kws["vertical"],
-            **style_kws["courser"],
-        )
+
+        ax[3].imshow(self.bright_spots[scan_number], **style_kws["images"])
+
+        ax[4].imshow(self.dark_spots[scan_number], **style_kws["images"])
+        for i in range(1):
+            ax[i].add_patch(rect_dark)
+            ax[i].add_patch(rect_bright)
+            ax[i].hlines(
+                self._beam_spots[scan_number][0],
+                **style_kws["horizontal"],
+                **style_kws["courser"],
+            )
+            ax[i].vlines(
+                self._beam_spots[scan_number][1],
+                **style_kws["vertical"],
+                **style_kws["courser"],
+            )
         plt.show()
 
 
@@ -448,13 +468,32 @@ class Reflectivity(Images):
         plt.show()
 
 
+def dezinger_image(image, threshold=1.5, size=3):
+    from scipy import ndimage
+
+    med_result = ndimage.median_filter(image, size=size)  # Apply Median Filter to image
+    diff_image = image / np.abs(
+        med_result
+    )  # Calculate Ratio of each pixel to compared to a threshold
+    # Repopulate image by removing pixels that exceed the threshold -- From Jan Ilavsky's IGOR implementation.
+    output = image * np.greater(threshold, diff_image).astype(
+        int
+    ) + med_result * np.greater(
+        diff_image, threshold
+    )  #
+    return output  # , med_result  # Return dezingered image and averaged image
+
+
 #
 #
 #
 
 if __name__ == "__main__":
     dir = file_dialog()
+    fig = plt.figure()
+    ax1 = fig.add_subplot(121)
+    ax2 = fig.add_subplot(122)
     xrr1 = XRR(dir)
-    xrr1.check_spot(1)
-    xrr1.apply_mask()
-    xrr1.check_spot()
+    ax1.imshow(xrr1.images.filterd[0])
+    ax2.imshow(xrr1.images.masked_image[0])
+    plt.show()

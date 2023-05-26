@@ -9,8 +9,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from numba import jit
 from astropy.io import fits
+from torch import NoneType
 from uncertainties import unumpy as unp
 from xrr_toolkit import *
+import numpy.typing as npt
 
 
 class XRR:
@@ -20,23 +22,25 @@ class XRR:
 
     def __init__(self, directory, mask=None, *args, **kwargs):
         self.directory = directory
-        self.raw_data = RawData(directory, *args, **kwargs)
+        self.raw_data = RawData(directory, mask=mask, *args, **kwargs)
         self.images = Images(directory, mask=mask, *args, **kwargs)
         self.refl = Reflectivity(directory, *args, **kwargs)
-
         # Method applications to save data in readable
+        self._mask = mask
 
     def check_spot(self, spot_number, ylims=None, xlims=None):
         self.images.check_spot(spot_number + self.refl._izero_count)
         self.refl.highlight(spot_number, ylims=ylims, xlims=xlims)
 
-    def apply_mask(self, *args, **kwargs):
-        self.raw_data.image_data = self.images._apply_mask()
-        self.images = Images(self.directory, *args, **kwargs)
-        self.refl = Reflectivity(self.directory, *args, **kwargs)
+    @property
+    def mask(self):
+        return self._mask
 
-    def save(self):
-        self.raw_data.save()
+    @mask.setter
+    def mask(self, mask):
+        self._mask = mask
+        self.images = Images(self.directory, self._mask)
+        self.refl = Reflectivity(self.directory)
 
 
 #
@@ -50,14 +54,15 @@ class RawData:
     def __init__(self, directory, *args, **kwargs):
         # inheritance
         self.directory = directory
+
         # Constructed properties
-        self.image_data = None
-        self.header_data = None
-        self.q = None
-        self.energies = None
-        self.sample_theta = None
-        self.beam_current = None
-        self.header_data = None
+        self.image_data: npt.ArrayLike = None
+        self.header_data: npt.ArrayLike = None
+        self.q: npt.ArrayLike = None
+        self.energies: npt.ArrayLike = None
+        self.sample_theta: npt.ArrayLike = None
+        self.beam_current: npt.ArrayLike = None
+        self.header_data: npt.ArrayLike = None
 
         # object constructor
         self._fits_loader()
@@ -127,18 +132,38 @@ class RawData:
 class Images(RawData):
     """2D Image Data"""
 
-    def __init__(self, directory, height=10, ignore_drift=True, *args, **kwargs):
+    def __init__(
+        self, directory, mask=None, height=10, ignore_drift=True, *args, **kwargs
+    ):
         super().__init__(directory, *args, **kwargs)
         self.bright_spots = []
         self.dark_spots = []
-        self.images = self.image_data
         self.bright_sum = None
         self.dark_sum = None
+        if type(mask) is type(None):
+            self.mask = None
+            self.images = self.image_data
+        elif isinstance(mask, np.ndarray) is True:
+            self.mask = mask
+            self.images = np.squeeze(
+                [np.multiply(image, mask) for image in self.image_data]
+            )
+        else:
+            raise TypeError("Mask must be a single numpy array")
 
         self._ignore_drift = ignore_drift
         self._height = height
         self._beam_spots = []
         self._background_spots = []
+        self._roi_generator()
+
+    @property
+    def height(self):
+        return self._height
+
+    @height.setter
+    def height(self, height):
+        self._height = height
         self._roi_generator()
 
     def _roi_generator(self):
@@ -215,6 +240,7 @@ class Images(RawData):
         print("\n".join(s))
 
     def generate_mask(self, scan_number):
+        self.mask = np.zeros(self.images[scan_number].shape)
         self.mask[self.reduced_roi[scan_number][0]] = 1
         self.mask[self.reduced_roi[scan_number][1]] = 1
         return self.mask
@@ -271,7 +297,7 @@ class Images(RawData):
         for a, label in zip(ax, axes):
             a.set_xlabel(label)
 
-        ax[0].imshow(self.image_data[scan_number], **style_kws["images"])
+        ax[0].imshow(self.images[scan_number], **style_kws["images"])
 
         ax[1].imshow(background_sub, **style_kws["images"])
 

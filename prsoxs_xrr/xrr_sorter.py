@@ -43,7 +43,7 @@ def check_parent(dir: Path) -> None:
     return
 
 
-@restartable
+# @restartable
 def xrr_sorter(directory) -> None:
     """
     Collects the energies each fits was collected at and makes subfolder for each energy

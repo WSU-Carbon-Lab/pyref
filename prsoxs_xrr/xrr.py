@@ -1,18 +1,20 @@
 """Main module."""
 
-import copy
 import glob
 import os
-import scipy.ndimage as sci
+from typing import Union
 
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
-from numba import jit
+import numpy.typing as npt
 from astropy.io import fits
+from numba import jit
+from scipy.ndimage import median_filter
+import uncertainties
 from uncertainties import unumpy as unp
 from xrr_toolkit import *
-import numpy.typing as npt
+from collections import defaultdict
 
 
 class XRR:
@@ -20,17 +22,32 @@ class XRR:
     Main class for processing xrr data
     """
 
-    def __init__(self, directory, use_filte=False, mask=None, *args, **kwargs):
+    def __init__(
+        self,
+        directory: Union[str, os.PathLike],
+        mask: None | np.ndarray = None,
+        height: int = 10,
+        *args,
+        **kwargs,
+    ):
         self.directory = directory
         self.raw_data = RawData(directory, mask=mask, *args, **kwargs)
-        self.images = Images(directory, mask=mask, *args, **kwargs)
+        self.images = Images(directory, mask=mask, height=height, *args, **kwargs)
         self.refl = Reflectivity(directory, *args, **kwargs)
-        # Method applications to save data in readable
-        self._mask = mask
 
-    def check_spot(self, spot_number, ylims=None, xlims=None):
+        # properties
+        self._mask = mask
+        self._height = height
+
+    def finalize(self):
+        self.refl._finalize()
+
+    def check_spot(
+        self, spot_number: int, ylims: tuple | None = None, xlims: tuple | None = None
+    ):
+        self.raw_data.show_meta_info(spot_number + self.refl._izero_count)
         self.images.check_spot(spot_number + self.refl._izero_count)
-        self.refl.highlight(spot_number, ylims=ylims, xlims=xlims)
+        self.refl.highlight(spot_number, ylims=ylims, xlims=xlims)  # type: ignore
 
     @property
     def mask(self):
@@ -42,6 +59,16 @@ class XRR:
         self.images = Images(self.directory, self._mask)
         self.refl = Reflectivity(self.directory)
 
+    @property
+    def height(self):
+        return self._height
+
+    @height.setter
+    def height(self, height, *args, **kwargs):
+        self._height = height
+        self.images = Images(self.directory, mask=self.mask, height=self._height)
+        self.refl = Reflectivity(self.directory)
+
 
 #
 #
@@ -49,21 +76,28 @@ class XRR:
 
 
 class RawData:
-    """Raw data collected from file dialog"""
+    """
+    Raw data object
+    This object handles unpacking the fits files from each scan
 
-    def __init__(self, directory, *args, **kwargs):
+    It contains one main function the _fits_loader
+    This function uses the astropy background to load the metadata from the fits header into
+    individual numpy arrays. Each numpy array is then stored as an attribute of the object
+
+    """
+
+    def __init__(self, directory: Union[str, os.PathLike], *args, **kwargs):
         # inheritance
         self.directory = directory
 
         # Constructed properties
-        self.image_data: npt.ArrayLike = None
-        self.header_data: npt.ArrayLike = None
-        self.q: npt.ArrayLike = None
-        self.energies: npt.ArrayLike = None
-        self.sample_theta: npt.ArrayLike = None
-        self.beam_current: npt.ArrayLike = None
-        self.header_data: npt.ArrayLike = None
+        self.image_data: np.ndarray = []  # type: ignore
+        self.header_data: np.ndarray = []  # type: ignore
 
+        self.energies: np.ndarray = []  # type: ignore
+        self.sample_theta: np.ndarray = []  # type: ignore
+        self.beam_current: np.ndarray = []  # type: ignore
+        self.q: np.ndarray = []  # type: ignore
         # object constructor
         self._fits_loader()
 
@@ -72,11 +106,11 @@ class RawData:
 
         Computing the xrr profile requires Beamline Energy, Sample Theta, and Beam Current
         Files are opened with astropy and those values are extracted from the header data
-        The images are collected from the image data
-
+        The images are collected from the image data. The fits data is extracted into a numpy
+        array
         """
         self.file_list = sorted(glob.glob(os.path.join(self.directory, "*.fits")))
-        self.scan_name = self.file_list[0].split("-")[0].split("\\")[-1]
+        self.scan_name = self.file_list[0].split("\\")[-1].split("-")[0]
 
         arrays = [
             [
@@ -103,11 +137,24 @@ class RawData:
         ) = self.header_data
         self.q = scattering_vector(self.energies, self.sample_theta)
 
+    def show_meta_info(self, scan_number):
+        s = []
+
+        s.append(f"Sample: {self.scan_name}")
+        s.append(f"Scan Number: {scan_number}")
+        s.append(f"Beam Energy: {self.energies[scan_number]:.2g}")
+        s.append(f"Polarization: {int(self.polarization[scan_number] - 100)}")
+        s.append(f"Beam Current: {self.beam_current[scan_number]:.2g}")
+        s.append(f"Sample Theta: {self.sample_theta[scan_number]:.2g}")
+        s.append(f"Higher Order Suppressor: {self.hos[scan_number]:.2g}")
+        s.append("\n")
+        print("\n".join(s))
+
     def save(self):
-        file_name = self.directory.name
+        file_name = self.directory.name  # type: ignore
         scan_info = {
             "Scan ID": self.scan_name,
-            "Energy": self.directory.name,
+            "Energy": self.directory.name,  # type: ignore
             "Number of frames": len(self.file_list),
         }
         import json
@@ -130,102 +177,121 @@ class RawData:
 
 
 class Images(RawData):
-    """2D Image Data"""
+    """
+    2D Image Object
+    This object handles processing the 2D image data, this includes the following manipulations
+
+    Locating the Beam: Finding the brightest pixel on a median filtered image
+
+    ROI Reduction: Reduces the area of integration to a size x size rectangle
+
+    Background Subtraction: Selects a representative dark rectangle of a similar size of the
+    dark background
+
+    Parameters
+    ----------
+    RawData : RawData
+        Raw Data image for all fits files in the data directory
+
+    Methods
+    ----------
+    generate_mask :
+        Function returns a mask over the image using the same backend as the Roi reduction algorithm
+
+    check_spot :
+        Function that generates a plot depicting the images used to generate each data point in. This
+        contains four plots:
+        Raw image displaying the background rectangle, beam rectangle, and beam spot
+        Median Filter image used for finding the beam spot
+        Bright spot
+        Dark spot
+        Median Filtered bright spot
+    """
 
     def __init__(
         self,
-        directory,
-        use_filter=False,
-        mask=None,
-        height=10,
-        ignore_drift=True,
+        directory: Union[str, os.PathLike],
+        mask: None | np.ndarray = None,
+        height: int = 10,
         *args,
         **kwargs,
     ):
-        super().__init__(directory, use_filter=False, *args, **kwargs)
-        self.images = self.image_data
-        self.filterd = sci.median_filter(self.image_data, size=3)
-        if use_filter == True:
-            self.images = self.filterd
-        self.bright_spots = []
-        self.dark_spots = []
-        self.bright_sum = None
-        self.dark_sum = None
+        super().__init__(directory, mask, *args, **kwargs)
+        # inhered properties
+        self.images: np.ndarray = self.image_data
+        self.filtered = median_filter(self.images, size=3)
+        shape = (self.image_data.shape[0], height * 2 + 1, height * 2 + 1)  # type: ignore
+
+        self.bright_spots: np.ndarray = np.empty(shape, dtype=np.int64)
+        self.dark_spots: np.ndarray = np.empty(shape, dtype=np.int64)
+        self.bright_sum: np.ndarray = np.empty(
+            (self.image_data.shape[0]), dtype=np.int64
+        )
+        self.dark_sum: np.ndarray = np.empty((self.image_data.shape[0]), dtype=np.int64)
+
         if type(mask) is type(None):
             self.mask = None
-            self.masked_image = self.filterd
+            self.masked_image = self.images
+
         elif isinstance(mask, np.ndarray) is True:
             self.mask = mask
             self.masked_image = np.squeeze(
-                [np.multiply(image, mask) for image in self.filterd]
+                [np.multiply(image, mask) for image in self.filtered]  # type: ignore
             )
+
         else:
             raise TypeError("Mask must be a single numpy array")
 
-        self._ignore_drift = ignore_drift
         self._height = height
-        self._beam_spots = []
-        self._background_spots = []
-        self._roi_generator()
-
-    @property
-    def height(self):
-        return self._height
-
-    @height.setter
-    def height(self, height):
-        self._height = height
+        self.reduced_roi: list = []
         self._roi_generator()
 
     def _roi_generator(self):
         """internal function to find the location of the beam spot on each frame"""
-        self.reduced_roi = []
         for number, image in enumerate(self.images):
             masked_image = self.masked_image[number]
 
             max_idx = np.unravel_index(masked_image.argmax(), masked_image.shape)
-            _min = np.array(max_idx) - self._height
-            _max = np.array(max_idx) + self._height
+            top: int = max_idx[0] - self._height
+            bot: int = max_idx[0] + self._height + 1
+            left: int = max_idx[1] - self._height
+            right: int = max_idx[1] + self._height + 1
 
-            correction = np.zeros(2, dtype=np.int64)
-            if np.any(_min < 0):
-                loc = np.where(_min < 0)
-                correction[loc] = -1 * _min[loc]
-            if np.any(_max > image.shape[0]):
-                loc = np.where(_max > image.shape[0])
-                correction[loc] = image.shape[0] - _max[loc] - 1
+            if top < 0:
+                top = 0
+                bot = 2 * self._height + 1
 
-            new_idx = tuple(map(lambda x, y: np.int64(x + y), max_idx, correction))
-            new_idx_dark = (image.shape[0] - new_idx[0], image.shape[1] - new_idx[1])
-            assert is_valid_index(image, new_idx)
+            elif bot > image.shape[0]:
+                bot = image.shape[0]
+                top = image.shape[0] - (2 * self._height + 1)
+
+            if left < 0:
+                left = 0
+                right = 2 * self._height + 1
+
+            elif right > image.shape[1]:
+                right = image.shape[1]
+                left = image.shape[1] - (2 * self._height + 1)
 
             roi = [
                 (
-                    slice(new_idx[0] - self._height, new_idx[0] + self._height + 1),
-                    slice(new_idx[1] - self._height, new_idx[1] + self._height + 1),
+                    slice(top, bot),
+                    slice(left, right),
                 ),
                 (
-                    slice(
-                        new_idx_dark[0] - self._height,
-                        new_idx_dark[0] + self._height + 1,
-                    ),
-                    slice(
-                        new_idx_dark[1] - self._height,
-                        new_idx_dark[1] + self._height + 1,
-                    ),
+                    slice(image.shape[0] - bot, image.shape[0] - top),
+                    slice(image.shape[0] - right, image.shape[0] - left),
                 ),
             ]
             self.reduced_roi.append(roi)
-            self._beam_spots.append((new_idx[0], new_idx[1]))
-            self._background_spots.append((new_idx_dark[0], new_idx_dark[1]))
 
-            self.bright_spots.append(image[roi[0]])
-            self.dark_spots.append(image[roi[1]])
+            self.bright_spots[number] = image[roi[0]]
+            self.dark_spots[number] = image[roi[1]]
 
-        self.bright_sum = np.array([np.sum(image) for image in self.bright_spots])
-        self.dark_sum = np.array([np.sum(image) for image in self.dark_spots])
+        self.bright_sum = self.bright_spots.sum(axis=(1, 2))
+        self.dark_sum = self.dark_spots.sum(axis=(1, 2))
 
-    def _show_scan_info(self, scan_number):
+    def _show_image_info(self, scan_number):
         """Build an info dump string that is printed"""
 
         signal_to_noise = self.bright_sum / self.dark_sum
@@ -235,26 +301,15 @@ class Images(RawData):
         ) / self.beam_current[scan_number]
 
         s = []
-        s.append(f"Sample: {self.scan_name}")
-        s.append(f"Scan Number: {scan_number}")
-        s.append(f"Beam Energy: {self.energies[scan_number]:.2g}")
-        s.append(f"Polarization: {int(self.polarization[scan_number] - 100)}")
-        s.append(f"Beam Current: {self.beam_current[scan_number]:.2g}")
-        s.append(f"Sample Theta: {self.sample_theta[scan_number]:.2g}")
-        s.append(f"Higher Order Suppressor: {self.hos[scan_number]:.2g}")
-        s.append("\n")
         s.append(f"Scattering Vector q: {self.q[scan_number]:.4g}")
         s.append(f"Bright Spot Intensity: {self.bright_sum[scan_number]:.4g}")
         s.append(f"Dark Spot Intensity: {self.dark_sum[scan_number]:.4g}")
         s.append(f"Absolute Signal: {signal:.4g}")
         s.append(f"Signal to Noise Ratio: {signal_to_noise[scan_number]:.4g}")
-        s.append(f"Beam Center: {self._beam_spots[scan_number]}")
         s.append("\n")
         print("\n".join(s))
 
-    def generate_mask(self, scan_number, height):
-        self._height = height
-        self._roi_generator()
+    def generate_mask(self, scan_number):
         roi = self.reduced_roi[scan_number]
         self.mask = np.zeros(self.images[scan_number].shape)
         self.mask[roi[0]] = 1
@@ -262,7 +317,7 @@ class Images(RawData):
 
     def check_spot(self, scan_number):
         """external method for checking a scan, and a height"""
-        self._show_scan_info(scan_number)
+        self._show_image_info(scan_number)
 
         background_sub = np.maximum(
             (self.masked_image[scan_number] - self.dark_spots[scan_number].mean())
@@ -279,17 +334,21 @@ class Images(RawData):
         }
 
         anchor_points = {
-            "bright": (
-                self._beam_spots[scan_number][1] - self._height - 1,
-                self._beam_spots[scan_number][0] - self._height - 1,
+            "bright": tuple(
+                (
+                    self.reduced_roi[scan_number][0][0].start,
+                    self.reduced_roi[scan_number][0][1].start,
+                )
             ),
-            "dark": (
-                self._background_spots[scan_number][1] - self._height - 1,
-                self._background_spots[scan_number][0] - self._height - 1,
+            "dark": tuple(
+                (
+                    self.reduced_roi[scan_number][1][0].start,
+                    self.reduced_roi[scan_number][1][1].start,
+                )
             ),
         }
 
-        rect_bright = plt.Rectangle(
+        rect_bright = plt.Rectangle(  # type: ignore
             anchor_points["bright"],
             2 * self._height + 1,
             2 * self._height + 1,
@@ -297,7 +356,7 @@ class Images(RawData):
             facecolor="None",
         )
 
-        rect_dark = plt.Rectangle(
+        rect_dark = plt.Rectangle(  # type: ignore
             anchor_points["dark"],
             2 * self._height + 1,
             2 * self._height + 1,
@@ -317,26 +376,15 @@ class Images(RawData):
         ax[1].imshow(self.masked_image[scan_number], **style_kws["images"])
 
         ax[2].imshow(
-            self.filterd[scan_number][self.reduced_roi[scan_number][0]],
+            self.filtered[scan_number][self.reduced_roi[scan_number][0]],
             **style_kws["images"],
         )
 
         ax[3].imshow(self.bright_spots[scan_number], **style_kws["images"])
 
         ax[4].imshow(self.dark_spots[scan_number], **style_kws["images"])
-        for i in range(1):
-            ax[i].add_patch(rect_dark)
-            ax[i].add_patch(rect_bright)
-            ax[i].hlines(
-                self._beam_spots[scan_number][0],
-                **style_kws["horizontal"],
-                **style_kws["courser"],
-            )
-            ax[i].vlines(
-                self._beam_spots[scan_number][1],
-                **style_kws["vertical"],
-                **style_kws["courser"],
-            )
+        ax[1].add_patch(rect_dark)
+        ax[1].add_patch(rect_bright)
         plt.show()
 
 
@@ -346,29 +394,58 @@ class Images(RawData):
 
 
 class Reflectivity(Images):
-    """stitched and loaded q and r"""
+    """
+    This object handles processing the image data into 1d traces that can be used for fitting and modeling in the future
+
+    This object provides 4 main operations on the data
+
+    Data Reduction: The 2d data is reduced to a single specular intensity and index of refraction q
+
+    Normalization: Izero scans from the beginning of the data collection are used to normalize the data such that the
+    direct beam measurement is unity
+
+    Stitching: The data is collected in individual sample theta series. This allows the collection of data across
+    6 orders of magnitude. The algorithm first finds these sample theta series packing them into individual numpy
+    arrays. Then a stitching algorithm locates overlap points between these series using the specular intensity to
+    calculate proper scale ratios to take into account the different intensities observed though each series.
+
+    Parameters
+    ----------
+    Images : Images
+        Image data object for each image in the directory
+
+    Methods
+    ----------
+    plot : Plot
+        Plots the computed reflectivity vs scattering vector q
+
+    highlight: Plot
+        Uses the plot backend but this function highlights a particular scan of interest
+
+    plot_stitches: Plot
+        Uses the plot backend to instead plot each q-series facilitating quick searching to determine what angles
+        need more data.
+    """
 
     def __init__(self, directory, *args, **kwargs):
         super().__init__(directory, *args, **kwargs)
-        self._data_reduction()
-        self._normalize()
-        self._find_q_series()
-        self._stitch_q_series()
-
-    def _data_reduction(self):
-        """Internal Function for reducing 2d image data into a 1d reflectivity curve"""
-
         self.r = unp.uarray(
             (self.bright_sum - self.dark_sum) / self.beam_current,
             np.sqrt(self.bright_sum + self.dark_sum) / self.beam_current,
         )
-
-        assert self.q.size == self.r.size
+        self._normalize()
+        self._find_q_series()
+        self._stitch_q_series()
 
     def _normalize(self):
         """Internal Function for normalizing reflectivity data"""
 
-        self._izero_count = np.count_nonzero(self.q == 0)
+        self._izero_count = 0
+        while True:
+            if self.q[self._izero_count] == 0:
+                self._izero_count += 1
+            else:
+                break
 
         izero = uaverage(
             self.r[: self._izero_count - 1] if self._izero_count > 0 else 1
@@ -381,38 +458,64 @@ class Reflectivity(Images):
 
         assert self.r.size == self.q.size
 
-    def _find_q_series(self, qtol=1e-3):
+    def _find_q_series(self, qtol: float = 1e-3):
         """Internal function for locating stitch points in the reflectivity data"""
 
         ind = np.where(np.diff(self.q) < -qtol)[0] + 1
 
         self.q_split = np.split(self.q, ind)
+
         self.r_split = np.split(self.r, ind)
 
-    def _stitch_q_series(self, stol=1e-1):
-        """internal Function for stitching"""
-        self._ratios = []
-        self._overlap = []
+    def _stitch_q_series(self, stol: float = 1e-1):
+        """
+
+        internal Function for stitching
+
+        """
+        self._ratios = np.empty(len(self.r_split))
+
         for i, (sub_q, sub_r) in enumerate(zip(self.q_split, self.r_split)):
             if i == len(self.q_split) - 1:
                 pass
+
             else:
                 ratio = np.array([])  # keep track of where the sections overlap
+
                 for j, q in enumerate(sub_q):
                     stitch_indices = np.where(
                         np.isclose(self.q_split[i + 1], q, rtol=stol)
-                    )[0]
+                    )
                     next_r_values = self.r_split[i + 1][stitch_indices]
                     r_value = sub_r[j]
                     ratio = np.append(ratio, r_value / next_r_values)
                 ratio = uaverage(ratio)
                 self.r_split[i + 1] = self.r_split[i + 1] * ratio
-                self._ratios.append(ratio)
+                self._ratios[i] = ratio
         self.r = np.concatenate(self.r_split)
-        self.q = np.concatenate(self.q_split)
         assert self.r.size == self.q.size
 
-    def plot(self, ylims: tuple = None, xlims: tuple = None):
+    def _finalize(self, qtol: float = 1e-1):
+        """
+        Internal function for finalizing the data
+        """
+        tally = defaultdict(list)
+        for i, q in enumerate(self.q):
+            val = round(q, 4)
+            tally[val].append(i)
+
+        index_list = sorted((key, locs) for key, locs in tally.items())
+        self.q = np.array([val[0] for val in index_list])
+        match_points = [val[1] for val in index_list]
+
+        self.r_f = []
+        for i, idx_set in enumerate(match_points):
+            rf = self.r[idx_set].mean()
+            self.r_f.append(rf)
+        self.r = np.array(self.r_f)
+        assert self.r.size == self.q.size
+
+    def plot(self, ylims: tuple | None = None, xlims: tuple | None = None):
         plt.yscale("log")
         plt.errorbar(
             self.q,
@@ -427,7 +530,12 @@ class Reflectivity(Images):
         plt.show()
 
     def highlight(
-        self, highlight, ylims: tuple = None, xlims: tuple = None, *args, **kwargs
+        self,
+        highlight,
+        ylims: tuple | None = None,
+        xlims: tuple | None = None,
+        *args,
+        **kwargs,
     ):
         plt.yscale("log")
         plt.errorbar(
@@ -468,32 +576,16 @@ class Reflectivity(Images):
         plt.show()
 
 
-def dezinger_image(image, threshold=1.5, size=3):
-    from scipy import ndimage
-
-    med_result = ndimage.median_filter(image, size=size)  # Apply Median Filter to image
-    diff_image = image / np.abs(
-        med_result
-    )  # Calculate Ratio of each pixel to compared to a threshold
-    # Repopulate image by removing pixels that exceed the threshold -- From Jan Ilavsky's IGOR implementation.
-    output = image * np.greater(threshold, diff_image).astype(
-        int
-    ) + med_result * np.greater(
-        diff_image, threshold
-    )  #
-    return output  # , med_result  # Return dezingered image and averaged image
-
-
 #
 #
 #
 
 if __name__ == "__main__":
     dir = file_dialog()
-    fig = plt.figure()
-    ax1 = fig.add_subplot(121)
-    ax2 = fig.add_subplot(122)
     xrr1 = XRR(dir)
-    ax1.imshow(xrr1.images.filterd[0])
-    ax2.imshow(xrr1.images.masked_image[0])
-    plt.show()
+    xrr1.refl.plot_stitches()
+    xrr1.refl._stitch_q_series()
+    xrr1.refl.plot_stitches()
+    xrr1.refl.finalize()
+    xrr1.refl.plot()
+    # xrr1.check_spot(1)

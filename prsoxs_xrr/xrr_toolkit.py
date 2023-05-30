@@ -32,6 +32,7 @@ def scattering_vector(energy, theta):
     return Q
 
 
+@np.vectorize
 def is_valid_index(arr, index):
     if len(arr) == 0:
         return True

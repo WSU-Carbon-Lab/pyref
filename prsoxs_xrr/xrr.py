@@ -301,13 +301,13 @@ class Images(RawData):
         ) / self.beam_current[scan_number]
 
         s = [
-+            f"Scattering Vector q: {self.q[scan_number]:.4g}",
-+            f"Bright Spot Intensity: {self.bright_sum[scan_number]:.4g}",
-+            f"Dark Spot Intensity: {self.dark_sum[scan_number]:.4g}",
-+            f"Absolute Signal: {signal:.4g}",
-+            f"Signal to Noise Ratio: {signal_to_noise[scan_number]:.4g}",
-+            "\n",
-+        ]
+            f"Scattering Vector q: {self.q[scan_number]:.4g}",
+            f"Bright Spot Intensity: {self.bright_sum[scan_number]:.4g}",
+            f"Dark Spot Intensity: {self.dark_sum[scan_number]:.4g}",
+            f"Absolute Signal: {signal:.4g}",
+            f"Signal to Noise Ratio: {signal_to_noise[scan_number]:.4g}",
+            "\n",
+        ]
         print("\n".join(s))
 
     def generate_mask(self, scan_number):

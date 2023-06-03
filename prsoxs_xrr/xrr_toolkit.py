@@ -24,6 +24,12 @@ def save_dialog():
     file_save_path = Path(filedialog.asksaveasfilename())
     return file_save_path if file_save_path else None
 
+def open_dialog():
+    root = Tk()
+    root.withdraw()
+    file_save_path = Path(filedialog.askopenfilename())
+    return file_save_path if file_save_path else None
+
 
 def scattering_vector(energy, theta):
     global hc
@@ -55,3 +61,4 @@ if __name__ == "__main__":
     C = unumpy.uarray(A, B)
     D = C[1:]
     print(D)
+

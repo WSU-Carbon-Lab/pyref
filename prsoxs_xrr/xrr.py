@@ -233,7 +233,7 @@ class Images(RawData):
             self.mask = None
             self.masked_image = self.images
 
-        elif isinstance(mask, np.ndarray) is True:
+        elif isinstance(mask, np.ndarray):
             self.mask = mask
             self.masked_image = np.squeeze(
                 [np.multiply(image, mask) for image in self.filtered]  # type: ignore
@@ -300,13 +300,14 @@ class Images(RawData):
             self.bright_sum[scan_number] - self.dark_sum[scan_number]
         ) / self.beam_current[scan_number]
 
-        s = []
-        s.append(f"Scattering Vector q: {self.q[scan_number]:.4g}")
-        s.append(f"Bright Spot Intensity: {self.bright_sum[scan_number]:.4g}")
-        s.append(f"Dark Spot Intensity: {self.dark_sum[scan_number]:.4g}")
-        s.append(f"Absolute Signal: {signal:.4g}")
-        s.append(f"Signal to Noise Ratio: {signal_to_noise[scan_number]:.4g}")
-        s.append("\n")
+        s = [
++            f"Scattering Vector q: {self.q[scan_number]:.4g}",
++            f"Bright Spot Intensity: {self.bright_sum[scan_number]:.4g}",
++            f"Dark Spot Intensity: {self.dark_sum[scan_number]:.4g}",
++            f"Absolute Signal: {signal:.4g}",
++            f"Signal to Noise Ratio: {signal_to_noise[scan_number]:.4g}",
++            "\n",
++        ]
         print("\n".join(s))
 
     def generate_mask(self, scan_number):
@@ -476,10 +477,7 @@ class Reflectivity(Images):
         self._ratios = np.empty(len(self.r_split))
 
         for i, (sub_q, sub_r) in enumerate(zip(self.q_split, self.r_split)):
-            if i == len(self.q_split) - 1:
-                pass
-
-            else:
+            if i != len(self.q_split) - 1:
                 ratio = np.array([])  # keep track of where the sections overlap
 
                 for j, q in enumerate(sub_q):
@@ -509,7 +507,7 @@ class Reflectivity(Images):
         match_points = [val[1] for val in index_list]
 
         self.r_f = []
-        for i, idx_set in enumerate(match_points):
+        for idx_set in match_points:
             rf = self.r[idx_set].mean()
             self.r_f.append(rf)
         self.r = np.array(self.r_f)

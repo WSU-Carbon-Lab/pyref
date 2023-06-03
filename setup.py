@@ -19,7 +19,7 @@ test_requirements = []
 setup(
     author="Harlan Heilman",
     author_email="Harlan.Heilman@wsu.edu",
-    python_requires=">=3.6",
+    python_requires=">=3.10",
     classifiers=[
         "Development Status :: 2 - Pre-Alpha",
         "Intended Audience :: Developers",

@@ -62,8 +62,7 @@ def xrr_sorter(directory) -> None:
     files = list(directory.glob("*fits"))
     sort_dir = directory.parent / "Sorted"
 
-    i = 0
-    for file in tqdm(files):
+    for i, file in tqdm(enumerate(files)):
         # Opens the file nad reads the energy; round the energy to the nearest energy resolvable by the device
         with fits.open(file) as headers:
             new_en = round(headers[0].header[49], 1)
@@ -77,7 +76,6 @@ def xrr_sorter(directory) -> None:
 
         # copies the file to the new directory
         copy2(file, dest)
-        i += 1
     return
 
 

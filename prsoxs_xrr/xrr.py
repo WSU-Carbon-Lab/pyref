@@ -581,9 +581,4 @@ class Reflectivity(Images):
 if __name__ == "__main__":
     dir = file_dialog()
     xrr1 = XRR(dir)
-    xrr1.refl.plot_stitches()
-    xrr1.refl._stitch_q_series()
-    xrr1.refl.plot_stitches()
-    xrr1.refl.finalize()
-    xrr1.refl.plot()
-    # xrr1.check_spot(1)
+    xrr1.check_spot(1)

@@ -1,5 +1,4 @@
 import numpy as np
-from sympy import true
 from uncertainties import unumpy, ufloat
 from pathlib import Path
 from tkinter import filedialog
@@ -23,6 +22,7 @@ def save_dialog():
     root.withdraw()
     file_save_path = Path(filedialog.asksaveasfilename())
     return file_save_path if file_save_path else None
+
 
 def open_dialog():
     root = Tk()
@@ -61,4 +61,3 @@ if __name__ == "__main__":
     C = unumpy.uarray(A, B)
     D = C[1:]
     print(D)
-

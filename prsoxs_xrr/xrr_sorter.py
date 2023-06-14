@@ -4,7 +4,7 @@ from shutil import copy2
 from tqdm.auto import tqdm
 from tkinter import *
 from astropy.io import fits
-from xrr_toolkit import *
+from prsoxs_xrr.xrr_toolkit import *
 
 
 def restartable(func):
@@ -65,7 +65,7 @@ def xrr_sorter(directory) -> None:
     for i, file in tqdm(enumerate(files)):
         # Opens the file nad reads the energy; round the energy to the nearest energy resolvable by the device
         with fits.open(file) as headers:
-            new_en = round(headers[0].header[49], 1)
+            new_en = round(headers[0].header[49], 1)  # type: ignore
 
         # determine the ending location
         dest = sort_dir / str(new_en)

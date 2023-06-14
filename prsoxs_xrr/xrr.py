@@ -7,13 +7,11 @@ from typing import Union
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
-import numpy.typing as npt
 from astropy.io import fits
-from numba import jit
 from scipy.ndimage import median_filter
 import uncertainties
 from uncertainties import unumpy as unp
-from xrr_toolkit import *
+from prsoxs_xrr.xrr_toolkit import *
 from collections import defaultdict
 
 

@@ -4,7 +4,7 @@ from shutil import copy2
 from tqdm.auto import tqdm
 from tkinter import *
 from astropy.io import fits
-from prsoxs_xrr.xrr_toolkit import *
+from toolkit import *
 
 
 def restartable(func):

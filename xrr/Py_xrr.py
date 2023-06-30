@@ -11,7 +11,7 @@ from astropy.io import fits
 from scipy.ndimage import median_filter
 import uncertainties
 from uncertainties import unumpy as unp
-from prsoxs_xrr.xrr_toolkit import *
+from toolkit import *
 from collections import defaultdict
 
 
@@ -576,7 +576,11 @@ class Reflectivity(Images):
 #
 #
 
+
+def extractHeaderData(file: Path) -> dict:
+    raise NotImplementedError
+
+
 if __name__ == "__main__":
-    dir = file_dialog()
-    xrr1 = XRR(dir)
-    xrr1.check_spot(1)
+    test_fits = Path().absolute() / "tests" / "TestData" / "TestFits.fits"
+    print(type(fits.getheader(test_fits, 0)))

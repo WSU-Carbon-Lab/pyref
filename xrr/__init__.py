@@ -7,4 +7,3 @@ __version__ = "0.1.0"
 from xrr._xrr import *
 from xrr._data_sorter import *
 from xrr._toolkit import *
-from _find_overlaps import *

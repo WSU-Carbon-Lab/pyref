@@ -21,7 +21,7 @@ class FitsReader:
             headerData = hdul[0].header  # type: ignore
 
         return {
-            key: round(headerData[key], 4) for key in headerData if key in headerValues
+            key: round(headerData[key], 4) for key in headerValues if key in headerData
         }
 
     @staticmethod
@@ -40,7 +40,7 @@ class FitsReader:
             imageData = hdul[2].data  # type: ignore
 
         headerDict = {
-            key: round(headerData[key], 4) for key in headerData if key in headerValues
+            key: round(headerData[key], 4) for key in headerValues if key in headerData
         }
         return pd.DataFrame(headerDict, index=[0]), imageData
 
@@ -48,15 +48,16 @@ class FitsReader:
 class MultiReader:
     @staticmethod
     def readHeader(
-        dataFilePath: Path, headerValues: list = HEADER_VALUES
+        dataFilePath: Path, headerValues: list = HEADER_VALUES, fileName: bool = False
     ) -> pd.DataFrame:
         headerDFList = []
         for file in dataFilePath.glob("*.fits"):
-            headerDFList.append(
-                pd.DataFrame(
-                    FitsReader.readHeader(file, headerValues=headerValues), index=[0]
-                )
+            headerDF = pd.DataFrame(
+                FitsReader.readHeader(file, headerValues=headerValues), index=[0]
             )
+            if fileName:
+                headerDF["File Path"] = file
+            headerDFList.append(headerDF)
 
         return pd.concat(headerDFList)
 

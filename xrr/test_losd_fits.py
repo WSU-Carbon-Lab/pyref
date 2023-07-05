@@ -2,12 +2,12 @@ import unittest
 import numpy as np
 from _load_fits import *
 
-test_fits_file = Path("tests/TestData/TestFits.fits")
-test_multi_path = Path("tests/TestData/Sorted/282.5")
+test_fits_file = Path("tests/TestData/TestFits.fits").resolve()
+test_multi_path = Path("tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0").resolve()
 
-test_df = Path("tests/TestData/TestDataFrame.csv")
-test_single_df = Path("tests/TestData/TestSingleDataFrame.csv")
-test_single_image = Path("tests/TestData/TestSingleImage.txt")
+test_df = Path("tests/TestData/TestDataFrame.csv").resolve()
+test_single_df = Path("tests/TestData/TestSingleDataFrame.csv").resolve()
+test_single_image = Path("tests/TestData/TestSingleImage.txt").resolve()
 
 
 class ReadFitsUnitTest(unittest.TestCase):
@@ -28,9 +28,9 @@ class ReadFitsUnitTest(unittest.TestCase):
         global test_single_image
         global test_fits_file
 
-        expected_header_data = pd.read_csv(test_single_df).to_dict()
-        header_data = FitsReader.readHeader(test_fits_file)
-        self.assertDictEqual(expected_header_data, header_data)
+        expected_header_data = pd.read_csv(test_single_df)
+        header_data = pd.DataFrame(FitsReader.readHeader(test_fits_file), index=[0])
+        self.assertTrue(expected_header_data.equals(header_data))
 
     def test_readImage(self):
         global test_fits_file
@@ -49,8 +49,10 @@ class MultiReaderUnitTest(unittest.TestCase):
         global test_fits_file
 
         expected_header_data = pd.read_csv(test_df)
-        expected_image = np.loadtxt(test_multi_path)
-        header_data, image = MultiReader.readFile(test_multi_path)
+        expected_header_data = expected_header_data.reset_index(drop=True)
+
+        header_data, _ = MultiReader.readFile(test_multi_path)
+        header_data = header_data.reset_index(drop=True)
 
         self.assertTrue(header_data.equals(expected_header_data))
 
@@ -60,7 +62,11 @@ class MultiReaderUnitTest(unittest.TestCase):
         global test_fits_file
 
         expected_header_data = pd.read_csv(test_df)
+        expected_header_data = expected_header_data.reset_index(drop=True)
+
         header_data = MultiReader.readHeader(test_multi_path)
+        header_data = header_data.reset_index(drop=True)
+
         self.assertTrue(expected_header_data.equals(header_data))
 
 

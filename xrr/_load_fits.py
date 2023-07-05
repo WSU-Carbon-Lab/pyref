@@ -86,26 +86,29 @@ class MultiReader:
         return pd.concat(headerDFList), imageList
 
 
-def _construct_tests():
+def _constructTests():
     multi_fits_directory = Path(
         "tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0"
     ).resolve()
     fits_directory = Path(
         "tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0/ZnPc_P100_E180276-00001.fits"
     ).resolve()
+    test_single_df = Path("tests/TestData/TestSingleDataFrame.csv").resolve()
+    test_single_u = Path("tests/TestData/TestSingleImage.txt").resolve()
+    test_df = Path("tests/TestData/TestDataFrame.csv").resolve()
 
     single_df, single_u = FitsReader.readFile(fits_directory)
-    single_df.to_csv("tests/TestData/TestSingleDataFrame.csv", index=False)  # type: ignore
-    np.savetxt("tests/TestData/TestSingleImage.txt", single_u)  # type: ignore
+    single_df.to_csv(test_single_df, index=False)  # type: ignore
+    np.savetxt(test_single_u, single_u)  # type: ignore
 
-    df, u = MultiReader.readFile(multi_fits_directory)
-    df.to_csv("tests/TestData/TestDataFrame.csv", index=False)
+    df, _ = MultiReader.readFile(multi_fits_directory)
+    df.to_csv(test_df, index=False)
 
 
 if __name__ == "__main__":
     ###########################################################################
     # # Use this to construct new test cases if needed
-    _construct_tests()
+    _constructTests()
 
     ###########################################################################
     # The outcome of this test should run approximately 12 sec

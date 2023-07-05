@@ -1,63 +1,52 @@
+from typing import Final
 import numpy as np
-from uncertainties import unumpy, ufloat
 from pathlib import Path
-from tkinter import filedialog
-from tkinter import *
+from tkinter import filedialog, Tk
+
+HC: Final[int] = 12400
 
 
-# c = 299_792_458 * 10**10  # \AA s-2
-# ħ = 6.582_119_569 * 10 ** (-16)  # eV s
-hc = 12400  # ev \AA
+class FileDialog:
+    @staticmethod
+    def getDirectory() -> Path | None:
+        root = Tk()
+        root.withdraw()
+        root.focus_force()
+        directory = Path(filedialog.askdirectory())
+        return directory if directory else None
+
+    @staticmethod
+    def getFileName() -> Path | None:
+        root = Tk()
+        root.withdraw()
+        root.focus_force()
+        saveName = Path(filedialog.asksaveasfilename())
+        return saveName if saveName else None
+
+    @staticmethod
+    def openFile() -> Path | None:
+        root = Tk()
+        root.withdraw()
+        root.focus_force()
+        openName = Path(filedialog.askopenfilename())
+        return openName if openName else None
 
 
-def file_dialog():
-    root = Tk()
-    root.withdraw()
-    directory = Path(filedialog.askdirectory())
-    return directory
+class XrayDomainTransform:
+    @staticmethod
+    @np.vectorize
+    def toLam(energy: float) -> float:
+        global HC
+        return HC / energy
 
+    @staticmethod
+    @np.vectorize
+    def toK(energy: float) -> float:
+        lam = XrayDomainTransform.toLam(energy)
+        return 2 * np.pi / lam
 
-def save_dialog():
-    root = Tk()
-    root.withdraw()
-    file_save_path = Path(filedialog.asksaveasfilename())
-    return file_save_path if file_save_path else None
-
-
-def open_dialog():
-    root = Tk()
-    root.withdraw()
-    file_save_path = Path(filedialog.askopenfilename())
-    return file_save_path if file_save_path else None
-
-
-def scattering_vector(energy, theta):
-    global hc
-    k = 2 * np.pi * energy / (hc)
-    Q = 2 * k * np.sin(np.radians(theta))
-    return Q
-
-
-@np.vectorize
-def is_valid_index(arr, index):
-    if len(arr) == 0:
-        return True
-    i, j = index
-    if i < 0 or i >= arr.shape[0]:
-        return False
-    if j < 0 or j >= arr.shape[1]:
-        return False
-    return True
-
-
-def uaverage(uarray, axis=None, *arge, **kwargs):
-    _w = 1 / (unumpy.std_devs(uarray) ** 2)
-    return np.average(unumpy.nominal_values(uarray), axis=axis, weights=_w)
-
-
-if __name__ == "__main__":
-    A = np.array([1, 2, 3, 4])
-    B = np.array([1, 2, 3, 4])
-    C = unumpy.uarray(A, B)
-    D = C[1:]
-    print(D)
+    @staticmethod
+    @np.vectorize
+    def toQ(energy: float, twoTheta: float) -> float:
+        lam = XrayDomainTransform.toLam(energy)
+        return 4 * np.pi * np.sin(twoTheta) / lam

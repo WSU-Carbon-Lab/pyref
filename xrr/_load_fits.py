@@ -75,7 +75,7 @@ class MultiReader:
     ) -> tuple[pd.DataFrame, list]:
         imageList = []
         headerDFList = []
-        for file in dataFilePath.glob("*.glob"):
+        for file in dataFilePath.glob("*.fits"):
             headerDFList.append(
                 pd.DataFrame(
                     FitsReader.readHeader(file, headerValues=headerValues), index=[0]
@@ -87,8 +87,12 @@ class MultiReader:
 
 
 def _construct_tests():
-    multi_fits_directory = Path("tests/TestData/Sorted/282.5/")
-    fits_directory = Path("tests/TestData/TestFits.fits")
+    multi_fits_directory = Path(
+        "tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0"
+    ).resolve()
+    fits_directory = Path(
+        "tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0/ZnPc_P100_E180276-00001.fits"
+    ).resolve()
 
     single_df, single_u = FitsReader.readFile(fits_directory)
     single_df.to_csv("tests/TestData/TestSingleDataFrame.csv", index=False)  # type: ignore

@@ -1,7 +1,6 @@
 from pathlib import Path
 from shutil import copy2
 from concurrent.futures import ThreadPoolExecutor
-import pandas as pd
 from _load_fits import MultiReader
 
 
@@ -9,7 +8,7 @@ FLAGS = {
     "-en": "Beamline Energy",
     "-pol": "EPU Polarization",
     "-n": "File Path",
-}  ## Need to add -n to this to sort by name
+}
 
 
 class FitsSorter:

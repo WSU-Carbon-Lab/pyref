@@ -49,3 +49,7 @@ class ImageProcs:
             raise ValueError("Input array must be 2-dimensional")
         imageArr[mask] = np.nan
         return imageArr
+
+    @staticmethod
+    def generateMask(imageArr: np.ndarray) -> np.ndarray:
+        ...

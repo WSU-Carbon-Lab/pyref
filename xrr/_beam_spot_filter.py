@@ -5,8 +5,8 @@
 #
 #
 
-class BeamSpotFinder:
 
+class BeamSpotFinder:
     @staticmethod
     def basicFilter():
-        
+        ...

@@ -1,9 +1,8 @@
+import numpy as np
+import pandas as pd
 from pathlib import Path
 from typing import Final
 from astropy.io import fits
-import numpy as np
-import pandas as pd
-
 
 HEADER_VALUES: Final[list] = [
     "Beamline Energy",
@@ -16,7 +15,9 @@ HEADER_VALUES: Final[list] = [
 
 class FitsReader:
     @staticmethod
-    def readHeader(fitsFilePath: Path, headerValues: list = HEADER_VALUES) -> dict:
+    def readHeader(
+        fitsFilePath: Path, headerValues: list | np.ndarray = HEADER_VALUES
+    ) -> dict:
         with fits.open(fitsFilePath) as hdul:
             headerData = hdul[0].header  # type: ignore
 
@@ -33,7 +34,7 @@ class FitsReader:
 
     @staticmethod
     def readFile(
-        fitsFilePath: Path, headerValues: list = HEADER_VALUES
+        fitsFilePath: Path, headerValues: list | np.ndarray = HEADER_VALUES
     ) -> tuple[pd.DataFrame, list]:
         with fits.open(fitsFilePath) as hdul:
             headerData = hdul[0].header  # type: ignore
@@ -115,9 +116,9 @@ if __name__ == "__main__":
 
     # import timeit
 
-    # fits_directory = Path("tests/TestData/TestFits.fits")
+    # fits_directory = Path("tests/TestData/CCD").resolve()
     # # Measure the execution time for the original loadMultipleFits function
-    # timer = timeit.Timer(lambda: ExperimentReader.readFile(fits_directory))
+    # timer1 = timeit.Timer(lambda: MultiReader.readHeader(fits_directory))
 
     # # Print the execution times
-    # print("Original Load Time:", timer.timeit(100))
+    # print("Original Load Time:", timer1.timeit(10))

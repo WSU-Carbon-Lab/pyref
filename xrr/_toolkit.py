@@ -49,4 +49,4 @@ class XrayDomainTransform:
     @np.vectorize
     def toQ(energy: float, twoTheta: float) -> float:
         lam = XrayDomainTransform.toLam(energy)
-        return 4 * np.pi * np.sin(twoTheta) / lam
+        return 4 * np.pi * np.sin(np.radians(twoTheta)) / lam

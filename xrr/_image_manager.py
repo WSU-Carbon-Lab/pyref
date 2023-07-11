@@ -27,51 +27,45 @@ class ImageProcs:
 
     @staticmethod
     def roiReduction(
-        shape: tuple, center: tuple[int, int], height: int, width: int
-    ) -> list[tuple]:
+        imageArr: np.ndarray, center: tuple[int, int], height: int, width: int
+    ) -> np.ndarray:
         assert_type(center, tuple[int, int])
         assert_type(height, int)
         assert_type(width, int)
         cy, cx = center
+        mx, my = imageArr.shape
 
-        top = cy - height // 2
-        bot = cy + height // 2 + height % 2
+        top = max(cy - height // 2, 0)
+        bot = min(cy + height // 2 + height % 2, mx)
 
-        left = cx - width // 2
-        right = cy + width // 2 + width % 2
-        roi = [
-            (
-                slice(top, bot),
-                slice(left, right),
-            ),
-            (
-                slice(shape[0] - bot, shape[0] - top),
-                slice(shape[1] - right, shape[1] - left),
-            ),
-        ]
+        left = max(cx - width // 2, 0)
+        right = min(cx + width // 2 + width % 2, mx)
+
+        roi = imageArr[top:bot, left:right]
         return roi
 
     @staticmethod
-    def applyMask(
-        imageArr: np.ndarray, mask: np.ndarray, inverted: bool = False
-    ) -> np.ndarray | Exception:
-        _imageInputErr(imageArr)
-        _maskInputErr(mask)
+    def oppositePoint(
+        center: tuple[int, int], array_shape: tuple[int, int]
+    ) -> tuple[int, int]:
+        assert_type(center, tuple[int, int])
+        assert_type(array_shape, tuple[int, int])
 
-        if not inverted:
-            imageArr[mask] = 0
-        elif inverted:
-            imageArr[~mask] = 0
-        else:
-            raise ValueError("inverted flag must be a boolean value")
+        y, x = center
+        height, width = array_shape
 
-        return imageArr
+        opposite_x = width - x - 1
+        opposite_y = height - y - 1
+
+        return opposite_y, opposite_x
 
     @staticmethod
-    def sumImage(imageArr: np.ndarray) -> float:
-        _imageInputErr(imageArr)
+    def applyMask(imageArr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        return imageArr[mask]
 
-        return imageArr.sum()
+    @staticmethod
+    def sumImage(imageArr: np.ndarray) -> int:
+        return int(imageArr.sum())
 
 
 def _imageInputErr(imageArr) -> Exception | None:
@@ -80,17 +74,3 @@ def _imageInputErr(imageArr) -> Exception | None:
 
     if imageArr.ndim != 2:
         raise ValueError("Input array must be 2-dimensional")
-
-
-def _maskInputErr(maskArr) -> Exception | None:
-    if not isinstance(maskArr, np.ndarray):
-        maskArr = np.ndarray(maskArr)
-
-    if not (maskArr.dtype == type(bool)):
-        if np.all(np.logical_or(maskArr == 0, maskArr == 1) == 0):
-            maskArr = maskArr.astype(bool)
-
-        else:
-            raise ValueError(
-                "Input array must be a boolean array or an array of 0 and 1"
-            )

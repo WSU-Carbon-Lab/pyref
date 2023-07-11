@@ -72,19 +72,25 @@ class MultiReader:
 
     @staticmethod
     def readFile(
-        dataFilePath: Path, headerValues: list = HEADER_VALUES
+        dataFilePath: Path, headerValues: list = HEADER_VALUES, fileName: bool = False
     ) -> tuple[pd.DataFrame, list]:
         imageList = []
         headerDFList = []
-        for file in dataFilePath.glob("*.fits"):
-            headerDFList.append(
-                pd.DataFrame(
-                    FitsReader.readHeader(file, headerValues=headerValues), index=[0]
-                )
+        for i, file in enumerate(dataFilePath.glob("*.fits")):
+            headerDF = pd.DataFrame(
+                FitsReader.readHeader(file, headerValues=headerValues), index=[i]
             )
+            if fileName:
+                headerDF["File Path"] = file
+            headerDFList.append(headerDF)
             imageList.append(FitsReader.readImage(file))
 
         return pd.concat(headerDFList), imageList
+
+    @staticmethod
+    def saveFits(metaData: pd.DataFrame, imageArrs: list, saveDir: str) -> None:
+        metaData.to_csv(saveDir + ".csv")
+        np.savez(saveDir + ".npz")
 
 
 def _constructTests():

@@ -1,3 +1,4 @@
+import enum
 from cv2 import sqrBoxFilter, sqrt
 from matplotlib import patches
 from _image_manager import ImageProcs
@@ -23,7 +24,9 @@ class ReflectivityProcs:
     """
 
     @staticmethod
-    def getBeamSpots(imageList: list, mask: np.ndarray | None = None):
+    def getBeamSpots(
+        imageList: list, mask: np.ndarray | None = None
+    ) -> tuple[list, list, list, list]:
         with ThreadPoolExecutor() as executor:
             trimmedImages = list(
                 executor.map(lambda image: ImageProcs.removeEdge(image), imageList)
@@ -51,25 +54,40 @@ class ReflectivityProcs:
                     lambda image: ImageProcs.findMaximum(image), filteredImages
                 )
             )
-        return filteredImages, beamSpots, maskedImages
+            darkSpots = list(
+                executor.map(
+                    lambda spot: ImageProcs.oppositePoint(spot, trimmedImages[0].shape),
+                    beamSpots,
+                )
+            )
+        return filteredImages, maskedImages, beamSpots, darkSpots
 
     @staticmethod
     def getSubImages(
         maskedImages: list[np.ndarray],
         beamSpots: list[tuple],
+        darkSpots: list[tuple],
         height: int = 20,
         width: int = 20,
     ):
         with ThreadPoolExecutor() as executor:
-            brightROI, darkROI = list(
+            directBeam = list(
                 executor.map(
                     lambda args: ImageProcs.roiReduction(
-                        args[0].shape, args[1], height=height, width=width
+                        args[0], args[1], height=height, width=width
                     ),
                     zip(maskedImages, beamSpots),
                 )
             )
-        return brightROI, darkROI
+            backgroundNoise = list(
+                executor.map(
+                    lambda args: ImageProcs.roiReduction(
+                        args[0], args[1], height=height, width=width
+                    ),
+                    zip(maskedImages, darkSpots),
+                )
+            )
+        return directBeam, backgroundNoise
 
     @staticmethod
     def computeRefl(reflBeamSpots: list, darkBeamSpots: list) -> pd.DataFrame:
@@ -81,7 +99,10 @@ class ReflectivityProcs:
                 executor.map(lambda image: ImageProcs.sumImage(image), darkBeamSpots)
             )
         df = pd.DataFrame(
-            {REFL_COLUMN_NAMES[0]: refl_intensity, REFL_COLUMN_NAMES[1]: dark_intensity}
+            {
+                REFL_COLUMN_NAMES[0]: refl_intensity,
+                REFL_COLUMN_NAMES[1]: dark_intensity,
+            }
         )
         return df
 
@@ -93,11 +114,11 @@ class ReflectivityProcs:
         reflData.reset_index(drop=True, inplace=True)
         reflData[REFL_NAME] = (
             reflData[REFL_COLUMN_NAMES[0]] - reflData[REFL_COLUMN_NAMES[1]]
-        )
-        # / (metaData["Beam Current"] * metaData["Higher Order Suppressor"])
+        ) / (metaData["Beam Current"] * metaData["Higher Order Suppressor"])
 
-        refl_err = reflData[REFL_NAME] * np.sqrt(
-            (1 / reflData[REFL_COLUMN_NAMES[0]]) - (1 / reflData[REFL_COLUMN_NAMES[1]])
+        refl_err = np.sqrt(
+            reflData[REFL_NAME]
+            / (metaData["Beam Current"] * metaData["Higher Order Suppressor"])
         )
 
         scattering = XrayDomainTransform.toQ(
@@ -122,22 +143,25 @@ class ReflectivityProcs:
             else:
                 break
         if _izero_count > 0:
-            izero = np.average(reflDataFrame[REFL_NAME].iloc[: _izero_count - 1])
+            izero: float = np.average(reflDataFrame[REFL_NAME].iloc[: _izero_count - 1])  # type: ignore
             izero_err_avg = np.average(
                 reflDataFrame[REFL_ERR_NAME].iloc[: _izero_count - 1]
             )
-            izero_err = izero_err_avg / sqrt(_izero_count)
+            izero_err: float = izero_err_avg / np.sqrt(_izero_count)
         else:
             izero, izero_err = (1, 1)
 
         reflDataFrame[REFL_NAME] = reflDataFrame[REFL_NAME] / izero  # type: ignore
-        reflDataFrame[REFL_ERR_NAME] = reflDataFrame[REFL_NAME] * np.sqrt(
-            (izero_err / izero) ** 2
-            + (reflDataFrame[REFL_ERR_NAME] / reflDataFrame[REFL_NAME]) ** 2
+        reflDataFrame[REFL_ERR_NAME] = reflDataFrame[REFL_ERR_NAME] * np.sqrt(
+            ((reflDataFrame[REFL_ERR_NAME]) / reflDataFrame[REFL_NAME]) ** 2
+            + (izero_err_avg / izero)  # type: ignore
         )
 
         reflDataFrame.drop(reflDataFrame.index[:_izero_count])
         return reflDataFrame
+    
+    @staticmethod
+    def 
 
 
 def _metaDataErr(metaData: pd.DataFrame):
@@ -175,5 +199,19 @@ if __name__ == "__main__":
     meta, images = MultiReader.readFile(
         Path("tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0").resolve()
     )
-    filtered_image, beam_spots, masked_image = ReflectivityProcs.getBeamSpots(images)
-    x, y = ReflectivityProcs.getSubImages(masked_image, beam_spots)
+    filteredImages, maskedImages, beamSpots, darkSpots = ReflectivityProcs.getBeamSpots(
+        images
+    )
+    directBeam, backgroundImage = ReflectivityProcs.getSubImages(
+        maskedImages, beamSpots, darkSpots
+    )
+    reflDF = ReflectivityProcs.computeRefl(directBeam, backgroundImage)
+    df = ReflectivityProcs.buildDataFrame(meta, reflDF)
+    norlamized = ReflectivityProcs.normalizeReflData(df)
+    print(norlamized, "\n\n")
+    norlamized.plot(x=SCAT_NAME, y=REFL_NAME, kind="scatter", logy=True)
+    plt.show()
+    for db in directBeam:
+        plt.figure()
+        plt.imshow(db)
+    plt.show()

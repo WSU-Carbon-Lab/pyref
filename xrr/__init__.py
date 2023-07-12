@@ -4,7 +4,7 @@ __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
 __version__ = "0.1.0"
 
-from xrr._xrr import *
-from xrr._data_sorter import *
-from xrr._toolkit import *
-from xrr._load_fits import *
+from xrr.xrr import *
+from xrr.data_sorter import *
+from xrr.toolkit import *
+from xrr.load_fits import *

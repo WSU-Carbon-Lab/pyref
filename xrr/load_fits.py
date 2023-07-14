@@ -50,12 +50,11 @@ class FitsReader:
 class MultiReader:
     @staticmethod
     def __call__(directory = None | str | Path, fresh = True, dialog = True) -> tuple:
-        if isinstance(dialog, bool):
+        if dialog:
             directory = FileDialog.getDirectory()
-        elif isinstance(dialog, str):
-            directory = Path(directory).resolve() #type: ignore
         else:
-            pass
+            directory = Path(directory) # type: ignore
+
         if fresh == True:
             metaData, images = MultiReader.readFile(directory)  # type: ignore
             MultiReader.saveFits(metaData, images, str(directory))
@@ -66,7 +65,7 @@ class MultiReader:
         else:
             metaData = {}
             images = []
-        return metaData, images
+        return metaData, images, directory
 
     @staticmethod
     def readHeader(

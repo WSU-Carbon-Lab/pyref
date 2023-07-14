@@ -1,27 +1,38 @@
-import enum
-from cv2 import sqrBoxFilter, sqrt
-from matplotlib import patches
-from _image_manager import ImageProcs
-from _load_fits import MultiReader, HEADER_VALUES
-from _toolkit import XrayDomainTransform
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Final
+from typing import Any, Final
+
 import numpy as np
 import pandas as pd
-
+from image_manager import ImageProcs
+from load_fits import HEADER_VALUES, MultiReader
+from toolkit import XrayDomainTransform, FileDialog
 
 # COLUMN NAME STATIC VALUES
 REFL_COLUMN_NAMES: Final[list] = ["Direct Beam Intensity", "Background Intensity"]
 REFL_NAME: Final[str] = "Refl"
 REFL_ERR_NAME: Final[str] = "Refl Err"
-SCAT_NAME: Final[str] = "Q"
+Q_VEC_NAME: Final[str] = "Q"
 
 
-class ReflectivityProcs:
+class ReflProcs:
     """
     Using the _load_fits.MultiReader we can generate a dataframe containing the header data and a list containing images.
     Each ImageProcs method is vectorized allowing us to apply the procs to lists and arrays
     """
+
+    @staticmethod
+    def __call__(metaData: pd.DataFrame, images: list, mask, *args, **kwargs):
+        filteredImages, maskedImages, beamSpots, darkSpots = ReflProcs.getBeamSpots(
+            images, mask=mask
+        )
+        directBeam, backgroundNoise = ReflProcs.getSubImages(
+            maskedImages, beamSpots, darkSpots
+        )
+        pureReflDF = ReflProcs.getDf(metaData, directBeam, backgroundNoise)
+        df = ReflProcs.scaleSeries(pureReflDF, *args, **kwargs)
+
+        return df, maskedImages, filteredImages, beamSpots, darkSpots
 
     @staticmethod
     def getBeamSpots(
@@ -90,7 +101,7 @@ class ReflectivityProcs:
         return directBeam, backgroundNoise
 
     @staticmethod
-    def computeRefl(reflBeamSpots: list, darkBeamSpots: list) -> pd.DataFrame:
+    def getRefl(reflBeamSpots: list, darkBeamSpots: list) -> pd.DataFrame:
         with ThreadPoolExecutor() as executor:
             refl_intensity = list(
                 executor.map(lambda image: ImageProcs.sumImage(image), reflBeamSpots)
@@ -107,38 +118,29 @@ class ReflectivityProcs:
         return df
 
     @staticmethod
-    def buildDataFrame(metaData: pd.DataFrame, reflData: pd.DataFrame) -> pd.DataFrame:
-        _metaDataErr(metaData)
-        _reflDataErr(reflData)
-
+    def getDf(metaData: pd.DataFrame, brightSpots, darkSpots) -> pd.DataFrame:
+        reflData = ReflProcs.getRefl(brightSpots, darkSpots)
         reflData.reset_index(drop=True, inplace=True)
         reflData[REFL_NAME] = (
             reflData[REFL_COLUMN_NAMES[0]] - reflData[REFL_COLUMN_NAMES[1]]
         ) / (metaData["Beam Current"] * metaData["Higher Order Suppressor"])
 
-        refl_err = np.sqrt(
+        reflData[REFL_ERR_NAME] = np.sqrt(
             reflData[REFL_NAME]
             / (metaData["Beam Current"] * metaData["Higher Order Suppressor"])
         )
 
-        scattering = XrayDomainTransform.toQ(
+        reflData[Q_VEC_NAME] = XrayDomainTransform.toQ(
             metaData["Beamline Energy"], metaData["Sample Theta"]
         )
-        data_frame = pd.DataFrame(
-            {
-                SCAT_NAME: scattering,
-                REFL_NAME: reflData[REFL_NAME],
-                REFL_ERR_NAME: refl_err,
-            }
-        )
-
-        return data_frame
+        df = pd.concat([metaData, reflData], axis=1)
+        return df
 
     @staticmethod
-    def normalizeReflData(reflDataFrame: pd.DataFrame) -> pd.DataFrame:
+    def getNormal(reflDataFrame: pd.DataFrame) -> pd.DataFrame:
         _izero_count = 0
         while True:
-            if reflDataFrame[SCAT_NAME][_izero_count] == 0:
+            if reflDataFrame[Q_VEC_NAME][_izero_count] == 0:
                 _izero_count += 1
             else:
                 break
@@ -153,65 +155,70 @@ class ReflectivityProcs:
 
         reflDataFrame[REFL_NAME] = reflDataFrame[REFL_NAME] / izero  # type: ignore
         reflDataFrame[REFL_ERR_NAME] = reflDataFrame[REFL_ERR_NAME] * np.sqrt(
-            ((reflDataFrame[REFL_ERR_NAME]) / reflDataFrame[REFL_NAME]) ** 2
-            + (izero_err_avg / izero)  # type: ignore
+            ((reflDataFrame[REFL_ERR_NAME]) / (reflDataFrame[REFL_NAME])) ** 2
+            + (izero_err / izero)  # type: ignore
         )
 
         reflDataFrame.drop(reflDataFrame.index[:_izero_count])
         return reflDataFrame
-    
+
     @staticmethod
-    def 
+    def getOverlaps(col: pd.Series) -> dict:
+        tally = defaultdict(list)
+        for i, val in col.items():
+            tally[val].append(i)
+        return {key: val for key, val in tally.items() if len(val) > 1}
 
+    @staticmethod
+    def getScaleFactors(overlapDict: dict, df: pd.DataFrame, refl=REFL_NAME) -> dict:
+        reflCol = df[refl]
+        keys = list(overlapDict.keys())
+        indices = list(overlapDict.values())
+        scaleFactors = {}
+        for i in range(len(keys)):
+            if len(indices[i]) > 2:
+                initIndex = indices[i][0]
+                overIndices = indices[i][1:]
+                initVal = reflCol.iloc[initIndex]
+                overVals = reflCol.iloc[overIndices]
+                ratio = list(initVal / overVals)
+                j = 0
+                while len(indices[j]) == 2 and j < len(keys):
+                    initVal = reflCol.iloc[indices[j][0]]
+                    overVal = reflCol.iloc[indices[j][1]]
+                    ratio.append(initVal / overVal)
+                    j += 1
+                scaleFactors[overIndices[0]] = np.average(ratio)
+        return scaleFactors
 
-def _metaDataErr(metaData: pd.DataFrame):
-    global HEADER_VALUES
-    assert np.all(metaData.columns == HEADER_VALUES)
+    @staticmethod
+    def replaceWithAverage(df: pd.DataFrame, indices: list) -> pd.DataFrame:
+        avg_values = df.mean(axis=1)
 
+        def replace(index):
+            df.iloc[index] = avg_values
 
-def _reflDataErr(reflData: pd.DataFrame):
-    global REFL_COLUMN_NAMES
-    assert np.all(reflData.columns == REFL_COLUMN_NAMES)
+        with ThreadPoolExecutor() as executor:
+            executor.map(replace, indices)
 
+        return df
 
-def add_rectangle_to_image(image, rect_slice):
-    fig, ax = plt.subplots()
-    ax.imshow(image)
+    @staticmethod
+    def scaleSeries(
+        df: pd.DataFrame,
+        refl: str = REFL_NAME,
+        q: str = Q_VEC_NAME,
+        reduce: bool = True,
+    ) -> pd.DataFrame:
+        df = ReflProcs.getNormal(df)
+        overlapDict = ReflProcs.getOverlaps(df[q])
+        scaleFactors = ReflProcs.getScaleFactors(overlapDict, df, refl=refl)
 
-    # Create a rectangle patch with dashed edge
-    rect = patches.Rectangle(
-        (rect_slice.start, rect_slice.stop),
-        rect_slice.step,
-        rect_slice.start - rect_slice.stop,
-        linewidth=1,
-        edgecolor="white",
-        linestyle="dashed",
-        facecolor="none",
-    )
-
-
-if __name__ == "__main__":
-    from pathlib import Path
-    import matplotlib.pyplot as plt
-    import matplotlib.colors as colors
-    import matplotlib.patches as patches
-
-    meta, images = MultiReader.readFile(
-        Path("tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0").resolve()
-    )
-    filteredImages, maskedImages, beamSpots, darkSpots = ReflectivityProcs.getBeamSpots(
-        images
-    )
-    directBeam, backgroundImage = ReflectivityProcs.getSubImages(
-        maskedImages, beamSpots, darkSpots
-    )
-    reflDF = ReflectivityProcs.computeRefl(directBeam, backgroundImage)
-    df = ReflectivityProcs.buildDataFrame(meta, reflDF)
-    norlamized = ReflectivityProcs.normalizeReflData(df)
-    print(norlamized, "\n\n")
-    norlamized.plot(x=SCAT_NAME, y=REFL_NAME, kind="scatter", logy=True)
-    plt.show()
-    for db in directBeam:
-        plt.figure()
-        plt.imshow(db)
-    plt.show()
+        for key, val in scaleFactors.items():
+            sliceCopy = df.loc[int(key):, refl].copy()
+            df.loc[int(key):, refl] = val * sliceCopy
+        if reduce:
+            df = ReflProcs.replaceWithAverage(df, list(scaleFactors.values()))
+            for val in overlapDict.values():
+                df.drop(val[1:], inplace=True)
+        return df

@@ -1,7 +1,7 @@
 from pathlib import Path
 from shutil import copy2
 from concurrent.futures import ThreadPoolExecutor
-from _load_fits import MultiReader
+from load_fits import MultiReader
 
 
 FLAGS = {

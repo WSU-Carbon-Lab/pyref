@@ -3,18 +3,18 @@ import numpy as np
 
 FILE_NAMES = {
     "df": ".csv",
-    "images": "images.npz",
-    "masked": "masked.npz",
-    "filtered": "filtered.npz",
-    "beamspot": "beamspot.npz",
-    "background": "background.npz",
+    "images": "_images.npz",
+    "masked": "_masked.npz",
+    "filtered": "_filtered.npz",
+    "beamspot": "_beamspot.npz",
+    "background": "_background.npz",
 }
 
 
 class Reuse:
     @staticmethod
     def saveForReuse(saveDir, df, images, masked, filtered, beam, background):
-        df.refl.to_csv(FILE_NAMES["df"])
+        df.to_csv(str(saveDir) + FILE_NAMES["df"])
         np.savez(str(saveDir) + FILE_NAMES["images"], images)
         np.savez(str(saveDir) + FILE_NAMES["masked"], masked)
         np.savez(str(saveDir) + FILE_NAMES["filtered"], filtered)
@@ -23,7 +23,7 @@ class Reuse:
 
     @staticmethod
     def openForReuse(openDir):
-        df = pd.read_csv(str(openDir) + "csv", index_col=0)
+        df = pd.read_csv(str(openDir) + FILE_NAMES["df"], index_col=0)
         imagedata = np.load(str(openDir) + FILE_NAMES["images"])
         maskddata = np.load(str(openDir) + FILE_NAMES["masked"])
         filterdata = np.load(str(openDir) + FILE_NAMES["filtered"])
@@ -36,5 +36,3 @@ class Reuse:
         beam = [beamspotdata[key] for key in beamspotdata.files]
         background = [backgrounddata[key] for key in backgrounddata.files]
         return df, images, masks, filtered, beam, background
-
-

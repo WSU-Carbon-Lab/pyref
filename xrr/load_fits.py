@@ -49,22 +49,19 @@ class FitsReader:
 
 class MultiReader:
     @staticmethod
-    def __call__(directory = None | str | Path, fresh = True, dialog = True) -> tuple:
-        if dialog:
+    def __call__(directory=None | str | Path, fresh=True) -> tuple:
+        if directory == None:
             directory = FileDialog.getDirectory()
-        else:
-            directory = Path(directory) # type: ignore
+        elif isinstance(directory, str) or isinstance(directory, Path):
+            directory = Path(directory)
 
         if fresh == True:
             metaData, images = MultiReader.readFile(directory)  # type: ignore
-            MultiReader.saveFits(metaData, images, str(directory))
-        elif fresh == False:
-            metaData = pd.read_csv(str(directory) + '.csv', index_col=0)
-            data = np.load(str(directory) + '.npz')
-            images = [data[key] for key in data.files]
         else:
-            metaData = {}
-            images = []
+            metaData = pd.read_csv(str(directory) + ".csv", index_col=0)
+            data = np.load(str(directory) + ".npz")
+            images = [data[key] for key in data.files]
+        MultiReader.saveFits(metaData, images, str(directory))
         return metaData, images, directory
 
     @staticmethod
@@ -92,10 +89,12 @@ class MultiReader:
 
     @staticmethod
     def readFile(
-        dataFilePath: Path | None, headerValues: list = HEADER_VALUES, fileName: bool = False
+        dataFilePath: Path | None,
+        headerValues: list = HEADER_VALUES,
+        fileName: bool = False,
     ) -> tuple[pd.DataFrame, list]:
         if dataFilePath == None:
-            raise ValueError('Restart operation and choose a file path')
+            raise ValueError("Restart operation and choose a file path")
         imageList = []
         headerDFList = []
         for i, file in enumerate(dataFilePath.glob("*.fits")):

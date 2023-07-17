@@ -1,3 +1,4 @@
+from pathlib import Path
 import pandas as pd
 import numpy as np
 
@@ -22,13 +23,18 @@ class Reuse:
         np.savez(str(saveDir) + FILE_NAMES["background"], background)
 
     @staticmethod
-    def openForReuse(openDir):
-        df = pd.read_csv(str(openDir) + FILE_NAMES["df"], index_col=0)
-        imagedata = np.load(str(openDir) + FILE_NAMES["images"])
-        maskddata = np.load(str(openDir) + FILE_NAMES["masked"])
-        filterdata = np.load(str(openDir) + FILE_NAMES["filtered"])
-        beamspotdata = np.load(str(openDir) + FILE_NAMES["beamspot"])
-        backgrounddata = np.load(str(openDir) + FILE_NAMES["background"])
+    def openForReuse(dataDir: Path):
+        pol = dataDir.name
+        en = dataDir.parent.name
+        namePrefix = f'{en}_{pol}'
+        openDir = dataDir.parent.parent
+
+        df = pd.read_csv(str(openDir) + namePrefix + FILE_NAMES["df"], index_col=0)
+        imagedata = np.load(str(openDir) + namePrefix + FILE_NAMES["images"])
+        maskddata = np.load(str(openDir) + namePrefix + FILE_NAMES["masked"])
+        filterdata = np.load(str(openDir) + namePrefix + FILE_NAMES["filtered"])
+        beamspotdata = np.load(str(openDir) + namePrefix + FILE_NAMES["beamspot"])
+        backgrounddata = np.load(str(openDir) + namePrefix + FILE_NAMES["background"])
 
         images = [imagedata[key] for key in imagedata.files]
         masks = [maskddata[key] for key in maskddata.files]

@@ -8,28 +8,28 @@ HC: Final[int] = 12400
 
 class FileDialog:
     @staticmethod
-    def getDirectory() -> Path | None:
+    def getDirectory() -> Path:
         root = Tk()
         root.withdraw()
         root.focus_force()
         directory = Path(filedialog.askdirectory())
-        return directory if directory else None
+        return directory
 
     @staticmethod
-    def getFileName() -> Path | None:
+    def getFileName() -> Path:
         root = Tk()
         root.withdraw()
         root.focus_force()
         saveName = Path(filedialog.asksaveasfilename())
-        return saveName if saveName else None
+        return saveName
 
     @staticmethod
-    def openFile() -> Path | None:
+    def openFile() -> Path:
         root = Tk()
         root.withdraw()
         root.focus_force()
         openName = Path(filedialog.askopenfilename())
-        return openName if openName else None
+        return openName
 
 
 class XrayDomainTransform:

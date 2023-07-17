@@ -49,18 +49,15 @@ class FitsReader:
 
 class MultiReader:
     @staticmethod
-    def __call__(directory=None | str | Path, fresh=True) -> tuple:
-        if directory == None:
-            directory = FileDialog.getDirectory()
-        elif isinstance(directory, str) or isinstance(directory, Path):
-            directory = Path(directory)
-
+    def __call__(directory: str | Path, fresh=True) -> tuple:
         if fresh == True:
             metaData, images = MultiReader.readFile(directory)  # type: ignore
+
         else:
             metaData = pd.read_csv(str(directory) + ".csv", index_col=0)
             data = np.load(str(directory) + ".npz")
             images = [data[key] for key in data.files]
+            
         MultiReader.saveFits(metaData, images, str(directory))
         return metaData, images, directory
 

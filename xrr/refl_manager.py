@@ -22,7 +22,7 @@ class ReflProcs:
     """
 
     @staticmethod
-    def __call__(metaData: pd.DataFrame, images: list, mask, *args, **kwargs):
+    def main(metaData: pd.DataFrame, images: list, mask, *args, **kwargs):
         filteredImages, maskedImages, beamSpots, darkSpots = ReflProcs.getBeamSpots(
             images, mask=mask
         )

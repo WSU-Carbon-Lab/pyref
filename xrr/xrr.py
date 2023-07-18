@@ -1,147 +1,238 @@
 """Main module."""
-import warnings
-import pandas as pd
-import numpy as np
 from abc import ABC, abstractclassmethod
-import matplotlib.pyplot as plt
+from typing import Literal, Final
 from pathlib import Path
-from typing import Any, Final
-from refl_manager import (
-    ReflProcs,
-    REFL_COLUMN_NAMES,
-    REFL_NAME,
-    REFL_ERR_NAME,
-    Q_VEC_NAME,
-)
-from load_fits import MultiReader
-from refl_reuse import Reuse
-from toolkit import FileDialog
+import pandas as pd
+import plotly.express as px
+import numpy as np
+import matplotlib.pyplot as plt
 
-POL_NAMES: Final[list] = ["100.0", "190.0"]
+try:
+    from xrr.refl_manager import ReflProcs
+    from xrr.load_fits import MultiReader
+    from xrr.refl_reuse import Reuse
+    from xrr._config import REFL_COLUMN_NAMES
+except:
+    from refl_manager import ReflProcs
+    from load_fits import MultiReader
+    from refl_reuse import Reuse
+    from _config import REFL_COLUMN_NAMES
+
+
+class Refl:
+    """
+    This is the main reflectivity front end interface. The class is initialized using the backend.getData method. This initialized several class properties,
+    ----------------------------------------------------------------------------
+    #########################      Properties          #########################
+    ----------------------------------------------------------------------------
+    refl: DataFrame
+        This is a DataFrame with the following columns
+        >>> Beamline Energy
+        >>> Sample Theta
+        >>> Beam Current
+        >>> Higher Order Suppressor
+        >>> EPU Polarization
+        >>> Direct Beam Intensity
+        >>> Background Intensity
+        >>> Refl
+        >>> Refl Err
+        >>> Q
+
+    images: list
+        This is a list of numpy arrays. Each numpy array is the raw image data from the fits file
+
+    masked: list
+        This is a list of numpy arrays. Each numpy array is the image data with a mask applied.
+
+    filtered: list
+        This is a list of numpy arrays. Each numpy array is the masked image with a median filter applied.
+
+    beamspot: list
+        This is a list of numpy arrays. Each numpy array is the beamspot location on the raw data set.
+
+    background: list
+        This is a list of numpy arrays. Each numpy array is located on the opposite side of the image from the beamspot location.
+    //// Note: These parameters are initialized as booleans as they take up a single bite of data. This is simply present for typesetting purposes.
+    ----------------------------------------------------------------------------
+    #########################         Methods          #########################
+    ----------------------------------------------------------------------------
+    mask: np.ndarray
+        Property with setter and getter methods. This sets and gets masked attribute from the backend and re-initializes the object.
+
+    saveData, plot, display, debug
+        Inherited from the backend
+    """
+
+    def __init__(
+        self,
+        path: Path | None = None,
+        backendKey: Literal["single", "multi"] = "single",
+        *backArgs,
+        **backKWArgs
+    ):
+        global BACKEND
+
+        self.path = path
+        self.refl: pd.DataFrame = True  # type: ignore
+        self.images: list = True  # type: ignore
+        self.masked: list = True  # type: ignore
+        self.filtered: list = True  # type: ignore
+        self.beamspot: list = True  # type: ignore
+        self.background: list = True  # type: ignore
+
+        self.backendKey: Literal["single", "multi"] = backendKey
+        self.backendProcessor = BACKEND[backendKey](*backArgs, **backKWArgs)
+        self.backendProcessor.getData(self, path)
+        self.backendProcessor.saveData(self)
+
+    @property
+    def mask(self):
+        if not self.mask is None:
+            plt.imshow(self.mask)
+        else:
+            return self.mask
+
+    @mask.setter
+    def mask(self, mask: np.ndarray):
+        backKWArgs = {"mask": mask}
+        self.__init__(path=self.path, backendKey=self.backendKey, **backKWArgs)
+
+    def saveData(self, savePath):
+        self.backendProcessor.saveData(self, savePath)
+
+    def plot(self, *pltArgs, **pltKWArgs):
+        self.backendProcessor.plot(self, *pltArgs, **pltKWArgs)
+
+    def display(self, *dispArgs, **dispKWArgs):
+        self.backendProcessor.display(self, *dispArgs, **dispKWArgs)
+
+    def debug(self, *dispArgs, **dispKWArgs):
+        self.backendProcessor.debug(self, *dispArgs, **dispKWArgs)
+
 
 class DataBackend(ABC):
+    """
+    Abstract class method for data backends. Each backend has the following methods
+    ----------------------------------------------------------------------------
+
+    getData:
+        This method will take take in the front end class and add attributes to
+        it. This will be called in the front end constructor. As an outline,
+
+        >>> getData(self, obj, from):
+        >>>     if from == 'fits':
+        >>>         getFits()
+        >>>         ...
+        >>>     elif from == 'saved':
+        >>>         getSaved()
+
+
+    saveData:
+        This method will save the backend data in a specified format. The Refl DataFrame will be saved as a csv with no index. Every image dataset will instead be saved as a .npz file. As an outline,
+
+        >>> saveData(self, obj, dataPath):
+        >>>     savePath = str(dataPath.parent)
+        >>>     obj.refl.to_csv(savePath + '.csv', index = False)
+        >>>     np.savez(savePath + '.npz')
+
+    plot:
+        This method will plot the xrr data. The xrr data needs to be plotted as Q vs Refl with the Refl axis as a log scale.
+
+    display:
+        This method is the general workforce display method. Ideally, this should use a HoloViz to display data point information and the CCD images that are used to construct the reflectivity point.
+
+    debug:
+        This method uses the display method, but displays different information than the classic display method. In particular,
+
+        >>> Beam Intensity vs Q                                  (Raw Intensity)
+        >>> Dark Intensity vs Q                               (Background Noise)
+        >>> Beam Intensity / Dark Intensity vs Q         (Signal To Noise Ratio)
+        >>> Refl vs Q                                              (Final Plots)
+    """
+
     @abstractclassmethod
     def getData(self):
         pass
 
-class Reuseable(ABC):
     @abstractclassmethod
     def saveData(self):
         pass
 
     @abstractclassmethod
-    def openData(self):
-        pass
-
-class Maskable(ABC):
-
-    @abstractclassmethod
-    def setMask(self):
-        pass
-
-class DataFrontEnd(ABC):
     def plot(self):
         pass
 
+    @abstractclassmethod
     def display(self):
         pass
 
-class ProcessedRefl(DataBackend, Reuseable, Maskable):
-    def getData(self, obj, directory: Path | None = None, mask: np.ndarray | None = None):
-        if directory == None:
-            obj.dataPath = FileDialog.getDirectory()        
-        else:
-            obj.dataPath = directory
-        obj.mask = mask
-        metadata, obj.images = MultiReader.readFile(obj.dataPath)
-        obj.refl, obj.maskedImages, obj.filteredImages, obj.beamSpots, obj.darkSpots = ReflProcs.main(metadata, obj.images, mask)
-    
-    def saveData(self, obj, saveDir: Path):
-        Reuse.saveForReuse(saveDir, obj.refl, obj.images, obj.maskedImages, obj.filteredImages, obj.beamSpots, obj.darkSpots) 
-        
-    def openData(self, obj, openDir: Path | None):
-        if openDir == None:
-            openDir = FileDialog.getDirectory()        
-        else:
-            openDir = openDir
-
-        obj.refl, obj.images, obj.maskedImages, obj.filteredImages, obj.beamSpots, obj.darkSpots = Reuse.openForReuse(openDir)
-    
-    def setMask(self, obj, mask):
-        obj.mask = mask
-        self.getData(obj, directory = obj.dataPath, mask = mask)
+    @abstractclassmethod
+    def debug(self):
+        pass
 
 
+class SingleRefl(DataBackend):
+    def getData(
+        self,
+        obj: Refl,
+        mask: np.ndarray | None = None,
+        source: Literal["fits", "csv"] = "fits",
+        **dataKWArgs
+    ):
+        metadata, obj.images, obj.path = MultiReader.main(obj.path, **dataKWArgs)
+        ReflProcs.main(obj, mask, metadata, source=source)
 
-class DebuggingRefl(DataBackend):
-    ...
+    def saveData(self, obj: Refl):
+        Reuse.saveForReuse(obj)
 
+    def plot(self, obj: Refl, *args, **kwargs):
+        obj.refl.plot(
+            x=REFL_COLUMN_NAMES["Q"],
+            y=REFL_COLUMN_NAMES["R"],
+            yerr=REFL_COLUMN_NAMES["R Err"],
+            logy=True,
+            kind="scatter",
+            *args,
+            **kwargs
+        )
 
-class XRR(DataFrontEnd):
-    def __init__(self, directory: Path | None = None, fresh: bool = True, mask: np.ndarray|None = None):
-        self.dataSource = ProcessedRefl()
-        self.mask = mask
-        if fresh:
-            self.dataSource.getData(self, directory, mask = self.mask)
-        else:
-            self.dataSource.openData(self, directory)
+    def display(self, obj: Refl):
+        fig = px.scatter(
+            obj.refl,
+            x=REFL_COLUMN_NAMES["Q"],
+            y=REFL_COLUMN_NAMES["R"],
+            error_y=REFL_COLUMN_NAMES["R Err"],
+            log_y=True,
+            hover_data=list(REFL_COLUMN_NAMES.values()),
+        )
+        fig.show()
 
-        self.savePath = self.dataPath.parent # type: ignore
-        self.dataSource.saveData(self, self.savePath)
-    
-    def saveData(self):
-        self.dataSource.saveData(self, self.savePath)
-    
-    def setMask(self, mask):
-        self.dataSource.setMask(self, mask)
-    
-
-    def plot(self, *args, **kwargs):
-        self.refl.plot(x=Q_VEC_NAME, y=REFL_NAME, yerr=REFL_ERR_NAME, kind='scatter', *args, **kwargs) # type: ignore
-    
-
-
-
-class MultiEnergyXRR(DataFrontEnd):
-    def __init__(self, fresh: bool = True) -> None:
-        self.sampleDirectory: Path = FileDialog.getDirectory()  # type: ignore
-        self.P100_Energies: list[Path] = [
-            energy / POL_NAMES[0]
-            for energy in self.sampleDirectory.iterdir()
-            if energy.is_dir() and (energy / POL_NAMES[0]).exists()
-        ]
-        if len(self.P100_Energies) > 0:
-            self.Pol100 = {
-                en: xrr
-                for energyDir in self.P100_Energies
-                for en, xrr in [MultiEnergyXRR.getXRR(energyDir, fresh)]
-            }
-
-        self.P190_Energies: list[Path] = [
-            energy / POL_NAMES[1]
-            for energy in self.sampleDirectory.iterdir()
-            if energy.is_dir() and (energy / POL_NAMES[1]).exists()
-        ]
-        if len(self.P190_Energies) > 0:
-            self.Pol190 = {
-                en: xrr
-                for energyDir in self.P190_Energies
-                for en, xrr in [MultiEnergyXRR.getXRR(energyDir, fresh)]
-            }
+    def debug(self, obj: Refl):
+        ...
 
 
+class MultiRefl(DataBackend):
+    def getData(self, obj: Refl):
+        ...
 
-def checkExist(obj, parameters):
-    for param in parameters:
-        if not hasattr(obj, param):
-            return False
-    return True
+    def saveData(self, obj: Refl):
+        ...
+
+    def plot(self, obj: Refl):
+        ...
+
+    def display(self, obj: Refl):
+        ...
+
+    def debug(self, obj: Refl):
+        ...
+
+
+BACKEND: Final[dict] = {
+    "single": SingleRefl,
+    "multi": MultiRefl,
+}
 
 if __name__ == "__main__":
-    # test = XRR(fresh=True)
-    # print(test)
-    # # test.plot()
-    # # plt.show()
-
-    test2 = MultiEnergyXRR()
-    print(test2)
+    test = Refl()
+    test.display()

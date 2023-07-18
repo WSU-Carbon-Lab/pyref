@@ -1,14 +1,8 @@
 from pathlib import Path
 from shutil import copy2
 from concurrent.futures import ThreadPoolExecutor
-from load_fits import MultiReader
-
-
-FLAGS = {
-    "-en": "Beamline Energy",
-    "-pol": "EPU Polarization",
-    "-n": "File Path",
-}
+from xrr.load_fits import MultiReader
+from xrr._config import FLAGS
 
 
 class FitsSorter:

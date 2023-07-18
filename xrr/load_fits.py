@@ -1,29 +1,22 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Any, Final
 from astropy.io import fits
-from toolkit import FileDialog
 
-HEADER_VALUES: Final[list] = [
-    "Beamline Energy",
-    "Sample Theta",
-    "Beam Current",
-    "Higher Order Suppressor",
-    "EPU Polarization",
-]
+from xrr._config import HEADER_LIST, HEADER_DICT
+from xrr.toolkit import FileDialog
 
 
 class FitsReader:
     @staticmethod
-    def readHeader(
-        fitsFilePath: Path, headerValues: list | np.ndarray = HEADER_VALUES
-    ) -> dict:
+    def readHeader(fitsFilePath: Path, headerValues: list[str] = HEADER_LIST) -> dict:
         with fits.open(fitsFilePath) as hdul:
             headerData = hdul[0].header  # type: ignore
 
         return {
-            key: round(headerData[key], 4) for key in headerValues if key in headerData
+            HEADER_DICT[key]: round(headerData[key], 4)
+            for key in headerValues
+            if key in headerData
         }
 
     @staticmethod
@@ -35,35 +28,36 @@ class FitsReader:
 
     @staticmethod
     def readFile(
-        fitsFilePath: Path, headerValues: list | np.ndarray = HEADER_VALUES
+        fitsFilePath: Path, headerValues: list[str] = HEADER_LIST
     ) -> tuple[pd.DataFrame, list]:
         with fits.open(fitsFilePath) as hdul:
             headerData = hdul[0].header  # type: ignore
             imageData = hdul[2].data  # type: ignore
 
         headerDict = {
-            key: round(headerData[key], 4) for key in headerValues if key in headerData
+            HEADER_DICT[key]: round(headerData[key], 4)
+            for key in headerValues
+            if key in headerData
         }
         return pd.DataFrame(headerDict, index=[0]), imageData
 
 
 class MultiReader:
     @staticmethod
-    def __call__(directory: str | Path, fresh=True) -> tuple:
-        if fresh == True:
-            metaData, images = MultiReader.readFile(directory)  # type: ignore
+    def main(directory: Path | None) -> tuple:
+        if directory == None:
+            directory = FileDialog.getDirectory()
 
-        else:
-            metaData = pd.read_csv(str(directory) + ".csv", index_col=0)
-            data = np.load(str(directory) + ".npz")
-            images = [data[key] for key in data.files]
-            
-        MultiReader.saveFits(metaData, images, str(directory))
+        metaData, images = MultiReader.readFile(directory)
+
+        MultiReader.saveFits(metaData, images, directory)
         return metaData, images, directory
 
     @staticmethod
     def readHeader(
-        dataFilePath: Path, headerValues: list = HEADER_VALUES, fileName: bool = False
+        dataFilePath: Path,
+        headerValues: list[str] = HEADER_LIST,
+        fileName: bool = False,
     ) -> pd.DataFrame:
         headerDFList = []
         for file in dataFilePath.glob("*.fits"):
@@ -87,7 +81,7 @@ class MultiReader:
     @staticmethod
     def readFile(
         dataFilePath: Path | None,
-        headerValues: list = HEADER_VALUES,
+        headerValues: list[str] = HEADER_LIST,
         fileName: bool = False,
     ) -> tuple[pd.DataFrame, list]:
         if dataFilePath == None:
@@ -106,9 +100,12 @@ class MultiReader:
         return pd.concat(headerDFList), imageList
 
     @staticmethod
-    def saveFits(metaData: pd.DataFrame, imageArrs: list, saveDir: str) -> None:
-        metaData.to_csv(saveDir + ".csv")
-        np.savez(saveDir + ".npz", *imageArrs)
+    def saveFits(metaData: pd.DataFrame, imageArrs: list, saveDir: Path) -> None:
+        energy = metaData.Energy[0]
+        pol = metaData.POL[0]
+        fileName = str(saveDir.parent.parent) + f"{energy}_{pol}"
+        metaData.to_csv(fileName + ".csv")
+        np.savez(fileName + ".npz", *imageArrs)
 
 
 def _constructTests():

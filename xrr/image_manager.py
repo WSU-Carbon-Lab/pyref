@@ -1,4 +1,3 @@
-from re import S
 from typing import assert_type
 import numpy as np
 import scipy.ndimage as sci

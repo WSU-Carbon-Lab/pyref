@@ -1,38 +1,40 @@
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Final
-
+from typing import Literal
 import numpy as np
 import pandas as pd
-from image_manager import ImageProcs
-from load_fits import HEADER_VALUES, MultiReader
-from toolkit import XrayDomainTransform, FileDialog
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
-# COLUMN NAME STATIC VALUES
-REFL_COLUMN_NAMES: Final[list] = ["Direct Beam Intensity", "Background Intensity"]
-REFL_NAME: Final[str] = "Refl"
-REFL_ERR_NAME: Final[str] = "Refl Err"
-Q_VEC_NAME: Final[str] = "Q"
+from xrr._config import REFL_COLUMN_NAMES
+from xrr.image_manager import ImageProcs
+from xrr.toolkit import XrayDomainTransform
+from xrr.refl_reuse import Reuse
 
 
 class ReflProcs:
-    """
-    Using the _load_fits.MultiReader we can generate a dataframe containing the header data and a list containing images.
-    Each ImageProcs method is vectorized allowing us to apply the procs to lists and arrays
-    """
-
     @staticmethod
-    def main(metaData: pd.DataFrame, images: list, mask, *args, **kwargs):
-        filteredImages, maskedImages, beamSpots, darkSpots = ReflProcs.getBeamSpots(
-            images, mask=mask
-        )
-        directBeam, backgroundNoise = ReflProcs.getSubImages(
-            maskedImages, beamSpots, darkSpots
-        )
-        pureReflDF = ReflProcs.getDf(metaData, directBeam, backgroundNoise)
-        df = ReflProcs.scaleSeries(pureReflDF, *args, **kwargs)
+    def main(
+        obj,
+        mask,
+        metaData: pd.DataFrame,
+        source: Literal[
+            "fits",
+            "csv",
+        ] = "fits",
+        *args,
+        **kwargs
+    ):
+        if source == "fits":
+            obj.filtered, obj.masked, beamSpots, darkSpots = ReflProcs.getBeamSpots(
+                obj.images, mask=mask
+            )
+            directBeam, backgroundNoise = ReflProcs.getSubImages(
+                obj.masked, beamSpots, darkSpots
+            )
+            pureReflDF = ReflProcs.getDf(metaData, directBeam, backgroundNoise)
+            obj.refl = ReflProcs.scaleSeries(pureReflDF, *args, **kwargs)
 
-        return df, maskedImages, filteredImages, beamSpots, darkSpots
+        elif source == "csv":
+            Reuse.openForReuse(obj)
 
     @staticmethod
     def getBeamSpots(
@@ -111,8 +113,8 @@ class ReflProcs:
             )
         df = pd.DataFrame(
             {
-                REFL_COLUMN_NAMES[0]: refl_intensity,
-                REFL_COLUMN_NAMES[1]: dark_intensity,
+                REFL_COLUMN_NAMES["Beam Spot"]: refl_intensity,
+                REFL_COLUMN_NAMES["Dark Spot"]: dark_intensity,
             }
         )
         return df
@@ -121,17 +123,25 @@ class ReflProcs:
     def getDf(metaData: pd.DataFrame, brightSpots, darkSpots) -> pd.DataFrame:
         reflData = ReflProcs.getRefl(brightSpots, darkSpots)
         reflData.reset_index(drop=True, inplace=True)
-        reflData[REFL_NAME] = (
-            reflData[REFL_COLUMN_NAMES[0]] - reflData[REFL_COLUMN_NAMES[1]]
-        ) / (metaData["Beam Current"] * metaData["Higher Order Suppressor"])
-
-        reflData[REFL_ERR_NAME] = np.sqrt(
-            reflData[REFL_NAME]
-            / (metaData["Beam Current"] * metaData["Higher Order Suppressor"])
+        reflData[REFL_COLUMN_NAMES["R"]] = (
+            reflData[REFL_COLUMN_NAMES["Beam Spot"]]
+            - reflData[REFL_COLUMN_NAMES["Dark Spot"]]
+        ) / (
+            metaData[REFL_COLUMN_NAMES["Beam Current"]]
+            * metaData[REFL_COLUMN_NAMES["Higher Order Suppressor"]]
         )
 
-        reflData[Q_VEC_NAME] = XrayDomainTransform.toQ(
-            metaData["Beamline Energy"], metaData["Sample Theta"]
+        reflData[REFL_COLUMN_NAMES["R Err"]] = np.sqrt(
+            reflData[REFL_COLUMN_NAMES["R"]]
+            / (
+                metaData[REFL_COLUMN_NAMES["Beam Current"]]
+                * metaData[REFL_COLUMN_NAMES["Higher Order Suppressor"]]
+            )
+        )
+
+        reflData[REFL_COLUMN_NAMES["Q"]] = XrayDomainTransform.toQ(
+            metaData[REFL_COLUMN_NAMES["Beamline Energy"]],
+            metaData[REFL_COLUMN_NAMES["Sample Theta"]],
         )
         df = pd.concat([metaData, reflData], axis=1)
         return df
@@ -140,22 +150,28 @@ class ReflProcs:
     def getNormal(reflDataFrame: pd.DataFrame) -> pd.DataFrame:
         _izero_count = 0
         while True:
-            if reflDataFrame[Q_VEC_NAME][_izero_count] == 0:
+            if reflDataFrame[REFL_COLUMN_NAMES["Q"]][_izero_count] == 0:
                 _izero_count += 1
             else:
                 break
         if _izero_count > 0:
-            izero: float = np.average(reflDataFrame[REFL_NAME].iloc[: _izero_count - 1])  # type: ignore
+            izero: float = np.average(reflDataFrame[REFL_COLUMN_NAMES["R"]].iloc[: _izero_count - 1])  # type: ignore
             izero_err_avg = np.average(
-                reflDataFrame[REFL_ERR_NAME].iloc[: _izero_count - 1]
+                reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: _izero_count - 1]
             )
             izero_err: float = izero_err_avg / np.sqrt(_izero_count)
         else:
             izero, izero_err = (1, 1)
 
-        reflDataFrame[REFL_NAME] = reflDataFrame[REFL_NAME] / izero  # type: ignore
-        reflDataFrame[REFL_ERR_NAME] = reflDataFrame[REFL_ERR_NAME] * np.sqrt(
-            ((reflDataFrame[REFL_ERR_NAME]) / (reflDataFrame[REFL_NAME])) ** 2
+        reflDataFrame[REFL_COLUMN_NAMES["R"]] = reflDataFrame[REFL_COLUMN_NAMES["R"]] / izero  # type: ignore
+        reflDataFrame[REFL_COLUMN_NAMES["R Err"]] = reflDataFrame[
+            REFL_COLUMN_NAMES["R Err"]
+        ] * np.sqrt(
+            (
+                (reflDataFrame[REFL_COLUMN_NAMES["R Err"]])
+                / (reflDataFrame[REFL_COLUMN_NAMES["R Err"]])
+            )
+            ** 2
             + (izero_err / izero)  # type: ignore
         )
 
@@ -170,7 +186,9 @@ class ReflProcs:
         return {key: val for key, val in tally.items() if len(val) > 1}
 
     @staticmethod
-    def getScaleFactors(overlapDict: dict, df: pd.DataFrame, refl=REFL_NAME) -> dict:
+    def getScaleFactors(
+        overlapDict: dict, df: pd.DataFrame, refl=REFL_COLUMN_NAMES["R"]
+    ) -> dict:
         reflCol = df[refl]
         keys = list(overlapDict.keys())
         indices = list(overlapDict.values())
@@ -206,8 +224,8 @@ class ReflProcs:
     @staticmethod
     def scaleSeries(
         df: pd.DataFrame,
-        refl: str = REFL_NAME,
-        q: str = Q_VEC_NAME,
+        refl: str = REFL_COLUMN_NAMES["R"],
+        q: str = REFL_COLUMN_NAMES["Q"],
         reduce: bool = True,
     ) -> pd.DataFrame:
         df = ReflProcs.getNormal(df)
@@ -215,8 +233,8 @@ class ReflProcs:
         scaleFactors = ReflProcs.getScaleFactors(overlapDict, df, refl=refl)
 
         for key, val in scaleFactors.items():
-            sliceCopy = df.loc[int(key):, refl].copy()
-            df.loc[int(key):, refl] = val * sliceCopy
+            sliceCopy = df.loc[int(key) :, refl].copy()
+            df.loc[int(key) :, refl] = val * sliceCopy
         if reduce:
             df = ReflProcs.replaceWithAverage(df, list(scaleFactors.values()))
             for val in overlapDict.values():

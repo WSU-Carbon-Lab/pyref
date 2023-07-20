@@ -1,6 +1,5 @@
 """Main module."""
 from abc import ABC, abstractclassmethod
-from math import e
 from typing import Literal, Final
 from pathlib import Path
 from warnings import warn
@@ -401,5 +400,6 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl(backend='multi')
-    test1.plot(kind = 'en')
+    test1 = Refl()
+    test1.plot()
+    print(test1)

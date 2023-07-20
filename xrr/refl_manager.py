@@ -132,12 +132,10 @@ class ReflProcs:
         )
         reflDF[REFL_COLUMN_NAMES["Raw"]] = reflDF[REFL_COLUMN_NAMES["R"]]
 
-        reflDF[REFL_COLUMN_NAMES["R Err"]] = np.sqrt(
-            reflDF[REFL_COLUMN_NAMES["R"]]
-            / (
-                metaData[REFL_COLUMN_NAMES["Beam Current"]]
-                * metaData[REFL_COLUMN_NAMES["Higher Order Suppressor"]]
-            )
+        reflDF[REFL_COLUMN_NAMES["R Err"]] = (
+            np.sqrt(reflDF[REFL_COLUMN_NAMES["R"]])
+            / metaData[REFL_COLUMN_NAMES["Beam Current"]]
+            / metaData[REFL_COLUMN_NAMES["Higher Order Suppressor"]]
         )
 
         reflDF[REFL_COLUMN_NAMES["Q"]] = XrayDomainTransform.toQ(
@@ -149,21 +147,19 @@ class ReflProcs:
 
     @staticmethod
     def getNormal(reflDataFrame: pd.DataFrame) -> pd.DataFrame:
-        _izero_count = 0
-        while True:
-            if reflDataFrame[REFL_COLUMN_NAMES["Q"]][_izero_count] == 0:
-                _izero_count += 1
-            else:
-                break
+        izero_count = (reflDataFrame[REFL_COLUMN_NAMES["Q"]] != 0).argmax()
 
-        if _izero_count > 0:
-            izero: float = np.average(reflDataFrame[REFL_COLUMN_NAMES["R"]].iloc[: _izero_count - 1])  # type: ignore
+        if izero_count > 0:
+            izero: float = np.average(
+                reflDataFrame[REFL_COLUMN_NAMES["R"]].iloc[: izero_count - 1],
+                weights=1 / (reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count - 1]) ** 2,
+            )  # type: ignore
 
             izero_err_avg = np.average(
-                reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: _izero_count - 1]
+                reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count - 1]
             )
 
-            izero_err: float = izero_err_avg / np.sqrt(_izero_count)
+            izero_err: float = izero_err_avg / np.sqrt(izero_count)
         else:
             izero, izero_err = (1, 1)
 
@@ -179,10 +175,10 @@ class ReflProcs:
                 / (reflDataFrame[REFL_COLUMN_NAMES["R Err"]])
             )
             ** 2
-            + (izero_err / izero)
+            + (izero_err / izero) ** 2
         )
 
-        reflDataFrame.drop(reflDataFrame.index[: _izero_count + 2])
+        reflDataFrame = reflDataFrame[izero_count:].reset_index(drop=True)
         return reflDataFrame
 
     @staticmethod
@@ -213,9 +209,13 @@ class ReflProcs:
                     overVal = reflCol.iloc[indices[j][1]]
                     ratio.append(initVal / overVal)
                     j += 1
-                scaleFactors[overIndices[0]] = np.average(
-                    ratio,
-                    weights=1 / (df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]) ** 2,
+                scaleFactors[overIndices[0]] = (
+                    np.average(
+                        ratio,
+                        weights=1
+                        / (df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]) ** 2,
+                    ),
+                    np.std(ratio),
                 )
         return scaleFactors
 
@@ -244,8 +244,12 @@ class ReflProcs:
         scaleFactors = ReflProcs.getScaleFactors(overlapDict, df, refl=refl)
 
         for key, val in scaleFactors.items():
+            ratio, ratioErr = val
             sliceCopy = df.loc[int(key) :, [refl, refl_err]].copy()
-            df.loc[int(key) :, [refl, refl_err]] = val * sliceCopy
+            df.loc[int(key) :, refl] = ratio * sliceCopy[refl]
+            df.loc[int(key) :, refl_err] = sliceCopy[refl] * np.sqrt(
+                (sliceCopy[refl] / sliceCopy[refl_err]) ** 2 + (ratio / ratioErr) ** 2
+            )
 
         if reduce:
             df = ReflProcs.replaceWithAverage(df, list(scaleFactors.values()))

@@ -363,7 +363,7 @@ class MultiRefl(DataBackend):
                 axes[i].set_ylabel(REFL_COLUMN_NAMES['R'])
                 axes[i].set_title(f"{pol}")
                 for j, en in enumerate(obj.energies):
-                    scale = 10**j
+                    scale = 10**(1.5*j)
                     x = obj.refl[en][pol][REFL_COLUMN_NAMES['Q']]
                     y = scale * obj.refl[en][pol][REFL_COLUMN_NAMES['R']]
                     yerr = scale * obj.refl[en][pol][REFL_COLUMN_NAMES['R Err']]

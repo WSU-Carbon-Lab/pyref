@@ -151,15 +151,13 @@ class ReflProcs:
 
         if izero_count > 0:
             izero: float = np.average(
-                reflDataFrame[REFL_COLUMN_NAMES["R"]].iloc[: izero_count - 1],
-                weights=1 / (reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count - 1]) ** 2,
+                reflDataFrame[REFL_COLUMN_NAMES["R"]].iloc[: izero_count],
+                weights=1 / (reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count])**2
             )  # type: ignore
 
-            izero_err_avg = np.average(
-                reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count - 1]
+            izero_err = np.average(
+                reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count]**2
             )
-
-            izero_err: float = izero_err_avg / np.sqrt(izero_count)
         else:
             izero, izero_err = (1, 1)
 
@@ -216,7 +214,7 @@ class ReflProcs:
                         weights=1
                         / (df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]) ** 2,
                     ),
-                    np.average(df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices])/len(df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]),
+                    np.average(df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]**2)
                 )
         return scaleFactors
 
@@ -247,9 +245,9 @@ class ReflProcs:
         for key, val in scaleFactors.items():
             ratio, ratioErr = val
             sliceCopy = df.loc[int(key) :, [refl, refl_err]].copy()
-            df.loc[int(key) :, refl] = ratio * sliceCopy[refl]
-            df.loc[int(key) :, refl_err] = sliceCopy[refl] * np.sqrt(
-                (sliceCopy[refl] / sliceCopy[refl_err]) ** 2 + (ratio / ratioErr) ** 2
+            df.loc[int(key) :,refl] = ratio * sliceCopy[refl]
+            df.loc[int(key) :,refl_err] = sliceCopy[refl] * np.sqrt(
+                (sliceCopy[refl_err] / sliceCopy[refl]) ** 2 + (ratioErr / ratio) ** 2
             )
 
         if reduce:

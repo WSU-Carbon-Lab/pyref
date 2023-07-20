@@ -237,7 +237,7 @@ class SingleRefl(DataBackend):
             y=REFL_COLUMN_NAMES["R"],
             error_y=REFL_COLUMN_NAMES["R Err"],
             log_y=True,
-            hover_data=list(REFL_COLUMN_NAMES.values()),
+            hover_data=list(['Energy', 'Theta', 'Current', 'HOS', 'POL', 'Intensity', 'Background', 'RawRefl']),
         )
         fig.show()
 
@@ -400,6 +400,6 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl()
-    test1.plot()
+    test1 = Refl(backend = 'multi')
+    test1.plot(kind = 'en')
     print(test1)

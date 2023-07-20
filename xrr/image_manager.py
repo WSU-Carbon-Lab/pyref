@@ -1,5 +1,6 @@
 from typing import assert_type
 import numpy as np
+from numpy.typing import ArrayLike
 import scipy.ndimage as sci
 
 
@@ -63,8 +64,8 @@ class ImageProcs:
         return imageArr[mask]
 
     @staticmethod
-    def sumImage(imageArr: np.ndarray) -> int:
-        return int(imageArr.sum())
+    def sumImage(imageArr: ArrayLike | np.ndarray) -> int:
+        return imageArr.sum() #type: ignore
 
 
 def _imageInputErr(imageArr) -> Exception | None:

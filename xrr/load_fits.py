@@ -3,8 +3,12 @@ import pandas as pd
 from pathlib import Path
 from astropy.io import fits
 
-from xrr._config import HEADER_LIST, HEADER_DICT
-from xrr.toolkit import FileDialog
+try:
+    from xrr._config import HEADER_LIST, HEADER_DICT
+    from xrr.toolkit import FileDialog
+except:
+    from _config import HEADER_LIST, HEADER_DICT
+    from toolkit import FileDialog
 
 
 class FitsReader:
@@ -43,15 +47,6 @@ class FitsReader:
 
 
 class MultiReader:
-    @staticmethod
-    def main(directory: Path | None) -> tuple:
-        if directory == None:
-            directory = FileDialog.getDirectory()
-
-        metaData, images = MultiReader.readFile(directory)
-
-        MultiReader.saveFits(metaData, images, directory)
-        return metaData, images, directory
 
     @staticmethod
     def readHeader(
@@ -98,14 +93,6 @@ class MultiReader:
             imageList.append(FitsReader.readImage(file))
 
         return pd.concat(headerDFList), imageList
-
-    @staticmethod
-    def saveFits(metaData: pd.DataFrame, imageArrs: list, saveDir: Path) -> None:
-        energy = metaData.Energy[0]
-        pol = metaData.POL[0]
-        fileName = str(saveDir.parent.parent) + f"{energy}_{pol}"
-        metaData.to_csv(fileName + ".csv")
-        np.savez(fileName + ".npz", *imageArrs)
 
 
 def _constructTests():

@@ -25,8 +25,14 @@ HEADER_DICT: Final[dict[str,str]] = {
 }
 
 REFL_COLUMN_NAMES: Final[dict] = HEADER_DICT | {
+    "Images": "Images",
+    "Masked": "Masked",
+    "Filtered": "Filtered",
+    "Beam Image": "Beam",
+    "Dark Image": "Dark",
     "Beam Spot": "Intensity",
     "Dark Spot": "Background",
+    "Raw": "RawRefl",
     "R": "Refl",
     "R Err": "Err",
     "Q": "Q",
@@ -38,10 +44,7 @@ POL: Final[dict] = {
 }
 
 FILE_NAMES = {
-    "df": ".csv",
-    "images": "_images.npz",
-    "masked": "_masked.npz",
-    "filtered": "_filtered.npz",
-    "beamspot": "_beamspot.npz",
-    "background": "_background.npz",
+    "meta.parquet": "_refl.parquet.gzip",
+    "image.parquet": "_image.parquet.gzip",
+    ".json": "_refl.json.gzip",
 }

@@ -1,38 +1,39 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from xrr._config import FILE_NAMES
-
+import fastparquet
+try:
+    from xrr._config import FILE_NAMES
+except:
+    from _config import FILE_NAMES
 
 
 class Reuse:
     @staticmethod
     def saveForReuse(obj):
-        energy = obj.refl.Energy[0]
+        energy = round(obj.refl.Energy[0],1)
         pol = obj.refl.POL[0]
-        saveDir = str(obj.path.parent) + f"{energy}_{pol}"
+        saveDir = str(obj.path.parent.parent / f"{energy}_{pol}")
 
-        obj.refl.to_csv(str(saveDir) + FILE_NAMES["df"], index = False)
-        np.savez(str(saveDir) + FILE_NAMES["images"], obj.images)
-        np.savez(str(saveDir) + FILE_NAMES["masked"], obj.masked)
-        np.savez(str(saveDir) + FILE_NAMES["filtered"], obj.filtered)
-        np.savez(str(saveDir) + FILE_NAMES["beamspot"], obj.beamspot)
-        np.savez(str(saveDir) + FILE_NAMES["background"], obj.background)
+        images = obj.refl.applymap(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+        images.to_parquet(str(saveDir) + FILE_NAMES["image.parquet"], index = False, compression = 'gzip')
+        obj.refl.to_parquet(str(saveDir) + FILE_NAMES["meta.parquet"], index = False, compression = 'gzip')
+        obj.refl.to_json(str(saveDir) + FILE_NAMES[".json"], orient = "columns", compression = 'gzip')
 
     @staticmethod
     def openForReuse(obj):
         energy, pol = obj.path.parts[-2:]
-        openDir = str(obj.path.parent) + f"{energy}_{pol}"
+        openDir = str(obj.path.parent.parent / f"{energy}_{pol}")
 
-        obj.refl = pd.read_csv(openDir + FILE_NAMES["df"])
-        imagedata = np.load(openDir + FILE_NAMES["df"])
-        maskddata = np.load(openDir + FILE_NAMES["df"])
-        filterdata = np.load(openDir + FILE_NAMES["df"])
-        beamspotdata = np.load(openDir + FILE_NAMES["df"])
-        backgrounddata = np.load(openDir + FILE_NAMES["df"])
-
-        obj.images = [imagedata[key] for key in imagedata.files]
-        obj.masked = [maskddata[key] for key in maskddata.files]
-        obj.filtered = [filterdata[key] for key in filterdata.files]
-        obj.beamspot = [beamspotdata[key] for key in beamspotdata.files]
-        obj.background = [backgrounddata[key] for key in backgrounddata.files]
+        images = fastparquet.ParquetFile(openDir + FILE_NAMES["image.parquet"])
+        refl = fastparquet.ParquetFile(openDir + FILE_NAMES["meta.parquet"])
+        obj.refl = refl.to_pandas()
+        obj.images = images.to_pandas()
+    
+    @staticmethod
+    def multiOpen(multiDir: Path, energy: str, pol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        
+        openDir = str(multiDir / f'{energy}_{pol}')
+        images = fastparquet.ParquetFile(openDir + FILE_NAMES["image.parquet"])
+        refl = fastparquet.ParquetFile(openDir + FILE_NAMES["meta.parquet"])
+        return refl.to_pandas(), images.to_pandas()

@@ -196,6 +196,7 @@ class ReflProcs:
         keys = list(overlapDict.keys())
         indices = list(overlapDict.values())
         scaleFactors = {}
+        
         for i in range(len(keys)):
             if len(indices[i]) > 2:
                 initIndex = indices[i][0]
@@ -215,7 +216,7 @@ class ReflProcs:
                         weights=1
                         / (df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]) ** 2,
                     ),
-                    np.std(ratio),
+                    np.average(df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices])/len(df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]),
                 )
         return scaleFactors
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 from shutil import copy2
 from concurrent.futures import ThreadPoolExecutor
+
 try:
     from xrr.load_fits import MultiReader
     from xrr._config import FLAGS, HEADER_DICT

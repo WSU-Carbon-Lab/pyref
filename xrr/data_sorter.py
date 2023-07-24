@@ -3,10 +3,12 @@ from shutil import copy2
 from concurrent.futures import ThreadPoolExecutor
 try:
     from xrr.load_fits import MultiReader
-    from xrr._config import FLAGS
+    from xrr._config import FLAGS, HEADER_DICT
+    from xrr.toolkit import FileDialog
 except:
     from load_fits import MultiReader
-    from _config import FLAGS
+    from _config import FLAGS, HEADER_DICT
+    from toolkit import FileDialog
 
 
 class FitsSorter:
@@ -55,7 +57,7 @@ def copyFile(row, sortedPath: Path, flags: list) -> None:
         if flag == FLAGS["-n"]:
             append = _getSampleName(row[flag])
         else:
-            append = str(round(row[flag], 1))
+            append = str(round(row[HEADER_DICT[flag]], 1))
 
         targetDirectory = targetDirectory / append
         targetDirectory.mkdir(exist_ok=True)
@@ -69,8 +71,14 @@ def _getSampleName(string: str) -> str:
     return fileName[0].split("-")[0]
 
 
+def main():
+    dataPath = FileDialog.getDirectory(title="Select the Data Directory")
+    sortedPath = FileDialog.getDirectory(title="Select the Sorted Directory")
+    sampleName = input("What Is the Sample Name?")
+    sortedPath = sortedPath / sampleName
+    sortedStructure = "/-en/-pol"
+    FitsSorter.sortDirectory(dataPath, sortedPath, sortedStructure)
+
+
 if __name__ == "__main__":
-    test_path = Path("tests/TestData/CCD").resolve()
-    test_sorted = Path("tests/TestData/Sorted").resolve()
-    test_structure = "/-n/-en/-pol"
-    FitsSorter.sortDirectory(test_path, test_sorted, test_structure)
+    main()

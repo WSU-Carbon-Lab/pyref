@@ -400,6 +400,4 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl(backend = 'multi')
-    test1.plot(kind = 'en')
-    print(test1)
+    test1 = Refl()

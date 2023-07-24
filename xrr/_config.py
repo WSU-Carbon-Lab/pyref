@@ -1,7 +1,6 @@
 from typing import Final, Literal
 
 
-
 FLAGS: Final[dict] = {
     "-en": "Beamline Energy",
     "-pol": "EPU Polarization",

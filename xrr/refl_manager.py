@@ -285,16 +285,19 @@ class ReflProcs:
         return period
 
     @staticmethod
-    def getScaleFactors(
-        overlaps: dict, df: pd.DataFrame, refl=REFL_COLUMN_NAMES["R"]
-    ):
+    def overlapPointRepackage(overlaps: dict):
         
         lengths = [len(over) for over in overlaps]
         period = ReflProcs.getPeridicity(lengths)
         initialStitchPoint = overlaps[0::period]
         stitchPoints = [overlaps[i * period + 1:(i+1)*period] for i in range(len(overlaps)//period)]
             
-        return
+        return initialStitchPoint, stitchPoints
+
+    @staticmethod
+    def findStitchFactor(df: pd.DataFrame, initialStitchPoints: list, stritchPoints: list):
+        initPoint = initialStitchPoints[0]
+        df
         
 
     @staticmethod

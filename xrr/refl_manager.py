@@ -208,14 +208,22 @@ class ReflProcs:
         """
         reflDF = ReflProcs.getRefl(imageDF)
         reflDF.reset_index(drop=True, inplace=True)
-        
-        reflDF[REFL_COLUMN_NAMES["Raw"]] = reflDF[REFL_COLUMN_NAMES["Beam Spot"]] - reflDF[REFL_COLUMN_NAMES["Dark Spot"]]
 
-        metaScale = (metaData[REFL_COLUMN_NAMES["Beam Current"]] * metaData[REFL_COLUMN_NAMES["EXPOSURE"]])
+        reflDF[REFL_COLUMN_NAMES["Raw"]] = (
+            reflDF[REFL_COLUMN_NAMES["Beam Spot"]]
+            - reflDF[REFL_COLUMN_NAMES["Dark Spot"]]
+        )
+
+        metaScale = (
+            metaData[REFL_COLUMN_NAMES["Beam Current"]]
+            * metaData[REFL_COLUMN_NAMES["EXPOSURE"]]
+        )
 
         reflDF[REFL_COLUMN_NAMES["R"]] = reflDF[REFL_COLUMN_NAMES["Raw"]] / metaScale
 
-        reflDF[REFL_COLUMN_NAMES["R Err"]] = reflDF[REFL_COLUMN_NAMES["R"]] / metaScale ** 2
+        reflDF[REFL_COLUMN_NAMES["R Err"]] = (
+            reflDF[REFL_COLUMN_NAMES["R"]] / metaScale**2
+        )
 
         reflDF[REFL_COLUMN_NAMES["Q"]] = XrayDomainTransform.toQ(
             metaData[REFL_COLUMN_NAMES["Beamline Energy"]],
@@ -226,8 +234,8 @@ class ReflProcs:
 
     @staticmethod
     def getNormal(refl: pd.DataFrame, izeroPoints) -> pd.DataFrame:
-        refl['lam'] = 1
-        refl['lamErr'] = 1
+        refl["lam"] = 1
+        refl["lamErr"] = 1
         refl = ErrorManager.updateStats(refl, izeroPoints)
         izero = (
             refl.loc[izeroPoints[-1], REFL_COLUMN_NAMES["R"]],
@@ -327,7 +335,7 @@ class ReflProcs:
         """
         dfNormal = ReflProcs.getNormal(df, izero)
         dfChunks = [dfNormal[slice[0] : slice[1]] for slice in stichSlices]
-        result = [dfNormal[0:stichSlices[0][0]]] #not ideal
+        result = [dfNormal[0 : stichSlices[0][0]]]  # not ideal
 
         for i, (chunk, idx) in enumerate(zip(dfChunks, stichZero)):
             # Handles all other procs

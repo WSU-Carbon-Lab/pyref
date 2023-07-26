@@ -21,17 +21,19 @@ except:
 
 class ErrorManager:
     @staticmethod
-    def weightedAverage(
-        nominal: pd.Series | pd.DataFrame, variance: pd.Series | pd.DataFrame
+    def weightedAverage( nominal: pd.Series | pd.DataFrame, variance: pd.Series | pd.DataFrame
     ):
+        '''
+        Computes the weighted average of a series of nominal points and their variance
+        '''
         weight = 1 / variance
         variance = weight.sum()
-        average = len(weight) * variance
+        average = len(weight) / variance
         return average, variance
 
     @staticmethod
     def dfWeightedAverage(
-        df: pd.DataFrame | pd.Series, nominal: str, variance: str
+        df: pd.DataFrame | pd.Series, raw: str, nominal: str, variance: str
     ) -> tuple:
         """
         This method computed the weighted average and the variance in the weighted average for a DataFrame with one column of nominal values and another of variances. The use of variance here prevents the need to compute square roots at every point along the way of the calculation.
@@ -49,6 +51,7 @@ class ErrorManager:
             var = df["k"] * df[variance]
         else:
             var = df[variance]
+
         return ErrorManager.weightedAverage(nom, var)
 
     @staticmethod
@@ -56,7 +59,7 @@ class ErrorManager:
         df: pd.DataFrame,
         updatePoints: list[int],
         nominal: str = REFL_COLUMN_NAMES["R"],
-        variance: str = REFL_COLUMN_NAMES["R Err"],
+        raw: str = REFL_COLUMN_NAMES["Raw"],
         final: int | None = None,
         k="k",
     ):
@@ -64,39 +67,20 @@ class ErrorManager:
         Updates the variance in the DataFrame, using the variance across the update points data frame.
         """
         dfSlice = df.loc[updatePoints].copy()
-        average, averageVariance = ErrorManager.dfWeightedAverage(
-            dfSlice, nominal, variance
+        average, variance = ErrorManager.dfWeightedAverage(
+            dfSlice, raw, nominal, nominal
         )
+        var = dfSlice[raw].var()
 
-        scale = averageVariance / average
+        # ADU to Photon conversion factor
+        scale = var / average
         if final == None:
             final = len(df)
 
-        df.loc[updatePoints[0], nominal] = average
-        df.loc[updatePoints[0], variance] = averageVariance
-        df.loc[updatePoints[0] : final, k] = scale
-
-        df = df.drop(index=updatePoints[0:-2])
-        return df
-
-    @staticmethod
-    def scaleRefl(
-        df: pd.DataFrame,
-        scaleFactor: tuple,
-        indices: list[int] | None = None,
-        refl=REFL_COLUMN_NAMES["R"],
-        err=REFL_COLUMN_NAMES["R Err"],
-        k="k",
-    ):
-        scale, scaleErr = scaleFactor
-        if indices == None:
-            indices = df.index.to_list()
-
-        dfCopy = df.loc[indices]
-        df.loc[indices, refl] = dfCopy[refl] / scale
-        df.loc[indices, err] = (df.loc[indices, refl] ** 2) * (
-            (scaleErr / scale) ** 2 + (dfCopy[k] / dfCopy[refl]) ** 2
-        )
+        df['Izero'] = average
+        df["IzeroVar"] = variance
+        df[k] = scale
+        df = df.drop(updatePoints[:-1])
         return df
 
 
@@ -221,10 +205,6 @@ class ReflProcs:
 
         reflDF[REFL_COLUMN_NAMES["R"]] = reflDF[REFL_COLUMN_NAMES["Raw"]] / metaScale
 
-        reflDF[REFL_COLUMN_NAMES["R Err"]] = (
-            reflDF[REFL_COLUMN_NAMES["R"]] / metaScale**2
-        )
-
         reflDF[REFL_COLUMN_NAMES["Q"]] = XrayDomainTransform.toQ(
             metaData[REFL_COLUMN_NAMES["Beamline Energy"]],
             metaData[REFL_COLUMN_NAMES["Sample Theta"]],
@@ -237,13 +217,10 @@ class ReflProcs:
         refl["lam"] = 1
         refl["lamErr"] = 1
         refl = ErrorManager.updateStats(refl, izeroPoints)
-        izero = (
-            refl.loc[izeroPoints[-1], REFL_COLUMN_NAMES["R"]],
-            refl.loc[izeroPoints[-1], REFL_COLUMN_NAMES["R Err"]],
-        )
-        refl = ErrorManager.scaleRefl(refl, scaleFactor=izero)
-
-        refl = refl.drop(refl.index[0]).reset_index(drop=True)
+        izero = refl.Izero
+        izeroErr = refl.IzeroErr
+        refl[REFL_COLUMN_NAMES["R"]] = refl[REFL_COLUMN_NAMES["R"]] / izero
+        refl = refl.drop(izeroPoints[-1])
 
         return refl
 
@@ -334,12 +311,13 @@ class ReflProcs:
         Updates the k scale at each stich point
         """
         dfNormal = ReflProcs.getNormal(df, izero)
-        dfChunks = [dfNormal[slice[0] : slice[1]] for slice in stichSlices]
+        
+        dfChunks = [dfNormal.loc[slice[0] : slice[1]] for slice in stichSlices]
         result = [dfNormal[0 : stichSlices[0][0]]]  # not ideal
 
         for i, (chunk, idx) in enumerate(zip(dfChunks, stichZero)):
             # Handles all other procs
-            idx = idx[1:]
+            idx = idx[1:] 
             dfUpdated = ErrorManager.updateStats(chunk, idx)
             lastChunk = result[i]
 

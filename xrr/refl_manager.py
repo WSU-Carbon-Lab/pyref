@@ -327,7 +327,7 @@ class ReflProcs:
         initialPoints,
         stichPoints,
         stichSlices,
-        refl=REFL_COLUMN_NAMES["R"],
+        r=REFL_COLUMN_NAMES["R"],
         k="k",
     ):
         """
@@ -341,12 +341,12 @@ class ReflProcs:
             # Handles all other procs
             idx = idx[1:]
             dfUpdated = ErrorManager.updateStats(chunk, idx)
-            lastChunk = result[i - 1]
+            lastChunk = result[i]
 
-            S = dfUpdated.loc[stichPoints[i - 1], refl]  # stitch intensity
-            ks = dfUpdated.loc[stichPoints[i - 1], k]  # err scale stitch
-            R = lastChunk.loc[initialPoints[i - 1], refl]  # refl intensity
-            kr = lastChunk.loc[initialPoints[i - 1], k]  # err scale refl
+            S = dfUpdated.loc[stichPoints[i], r].values  # stitch intensity
+            ks = dfUpdated.loc[stichPoints[i], k].values # err scale stitch
+            R = lastChunk.loc[initialPoints[i], r].values  # refl intensity
+            kr = lastChunk.loc[initialPoints[i], k].values  # err scale refl
 
             lams = S / R
             lamsErr = lams**2 * (ks / S + kr / R)

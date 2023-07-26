@@ -13,6 +13,7 @@ HEADER_LIST: Final[list] = [
     "Beam Current",
     "Higher Order Suppressor",
     "EPU Polarization",
+    "EXPOSURE"
 ]
 
 HEADER_DICT: Final[dict[str,str]] = {
@@ -21,6 +22,7 @@ HEADER_DICT: Final[dict[str,str]] = {
     "Beam Current": "Current",
     "Higher Order Suppressor": "HOS",
     "EPU Polarization": "POL",
+    "EXPOSURE": "Exposure",
 }
 
 REFL_COLUMN_NAMES: Final[dict] = HEADER_DICT | {

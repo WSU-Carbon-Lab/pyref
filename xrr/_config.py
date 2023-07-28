@@ -13,10 +13,10 @@ HEADER_LIST: Final[list] = [
     "Beam Current",
     "Higher Order Suppressor",
     "EPU Polarization",
-    "EXPOSURE"
+    "EXPOSURE",
 ]
 
-HEADER_DICT: Final[dict[str,str]] = {
+HEADER_DICT: Final[dict[str, str]] = {
     "Beamline Energy": "Energy",
     "Sample Theta": "Theta",
     "Beam Current": "Current",
@@ -37,11 +37,13 @@ REFL_COLUMN_NAMES: Final[dict] = HEADER_DICT | {
     "R": "Refl",
     "R Err": "Err",
     "Q": "Q",
+    "i0": "izero",
+    "i0Err": "izeroErr"
 }
 
 POL: Final[dict] = {
-    'P100': '100.0',
-    'P190': '190.0',
+    "P100": "100.0",
+    "P190": "190.0",
 }
 
 FILE_NAMES = {

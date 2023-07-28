@@ -11,8 +11,8 @@ except:
 class Reuse:
     @staticmethod
     def saveForReuse(obj):
-        energy = round(obj.refl.Energy[0],1)
-        pol = obj.refl.POL[0]
+        energy = round(obj.refl.Energy.iloc[0],1)
+        pol = obj.refl.POL.iloc[0]
         saveDir = str(obj.path.parent.parent / f"{energy}_{pol}")
 
         images = obj.refl.applymap(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)

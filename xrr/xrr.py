@@ -9,17 +9,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 try:
-    from xrr.refl_manager import ReflProcs
+    from xrr.refl_manager import ReflFactory, StitchManager, OutlierDetection
     from xrr.load_fits import MultiReader
     from xrr.refl_reuse import Reuse
     from xrr.toolkit import FileDialog
-    from xrr._config import REFL_COLUMN_NAMES, POL
+    from xrr._config import REFL_COLUMN_NAMES
 except:
-    from refl_manager import ReflProcs
+    from refl_manager import ReflFactory, StitchManager, OutlierDetection
     from load_fits import MultiReader
     from refl_reuse import Reuse
     from toolkit import FileDialog
-    from _config import REFL_COLUMN_NAMES, POL
+    from _config import REFL_COLUMN_NAMES
 
 
 class Refl:
@@ -48,13 +48,13 @@ class Refl:
         >>> Filtered
         >>> Beam Image
         >>> Dark Image
-        
+
     mask: ArrayLike [bool]
         This boolean array is used to mask the data. Using Set Mask
-    
+
     path: Path
         pathlib object pointing to the location of the dataset
-    
+
     energies: float | list[float]
         depending on the backend, gives the energies represented in the Refl object
 
@@ -63,7 +63,7 @@ class Refl:
 
     At it's base, this is really just a wrapper for a pandas DataFrame, but for more advanced backends this structure becomes more rich to contain all the needed data.
     ----------------------------------------------------------------------------
-    ## Methods         
+    ## Methods
     ----------------------------------------------------------------------------
     mask: np.ndarray
         Property with setter and getter methods. This sets and gets masked attribute from the backend and re-initializes the object.
@@ -77,15 +77,15 @@ class Refl:
         path: Path | None = None,
         backend: Literal["single", "multi"] = "single",
         *backArgs,
-        **backKWArgs
+        **backKWArgs,
     ):
         global BACKEND
 
         self.path = path
-        self.refl: pd.DataFrame = True  #type: ignore
-        self.images: pd.DataFrame = True #type: ignore
-        self.energies: list[str] | str = True #type: ignore
-        self.polarization: list[tuple[str, str]] | str = True #type: ignore
+        self.refl: pd.DataFrame = True  # type: ignore
+        self.images: pd.DataFrame = True  # type: ignore
+        self.energies: list[str] | str = True  # type: ignore
+        self.polarization: list[tuple[str, str]] | str = True  # type: ignore
 
         self.backendKey: Literal["single", "multi"] = backend
         self.backendProcessor = BACKEND[backend](*backArgs, **backKWArgs)
@@ -110,8 +110,8 @@ class Refl:
     def saveData(self, savePath):
         self.backendProcessor.saveData(self, savePath)
 
-    def plot(self, *pltArgs, **pltKWArgs):
-        self.backendProcessor.plot(self, *pltArgs, **pltKWArgs)
+    def plot(self, kind: Literal['en', 'pol'], *pltArgs, **pltKWArgs):
+        self.backendProcessor.plot(self, kind, *pltArgs, **pltKWArgs)
 
     def display(self, *dispArgs, **dispKWArgs):
         self.backendProcessor.display(self, *dispArgs, **dispKWArgs)
@@ -187,29 +187,30 @@ class SingleRefl(DataBackend):
         obj: Refl,
         mask: np.ndarray | None = None,
         source: Literal["fits", "csv"] = "fits",
-        **dataKWArgs
+        **dataKWArgs,
     ):
         if isinstance(obj.path, type(None)):
-            obj.path = FileDialog.getDirectory(title='Choose Single Polarization Directory')
+            obj.path = FileDialog.getDirectory(
+                title="Choose Single Polarization Directory"
+            )
 
         obj.energies = obj.path.name
         obj.polarization = obj.path.name
-        
-        metadata, images = MultiReader.readFile(
-            obj.path, **dataKWArgs
-        )
 
-        if source == 'fits':
-            obj.images, beamSpots, darkSpots = ReflProcs.getBeamSpots(
+        metadata, images = MultiReader.readFile(obj.path, **dataKWArgs)
+
+        if source == "fits":
+            obj.images, beamSpots, darkSpots = ReflFactory.getBeamSpots(
                 images, mask=mask
             )
-            obj.images = ReflProcs.getSubImages(
-                obj.images, beamSpots, darkSpots
-            )
-            pureReflDF = ReflProcs.getDf(metadata, obj.images)
-            obj.refl = ReflProcs.scaleSeries(pureReflDF, **dataKWArgs)
 
-        elif source == 'csv':
+            OutlierDetection.visualizeDataPoints(beamSpots, images[0].shape)
+
+            obj.images = ReflFactory.getSubImages(obj.images, beamSpots, darkSpots)
+            pureReflDF = ReflFactory.getDf(metadata, obj.images)
+            obj.refl = StitchManager.scaleDataFrame(pureReflDF, **dataKWArgs)
+
+        elif source == "csv":
             Reuse.openForReuse(obj)
 
         else:
@@ -226,7 +227,7 @@ class SingleRefl(DataBackend):
             logy=True,
             kind="scatter",
             *args,
-            **kwargs
+            **kwargs,
         )
         plt.show()
 
@@ -237,7 +238,18 @@ class SingleRefl(DataBackend):
             y=REFL_COLUMN_NAMES["R"],
             error_y=REFL_COLUMN_NAMES["R Err"],
             log_y=True,
-            hover_data=list(['Energy', 'Theta', 'Current', 'HOS', 'POL', 'Intensity', 'Background', 'RawRefl']),
+            hover_data=list(
+                [
+                    "Energy",
+                    "Theta",
+                    "Current",
+                    "HOS",
+                    "POL",
+                    "Intensity",
+                    "Background",
+                    "RawRefl",
+                ]
+            ),
         )
         fig.show()
 
@@ -273,13 +285,14 @@ class SingleRefl(DataBackend):
         )
         plt.show()
 
+
 class MultiRefl(DataBackend):
     def getData(
         self,
         obj: Refl,
         mask: np.ndarray | None = None,
         source: Literal["fits", "csv"] = "fits",
-        **dataKWArgs
+        **dataKWArgs,
     ):
         if isinstance(obj.path, type(None)):
             obj.path = FileDialog.getDirectory(title="Choose Single Sample Directory")
@@ -287,48 +300,55 @@ class MultiRefl(DataBackend):
         obj.energies = [en.name for en in obj.path.iterdir() if en.is_dir()]
         obj.polarization = []
 
-        if source == 'fits':
+        if source == "fits":
             EN_reflList = []
             EN_imageList = []
             for energy in obj.energies:
                 energyDir = obj.path / energy
                 if not energyDir.exists():
-                    raise ValueError(f"Invalid data directory - path structure should be sample/{energy}. Invalid path: {str(energyDir)}")
+                    raise ValueError(
+                        f"Invalid data directory - path structure should be sample/{energy}. Invalid path: {str(energyDir)}"
+                    )
                 pols = [pol.name for pol in energyDir.iterdir() if pol.is_dir()]
                 POL_reflList = []
                 POL_imageList = []
                 for pol in pols:
                     dataDir = energyDir / pol
                     if not energyDir.exists():
-                        warn(f"No experimental data found for polarization: {pol} at {energy}")
+                        warn(
+                            f"No experimental data found for polarization: {pol} at {energy}"
+                        )
 
                     if dataDir.exists():
-                        metadata, images = MultiReader.readFile(
-                            dataDir, **dataKWArgs
-                        )
+                        metadata, images = MultiReader.readFile(dataDir, **dataKWArgs)
 
-                        imageList, beamSpots, darkSpots = ReflProcs.           getBeamSpots(
-                                    images, mask=mask
+                        imageList, beamSpots, darkSpots = ReflFactory.getBeamSpots(
+                            images, mask=mask
                         )
-                        images = ReflProcs.getSubImages(
+                        images = ReflFactory.getSubImages(
                             imageList, beamSpots, darkSpots
                         )
-                        pureReflDF = ReflProcs.getDf(metadata, images)
-                        refl = ReflProcs.scaleSeries(pureReflDF, **dataKWArgs)
+                        pureReflDF = ReflFactory.getDf(metadata, images)
+
+                        refl = StitchManager.scaleDataFrame(pureReflDF, **dataKWArgs)
                         POL_reflList.append(refl)
                         POL_imageList.append(images)
                 EN_reflList.append(pd.concat(POL_reflList, axis=1, keys=pols))
                 EN_imageList.append(pd.concat(POL_imageList, axis=1, keys=pols))
                 obj.polarization.append(tuple(pols))
 
-        elif source == 'csv':
+        elif source == "csv":
             EN_reflList = []
             EN_imageList = []
             obj.polarization = []
             for energy in obj.energies:
                 POL_reflList = []
                 POL_imageList = []
-                pols = [str(file.name).split('_')[1] for file in obj.path.glob(f'*{energy}_*')  if file.is_file()]         
+                pols = [
+                    str(file.name).split("_")[1]
+                    for file in obj.path.glob(f"*{energy}_*")
+                    if file.is_file()
+                ]
                 for pol in pols:
                     refl, images = Reuse.multiOpen(obj.path, energy, pol)
                     POL_reflList.append(refl)
@@ -341,13 +361,13 @@ class MultiRefl(DataBackend):
         else:
             raise ValueError("Invalid Data Source - choose 'csv' or 'fits'")
 
-        refl = pd.concat(EN_reflList, axis = 1, keys=obj.energies)
-        images = pd.concat(EN_imageList, axis = 1, keys=obj.energies)
+        refl = pd.concat(EN_reflList, axis=1, keys=obj.energies)
+        images = pd.concat(EN_imageList, axis=1, keys=obj.energies)
 
-        refl.index.name = 'Index'
-        refl.columns.names = ['ENERGY', 'POL', 'REFL']
-        images.index.name = 'Index'
-        images.columns.names = ['ENERGY', 'POL', 'IMAGES']
+        refl.index.name = "Index"
+        refl.columns.names = ["ENERGY", "POL", "REFL"]
+        images.index.name = "Index"
+        images.columns.names = ["ENERGY", "POL", "IMAGES"]
 
         obj.refl = refl
         obj.images = images
@@ -355,34 +375,32 @@ class MultiRefl(DataBackend):
     def saveData(self, obj: Refl):
         ...
 
-    def plot(self, obj: Refl, kind: Literal['en', 'pol'], *args, **kwargs):
-        if kind == 'en':
-            fig, axes = plt.subplots(ncols=2)
+    def plot(self, obj: Refl, kind: Literal["en", "pol"], *args, **kwargs):
+        if kind == "en":
+            fig, axes = plt.subplots(ncols=len(obj.pol))
             for i, pol in enumerate(obj.polarization[0]):
-                axes[i].set_xlabel(REFL_COLUMN_NAMES['Q'])
-                axes[i].set_ylabel(REFL_COLUMN_NAMES['R'])
+                axes[i].set_xlabel(REFL_COLUMN_NAMES["Q"])
+                axes[i].set_ylabel(REFL_COLUMN_NAMES["R"])
                 axes[i].set_title(f"{pol}")
                 for j, en in enumerate(obj.energies):
-                    scale = 10**(1.5*j)
-                    x = obj.refl[en][pol][REFL_COLUMN_NAMES['Q']]
-                    y = scale * obj.refl[en][pol][REFL_COLUMN_NAMES['R']]
-                    yerr = scale * obj.refl[en][pol][REFL_COLUMN_NAMES['R Err']]
-                    axes[i].errorbar(x,y, yerr = yerr, fmt = '.', label = f'{en}')
+                    scale = 10 ** (1.5 * j)
+                    x = obj.refl[en][pol][REFL_COLUMN_NAMES["Q"]]
+                    y = scale * obj.refl[en][pol][REFL_COLUMN_NAMES["R"]]
+                    yerr = scale * obj.refl[en][pol][REFL_COLUMN_NAMES["R Err"]]
+                    axes[i].errorbar(x, y, yerr=yerr, fmt=".", label=f"{en}")
                     xmax = max(x)
                     if j == 0:
-                        axes[i].set_ylim(bottom = min(y)/2)
-                    axes[i].set_ylim(top = scale)
+                        axes[i].set_ylim(bottom=min(y) / 2)
+                    axes[i].set_ylim(top=scale)
                     if axes[i].get_xlim()[1] > xmax:
-                        axes[i].set_xlim(right = xmax + .001)
-                    axes[i].set_xlim(left = 0)
+                        axes[i].set_xlim(right=xmax + 0.001)
+                    axes[i].set_xlim(left=0)
 
-                axes[i].set_yscale('log')
+                axes[i].set_yscale("log")
                 axes[i].legend()
             plt.show()
 
-
-
-        elif kind == 'pol':
+        elif kind == "pol":
             ...
         else:
             raise ValueError("Invalid plot kind - choose 'en' or 'pol'")
@@ -400,6 +418,6 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl(backend = 'multi')
-    test1.plot(kind = 'en')
-    print(test1)
+    test1 = Refl()
+    test1.plot()
+    A = 10

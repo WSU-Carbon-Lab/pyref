@@ -47,7 +47,6 @@ class FitsReader:
 
 
 class MultiReader:
-
     @staticmethod
     def readHeader(
         dataFilePath: Path,

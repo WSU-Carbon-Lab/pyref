@@ -44,7 +44,7 @@ Additionally, measuring the direct beam intensity allows us to gain a better und
 ## Stitching
 The crux of all problems with this experiment is something we will call the order of magnitude problem. Each pixel value on the 11.0.1.2 CCD is represented by an unsigned 16 bit integer in their analog to digital conversion. This means that the maximum value measurable by the CCD is 65536 counts. The noise floor for this CCD is at around 1,000 counts, meaning that there are only 2 orders of magnitude to work with in this experiment. 
 <p align="center">
-  <img src="docs/refl.png" />
+  <img src="refl.png" />
 </p>
 Often, as seen in the above image, reflectivity data stretches significantly more than two orders of magnitude. The solution to this is stitching. 
 

@@ -1,23 +1,130 @@
-from typing import Literal
-from unicodedata import numeric
 import numpy as np
 import pandas as pd
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from sklearn.ensemble import IsolationForest
+from sklearn.inspection import DecisionBoundaryDisplay
+from warnings import warn
+
+import matplotlib.pyplot as plt
 
 try:
     from xrr._config import REFL_COLUMN_NAMES
     from xrr.image_manager import ImageProcs
     from xrr.toolkit import XrayDomainTransform
-    from xrr.refl_reuse import Reuse
 except:
     from _config import REFL_COLUMN_NAMES
     from image_manager import ImageProcs
     from toolkit import XrayDomainTransform
-    from refl_reuse import Reuse
 
 
-class ReflProcs:
+class ErrorManager:
+    @staticmethod
+    def weightedAverage(
+        nominal: pd.Series | pd.DataFrame | np.ndarray, variance: pd.Series | pd.DataFrame|np.ndarray
+    ):
+        """
+        Computes the weighted average of a series of nominal points and their variance
+        """
+
+        weight = 1 / variance
+        variance = 1 / weight.sum()
+        average = (nominal * weight).sum() * variance
+
+        return average, variance
+
+    @staticmethod
+    def updateStats(
+        df: pd.DataFrame,
+        updatePoints: list[int],
+        raw: str = REFL_COLUMN_NAMES["Raw"],
+        k: str = "k",
+        inPlace: bool = True,
+    ):
+        """
+        Computes the ADU to photon conversion factor
+        """
+        rawIntensityArray = df.loc[updatePoints, raw]
+        df[k] = rawIntensityArray.var() / rawIntensityArray.mean()  # type: ignore
+        if not inPlace:
+            return df
+
+    @staticmethod
+    def scaleRefl(
+        df: pd.DataFrame,
+        scaleCol: str,
+        scaleVarCol: str,
+        nominalCol: str = REFL_COLUMN_NAMES["R"],
+        varCol=REFL_COLUMN_NAMES["R Err"],
+        inPlace: bool = True,
+    ):
+        if scaleCol not in df.columns:
+            df[scaleCol] = 1
+
+        df[varCol] = (df[nominalCol] / df[scaleCol]) ** 2 * (
+            (df[varCol] / df[nominalCol]) ** 2 + (df[scaleVarCol] / df[scaleCol]) ** 2
+        )
+        df[nominalCol] = df[nominalCol] / df[scaleCol]
+
+        if not inPlace:
+            return df
+
+    @staticmethod
+    def overloadMean(
+        df: pd.DataFrame,
+        meanIndexes: list[int],
+        refl=REFL_COLUMN_NAMES["R"],
+        var=REFL_COLUMN_NAMES["R Err"],
+        inplace=True,
+    ):
+        """
+        Replace all meanIndexes points with the average across them
+        """
+        for col in df.columns:
+            if col == refl:
+                (
+                    df.loc[meanIndexes, col],
+                    df.loc[meanIndexes, var],
+                ) = ErrorManager.weightedAverage(
+                    df.loc[meanIndexes, col], df.loc[meanIndexes, var]
+                )
+            else:
+                df.loc[meanIndexes, col] = df.loc[meanIndexes, col].mean()
+        df.drop(index=meanIndexes[:-1], inplace=True)
+
+        if not inplace:
+            return df
+
+    @staticmethod
+    def getScaleFactor(currentDataFrame: pd.DataFrame, priorDataFrame: pd.DataFrame):
+        scaleFactors = (
+            currentDataFrame[REFL_COLUMN_NAMES["R"]].values
+            / priorDataFrame[REFL_COLUMN_NAMES["R"]].values
+        )
+        scaleVars = scaleFactors**2 * (
+            currentDataFrame["k"].values
+            / currentDataFrame[REFL_COLUMN_NAMES["Raw"]].values
+            + priorDataFrame["k"].values
+            / priorDataFrame[REFL_COLUMN_NAMES["Raw"]].values
+        )
+        scaleFactor, scaleVar = ErrorManager.weightedAverage(scaleFactors, scaleVars)
+        if 1 / scaleFactor > 1:
+            outlierPoints = [scale for scale in scaleFactors if scale > 1]
+            warn(f"One or more stitch points is an outlier - {outlierPoints} are too large")
+            scaleFactors = np.array([scale for scale in scaleFactors if scale > 1])
+            scaleVars =  np.array([var for scale, var in zip(scaleFactors, scaleVars) if scale > 1])
+
+            scaleFactor, scaleVar = ErrorManager.weightedAverage(scaleFactors, scaleVars)
+
+        return scaleFactor, scaleVar
+
+    @staticmethod
+    def toStd(stitchedDataFrame):
+        '''Manages conversions from the variance used in the calculations to the standard error that is standard.'''
+        stitchedDataFrame[REFL_COLUMN_NAMES["R Err"]] = np.sqrt(stitchedDataFrame[REFL_COLUMN_NAMES["R Err"]])
+
+
+class ReflFactory:
     @staticmethod
     def getBeamSpots(
         imageList: list, mask: np.ndarray | None = None
@@ -120,23 +227,25 @@ class ReflProcs:
 
     @staticmethod
     def getDf(metaData: pd.DataFrame, imageDF) -> pd.DataFrame:
-        reflDF = ReflProcs.getRefl(imageDF)
+        """
+        Main process for generating the initial reflectivity DataFrame. This initialized important columns such as the error, spot intensities and other values. This appends to the metaData information collected from the imageDF
+        """
+        reflDF = ReflFactory.getRefl(imageDF)
         reflDF.reset_index(drop=True, inplace=True)
 
-        reflDF[REFL_COLUMN_NAMES["R"]] = (
+        reflDF[REFL_COLUMN_NAMES["Raw"]] = (
             reflDF[REFL_COLUMN_NAMES["Beam Spot"]]
             - reflDF[REFL_COLUMN_NAMES["Dark Spot"]]
-        ) / (
-            metaData[REFL_COLUMN_NAMES["Beam Current"]]
-            * metaData[REFL_COLUMN_NAMES["Higher Order Suppressor"]]
         )
-        reflDF[REFL_COLUMN_NAMES["Raw"]] = reflDF[REFL_COLUMN_NAMES["R"]]
 
-        reflDF[REFL_COLUMN_NAMES["R Err"]] = (
-            np.sqrt(reflDF[REFL_COLUMN_NAMES["R"]])
-            / metaData[REFL_COLUMN_NAMES["Beam Current"]]
-            / metaData[REFL_COLUMN_NAMES["Higher Order Suppressor"]]
+        metaScale = (
+            metaData[REFL_COLUMN_NAMES["Beam Current"]]
+            # * metaData[REFL_COLUMN_NAMES["EXPOSURE"]]
         )
+
+        reflDF[REFL_COLUMN_NAMES["R"]] = reflDF[REFL_COLUMN_NAMES["Raw"]] / metaScale
+
+        reflDF[REFL_COLUMN_NAMES["R Err"]] = reflDF[REFL_COLUMN_NAMES["R"]] / metaScale
 
         reflDF[REFL_COLUMN_NAMES["Q"]] = XrayDomainTransform.toQ(
             metaData[REFL_COLUMN_NAMES["Beamline Energy"]],
@@ -145,113 +254,195 @@ class ReflProcs:
         df = pd.concat([metaData, reflDF], axis=1)
         return df
 
+
+class OverlapFactory:
     @staticmethod
-    def getNormal(reflDataFrame: pd.DataFrame) -> pd.DataFrame:
-        izero_count = (reflDataFrame[REFL_COLUMN_NAMES["Q"]] != 0).argmax()
+    def getOverlaps(col: pd.Series) -> tuple:
+        """
+        overlap indices list constructor. This returns three items
 
-        if izero_count > 0:
-            izero: float = np.average(
-                reflDataFrame[REFL_COLUMN_NAMES["R"]].iloc[: izero_count],
-                weights=1 / (reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count])**2
-            )  # type: ignore
+        stichZero: list
+            izero like list of indices corresponding to the first stich point.
 
-            izero_err = np.average(
-                reflDataFrame[REFL_COLUMN_NAMES["R Err"]].iloc[: izero_count]**2
-            )
-        else:
-            izero, izero_err = (1, 1)
+        initialPoints: list
+            points corresponding to elements before the stich that overlap with those that occur after the stich
 
-        reflDataFrame[REFL_COLUMN_NAMES["R"]] = (
-            reflDataFrame[REFL_COLUMN_NAMES["R"]] / izero
-        )
+        stichPoints: list
+            points corresponding to elements after the stich that overlap with the initialPoints
 
-        reflDataFrame[REFL_COLUMN_NAMES["R Err"]] = reflDataFrame[
-            REFL_COLUMN_NAMES["R Err"]
-        ] * np.sqrt(
-            (
-                (reflDataFrame[REFL_COLUMN_NAMES["R Err"]])
-                / (reflDataFrame[REFL_COLUMN_NAMES["R Err"]])
-            )
-            ** 2
-            + (izero_err / izero) ** 2
-        )
-
-        reflDataFrame = reflDataFrame[izero_count:].reset_index(drop=True)
-        return reflDataFrame
-
-    @staticmethod
-    def getOverlaps(col: pd.Series) -> dict:
-        tally = defaultdict(list)
+        cutoff: list
+            indices that mark the beginning of a new stich
+        """
+        tally = defaultdict(list)            
         for i, val in col.items():
             tally[val].append(i)
-        return {key: val for key, val in tally.items() if len(val) > 1}
+
+        overlaps = [val for val in tally.values() if len(val) > 1]
+
+        stitches = overlaps[1:]
+        izero = overlaps[0]
+        period = OverlapFactory.getPeriodicity([len(e) for e in stitches])
+
+        stitches = overlaps[1:]
+        izero = overlaps[0]
+
+        stichZero = [izero] + stitches[::period]
+        seriesSlices = []
+        seriesN = len(stichZero)
+        for i in range(1, seriesN):
+            if i == seriesN - 1:
+                seriesSlices.append(slice(stichZero[i][1], len(col)))
+            else:
+                seriesSlices.append(slice(stichZero[i][1], stichZero[i + 1][1]))
+        seriesSlices = [slice(0, stichZero[1][1])] + seriesSlices
+        return stichZero, seriesSlices, period, overlaps
 
     @staticmethod
-    def getScaleFactors(
-        overlapDict: dict, df: pd.DataFrame, refl=REFL_COLUMN_NAMES["R"]
-    ) -> dict:
-        reflCol = df[refl]
-        keys = list(overlapDict.keys())
-        indices = list(overlapDict.values())
-        scaleFactors = {}
-        
-        for i in range(len(keys)):
-            if len(indices[i]) > 2:
-                initIndex = indices[i][0]
-                overIndices = indices[i][1:]
-                initVal = reflCol.iloc[initIndex]
-                overVals = reflCol.iloc[overIndices]
-                ratio = list(initVal / overVals)
-                j = 0
-                while len(indices[j]) == 2 and j < len(keys):
-                    initVal = reflCol.iloc[indices[j][0]]
-                    overVal = reflCol.iloc[indices[j][1]]
-                    ratio.append(initVal / overVal)
-                    j += 1
-                scaleFactors[overIndices[0]] = (
-                    np.average(
-                        ratio,
-                        weights=1
-                        / (df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]) ** 2,
-                    ),
-                    np.average(df[REFL_COLUMN_NAMES["R Err"]].iloc[overIndices]**2)
+    def getPrefixArray(pattern):
+        """
+        Helper function for the KMP
+        """
+        m = len(pattern)
+        prefix = [0] * m
+        j = 0
+        for i in range(1, m):
+            while j > 0 and pattern[i] != pattern[j]:
+                j = prefix[j - 1]
+
+            if pattern[i] == pattern[j]:
+                j += 1
+
+            prefix[i] = j
+        return prefix
+
+    @staticmethod
+    def getPeriodicity(list):
+        """
+        Implementation of the KPM periodicity finding algorithm This is used to reduce the number of instructions needed for stitching.
+        """
+        n = len(list)
+        prefix = OverlapFactory.getPrefixArray(list)
+
+        period = n - prefix[-1]
+        if n % period != 0:
+            raise ValueError(f"Invalid overlap list - {list} is not periodic")
+        if period == n:
+            raise ValueError(f"Invalid overlap list - {list} is not periodic")
+            
+        return period
+
+
+class OutlierDetection:
+    ''' 
+    Wrapper class for removing outliers from the dataset.
+    '''
+
+    @staticmethod
+    def visualizeDataPoints(beamSpots, imageSize, *args, **kwargs):
+        X = np.array(beamSpots)
+
+        model = OutlierDetection.isolationForest(X)
+
+        disp = DecisionBoundaryDisplay.from_estimator(
+            model,
+            X,
+            response_method="decision_function",
+            alpha = .5,
+        )
+
+        disp.ax_.scatter(X[:,0], X[:,1], s = 20)
+        disp.ax_.set_xlabel("Pixel Index")
+        disp.ax_.set_ylabel("Pixel Index")
+
+        plt.title("Path Length decision boundary \nof Isolation Forest Algorithm")
+        plt.gca().invert_yaxis()
+        plt.legend(labels = ["Brightest CCD \nPixel Location"])
+        plt.show()
+
+
+    
+    @staticmethod
+    def isolationForest(X, *args, **kwargs):
+        model = IsolationForest(max_samples=100, bootstrap=True, *args, **kwargs)
+        model.fit(X)
+        return model
+
+class StitchManager:
+    @staticmethod
+    def getNormal(izeroDataFrame: pd.DataFrame, izeroPoints):
+        # calculates the scale factors
+        ErrorManager.updateStats(izeroDataFrame, izeroPoints)
+        ErrorManager.overloadMean(izeroDataFrame, izeroPoints)
+
+        izero = izeroDataFrame.loc[izeroPoints[-1], REFL_COLUMN_NAMES["R"]]
+        izeroErr = izeroDataFrame.loc[izeroPoints[-1], REFL_COLUMN_NAMES["R Err"]]
+        izeroDataFrame["i0"] = izero
+        izeroDataFrame["i0Err"] = izeroErr
+        izeroDataFrame[REFL_COLUMN_NAMES["R"]] = (
+            izeroDataFrame[REFL_COLUMN_NAMES["R"]] / izero
+        )
+
+        izeroDataFrame[REFL_COLUMN_NAMES["R Err"]] = (
+            izeroDataFrame[REFL_COLUMN_NAMES["R"]] **2 *(
+            izeroDataFrame.loc[izeroPoints[-1], 'k'] / izeroDataFrame.loc[izeroPoints[-1], REFL_COLUMN_NAMES["Raw"]]
+            + izeroDataFrame["k"] / izeroDataFrame[REFL_COLUMN_NAMES["Raw"]]
+        ))
+        izeroDataFrame.drop(izeroPoints[-1], inplace=True)
+
+    @staticmethod
+    def getScaled(
+        currentDataFrame: pd.DataFrame,
+        priorDataFrame: pd.DataFrame,
+        stitchZero: list,
+        period: int,
+    ):
+        # calculates the scale factor
+        ErrorManager.updateStats(currentDataFrame, stitchZero)
+
+        currentStitchPoints = currentDataFrame[:period]
+        priorStitchPoints = priorDataFrame[-period:]
+
+        scale, scaleVar = ErrorManager.getScaleFactor(
+            currentStitchPoints, priorStitchPoints
+        )
+        currentDataFrame["Lam"] = scale
+        currentDataFrame["LamErr"] = scaleVar
+        currentDataFrame[REFL_COLUMN_NAMES["R"]] = (
+            currentDataFrame[REFL_COLUMN_NAMES["R"]] / scale
+        )
+
+        currentDataFrame[REFL_COLUMN_NAMES["R Err"]] = (
+            (currentDataFrame[REFL_COLUMN_NAMES["R"]])**2 * (
+            currentDataFrame["LamErr"] / (currentDataFrame["Lam"])**2 
+            + currentDataFrame["k"] / currentDataFrame[REFL_COLUMN_NAMES["Raw"]])
+        )
+    @staticmethod
+    def dropReplace(stitchedDataFrame: pd.DataFrame, overlaps):
+        for i, idxList in enumerate(overlaps):
+            if i > 0:
+                meanValues = stitchedDataFrame.loc[idxList].groupby(level=0).agg("mean")
+
+                stitchedDataFrame.loc[idxList] = meanValues
+                stitchedDataFrame.drop(idxList[1:], inplace=True)
+
+    @staticmethod
+    def scaleDataFrame(reflDataFrame):
+        stitchZero, seriesSlices, period, overlaps = OverlapFactory.getOverlaps(
+            reflDataFrame[REFL_COLUMN_NAMES["Sample Theta"]]
+        )
+        DataFrames = [reflDataFrame[s] for s in seriesSlices]
+        stitchedDataFrames = []
+        for i, df in enumerate(DataFrames):
+            if i == 0:
+                StitchManager.getNormal(df, stitchZero[i])
+            else:
+                StitchManager.getScaled(
+                    df, stitchedDataFrames[i - 1], stitchZero[i][1:], period
                 )
-        return scaleFactors
+            stitchedDataFrames.append(df)
 
-    @staticmethod
-    def replaceWithAverage(df: pd.DataFrame, indices: list) -> pd.DataFrame:
-        avg_values = df.mean(axis=1)
+        stitchedDataFrame = pd.concat(stitchedDataFrames)
 
-        def replace(index):
-            df.iloc[index, df.columns] = avg_values
-
-        with ThreadPoolExecutor() as executor:
-            executor.map(replace, indices)
-
-        return df
-
-    @staticmethod
-    def scaleSeries(
-        df: pd.DataFrame,
-        refl: str = REFL_COLUMN_NAMES["R"],
-        q: str = REFL_COLUMN_NAMES["Q"],
-        refl_err: str = REFL_COLUMN_NAMES["R Err"],
-        reduce: bool = True,
-    ) -> pd.DataFrame:
-        df = ReflProcs.getNormal(df)
-        overlapDict = ReflProcs.getOverlaps(df[q])
-        scaleFactors = ReflProcs.getScaleFactors(overlapDict, df, refl=refl)
-
-        for key, val in scaleFactors.items():
-            ratio, ratioErr = val
-            sliceCopy = df.loc[int(key) :, [refl, refl_err]].copy()
-            df.loc[int(key) :,refl] = ratio * sliceCopy[refl]
-            df.loc[int(key) :,refl_err] = sliceCopy[refl] * np.sqrt(
-                (sliceCopy[refl_err] / sliceCopy[refl]) ** 2 + (ratioErr / ratio) ** 2
-            )
-
-        if reduce:
-            df = ReflProcs.replaceWithAverage(df, list(scaleFactors.values()))
-            for val in overlapDict.values():
-                df.drop(val[1:], inplace=True)
-        return df
+        StitchManager.dropReplace(stitchedDataFrame, overlaps)
+        ErrorManager.toStd(stitchedDataFrame)
+        return stitchedDataFrame

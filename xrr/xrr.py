@@ -1,5 +1,6 @@
 """Main module."""
 from abc import ABC, abstractclassmethod
+from tkinter import font
 from typing import Literal, Final
 from pathlib import Path
 from warnings import warn
@@ -7,6 +8,10 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_style("whitegrid")
+sns.set_palette("colorblind")
+
 
 try:
     from xrr.refl_manager import ReflFactory, StitchManager, OutlierDetection
@@ -81,7 +86,7 @@ class Refl:
     ):
         global BACKEND
 
-        self.path = path
+        self.path: Path = path  # type: ignore
         self.refl: pd.DataFrame = True  # type: ignore
         self.images: pd.DataFrame = True  # type: ignore
         self.energies: list[str] | str = True  # type: ignore
@@ -110,8 +115,8 @@ class Refl:
     def saveData(self, savePath):
         self.backendProcessor.saveData(self, savePath)
 
-    def plot(self, kind: Literal['en', 'pol'], *pltArgs, **pltKWArgs):
-        self.backendProcessor.plot(self, kind, *pltArgs, **pltKWArgs)
+    def plot(self, *pltArgs, **pltKWArgs):
+        self.backendProcessor.plot(self, *pltArgs, **pltKWArgs)
 
     def display(self, *dispArgs, **dispKWArgs):
         self.backendProcessor.display(self, *dispArgs, **dispKWArgs)
@@ -377,28 +382,35 @@ class MultiRefl(DataBackend):
 
     def plot(self, obj: Refl, kind: Literal["en", "pol"], *args, **kwargs):
         if kind == "en":
-            fig, axes = plt.subplots(ncols=len(obj.pol))
-            for i, pol in enumerate(obj.polarization[0]):
-                axes[i].set_xlabel(REFL_COLUMN_NAMES["Q"])
-                axes[i].set_ylabel(REFL_COLUMN_NAMES["R"])
-                axes[i].set_title(f"{pol}")
+            ncols = len(obj.polarization[0])
+            fig, axes = plt.subplots(ncols=ncols, figsize=(10, 7.5))
+            axes = np.atleast_1d(axes)  # Ensure axes is an array
+
+            for ax, pol in zip(axes, obj.polarization[0]):
+                ax.set_xlabel(REFL_COLUMN_NAMES["Q"] + r"$[\AA^{-1}]$")
+                ax.set_ylabel(REFL_COLUMN_NAMES["R"])
+                ax.set_title(f"P{int(float(pol))}")
+
                 for j, en in enumerate(obj.energies):
-                    scale = 10 ** (1.5 * j)
+                    scale = pow(10, -1.9 * j)
+
                     x = obj.refl[en][pol][REFL_COLUMN_NAMES["Q"]]
                     y = scale * obj.refl[en][pol][REFL_COLUMN_NAMES["R"]]
                     yerr = scale * obj.refl[en][pol][REFL_COLUMN_NAMES["R Err"]]
-                    axes[i].errorbar(x, y, yerr=yerr, fmt=".", label=f"{en}")
-                    xmax = max(x)
-                    if j == 0:
-                        axes[i].set_ylim(bottom=min(y) / 2)
-                    axes[i].set_ylim(top=scale)
-                    if axes[i].get_xlim()[1] > xmax:
-                        axes[i].set_xlim(right=xmax + 0.001)
-                    axes[i].set_xlim(left=0)
 
-                axes[i].set_yscale("log")
-                axes[i].legend()
+                    ax.errorbar(x, y, yerr=yerr, fmt=".", label=f"{en} eV")
+
+                ax.set_yscale("log")
+                ax.legend()
+
+            for ax in axes:
+                ax.set_xlim(auto=True)
+                ax.set_ylim(auto=True)
+                ax.set_ylim(top = 1.1)  # Ensure all plots have same y-axis
+
+            fig.suptitle(f"Normalized Reflectance Curve - {obj.path.name}", fontsize=16)
             plt.show()
+
 
         elif kind == "pol":
             ...
@@ -410,14 +422,12 @@ class MultiRefl(DataBackend):
 
     def debug(self, obj: Refl):
         ...
-
-
 BACKEND: Final[dict] = {
     "single": SingleRefl,
     "multi": MultiRefl,
 }
 
 if __name__ == "__main__":
-    test1 = Refl()
-    test1.plot()
+    test1 = Refl(backend = "multi")
+    test1.plot(kind = "en")
     A = 10

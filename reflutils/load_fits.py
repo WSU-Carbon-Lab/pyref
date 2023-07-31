@@ -4,8 +4,8 @@ from pathlib import Path
 from astropy.io import fits
 
 try:
-    from xrr._config import HEADER_LIST, HEADER_DICT
-    from xrr.toolkit import FileDialog
+    from reflutils._config import HEADER_LIST, HEADER_DICT
+    from reflutils.toolkit import FileDialog
 except:
     from _config import HEADER_LIST, HEADER_DICT
     from toolkit import FileDialog

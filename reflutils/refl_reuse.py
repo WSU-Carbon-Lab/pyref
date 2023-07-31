@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import fastparquet
 try:
-    from xrr._config import FILE_NAMES
+    from reflutils._config import FILE_NAMES
 except:
     from _config import FILE_NAMES
 

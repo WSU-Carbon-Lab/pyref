@@ -14,11 +14,11 @@ sns.set_palette("colorblind")
 
 
 try:
-    from xrr.refl_manager import ReflFactory, StitchManager, OutlierDetection
-    from xrr.load_fits import MultiReader
-    from xrr.refl_reuse import Reuse
-    from xrr.toolkit import FileDialog
-    from xrr._config import REFL_COLUMN_NAMES
+    from reflutils.refl_manager import ReflFactory, StitchManager, OutlierDetection
+    from reflutils.load_fits import MultiReader
+    from reflutils.refl_reuse import Reuse
+    from reflutils.toolkit import FileDialog
+    from reflutils._config import REFL_COLUMN_NAMES
 except:
     from refl_manager import ReflFactory, StitchManager, OutlierDetection
     from load_fits import MultiReader

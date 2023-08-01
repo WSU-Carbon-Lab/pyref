@@ -1,3 +1,4 @@
+from email.mime import image
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -92,6 +93,47 @@ class MultiReader:
             imageList.append(FitsReader.readImage(file))
 
         return pd.concat(headerDFList), imageList
+
+    @staticmethod
+    def prepareReflData(
+        dataFilePath: Path | None,
+        headerValues: list[str] = HEADER_LIST,
+        fileName: bool = False,
+    ) -> tuple[list[pd.DataFrame], list[list]]:
+        if dataFilePath == None:
+            raise ValueError("Restart operation and choose a file path")
+
+        imageList = []
+        headerDFList = []
+        headerStitchedDFList = []
+        imageStitchedList = []
+        offset = 0
+        for i, file in enumerate(dataFilePath.glob("*.fits")):
+            headerDF = pd.DataFrame(
+                FitsReader.readHeader(file, headerValues=headerValues),
+                index=[i],
+            )
+            if fileName:
+                headerDF["File Path"] = file
+                
+            if (
+                i > 0
+                and headerDF[HEADER_DICT["Sample Theta"]].iat[0]
+                < headerDFList[-1][HEADER_DICT["Sample Theta"]].iat[0]
+            ) or (i == len(list(dataFilePath.glob("*.fits"))) - 1):
+                offset += i + 1
+                stitchDF = pd.concat(headerDFList).reset_index(drop=True)
+                headerStitchedDFList.append(stitchDF)
+                imageStitchedList.append(imageList)
+
+                assert(len(stitchDF) == len(imageList))
+                headerDFList = []
+                imageList = []
+
+            headerDFList.append(headerDF)
+            imageList.append(FitsReader.readImage(file))
+
+        return headerStitchedDFList, imageStitchedList
 
 
 def _constructTests():

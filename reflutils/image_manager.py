@@ -21,7 +21,7 @@ class ImageProcs:
 
     @staticmethod
     def removeEdge(imageArr: np.ndarray, n: int = 3) -> np.ndarray:
-        _imageInputErr(imageArr)
+        (imageArr)
 
         return imageArr[n:-n, n:-n]
 
@@ -69,8 +69,5 @@ class ImageProcs:
 
 
 def _imageInputErr(imageArr) -> Exception | None:
-    if not isinstance(imageArr, np.ndarray):
-        imageArr = np.ndarray(imageArr)
-
-    if imageArr.ndim != 2:
-        raise ValueError("Input array must be 2-dimensional")
+    # TODO: Add error handling
+    ...

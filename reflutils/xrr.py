@@ -91,6 +91,7 @@ class Refl:
         self.images: pd.DataFrame = True  # type: ignore
         self.energies: list[str] | str = True  # type: ignore
         self.polarization: list[tuple[str, str]] | str = True  # type: ignore
+        self.mask: np.ndarray = True  # type: ignore
 
         self.backendKey: Literal["single", "multi"] = backend
         self.backendProcessor = BACKEND[backend](*backArgs, **backKWArgs)
@@ -99,18 +100,6 @@ class Refl:
 
     def __str__(self) -> str:
         return self.refl.__str__()
-
-    @property
-    def mask(self):
-        if not self.mask is None:
-            plt.imshow(self.mask)
-        else:
-            return self.mask
-
-    @mask.setter
-    def mask(self, mask: np.ndarray):
-        backKWArgs = {"mask": mask}
-        self.__init__(path=self.path, backend=self.backendKey, **backKWArgs)
 
     def saveData(self, savePath):
         self.backendProcessor.saveData(self, savePath)
@@ -198,22 +187,18 @@ class SingleRefl(DataBackend):
             obj.path = FileDialog.getDirectory(
                 title="Choose Single Polarization Directory"
             )
-
+        obj.mask = mask
         obj.energies = obj.path.name
         obj.polarization = obj.path.name
 
-        metadata, images = MultiReader.readFile(obj.path, **dataKWArgs)
 
-        if source == "fits":
-            obj.images, beamSpots, darkSpots = ReflFactory.getBeamSpots(
-                images, mask=mask
-            )
 
-            OutlierDetection.visualizeDataPoints(beamSpots, images[0].shape)
+        if source == "fits":        
+            metaDataFrames, imageLists = MultiReader.prepareReflData(obj.path, **dataKWArgs)
 
-            obj.images = ReflFactory.getSubImages(obj.images, beamSpots, darkSpots)
-            pureReflDF = ReflFactory.getDf(metadata, obj.images)
-            obj.refl = StitchManager.scaleDataFrame(pureReflDF, **dataKWArgs)
+            obj.images, reflDataFrames = ReflFactory.main(imageLists, metaDataFrames, obj.mask, **dataKWArgs)
+
+            obj.refl = StitchManager.scaleDataFrame(reflDataFrames, **dataKWArgs)
 
         elif source == "csv":
             Reuse.openForReuse(obj)
@@ -325,17 +310,13 @@ class MultiRefl(DataBackend):
                         )
 
                     if dataDir.exists():
-                        metadata, images = MultiReader.readFile(dataDir, **dataKWArgs)
+                        metaDataFrames, imageLists = MultiReader.prepareReflData(dataDir, **dataKWArgs)
 
-                        imageList, beamSpots, darkSpots = ReflFactory.getBeamSpots(
-                            images, mask=mask
-                        )
-                        images = ReflFactory.getSubImages(
-                            imageList, beamSpots, darkSpots
-                        )
-                        pureReflDF = ReflFactory.getDf(metadata, images)
 
-                        refl = StitchManager.scaleDataFrame(pureReflDF, **dataKWArgs)
+                        images, reflDataFrames = ReflFactory.main(imageLists, metaDataFrames, obj.mask, **dataKWArgs)
+
+                        refl = StitchManager.scaleDataFrame(reflDataFrames, **dataKWArgs)
+
                         POL_reflList.append(refl)
                         POL_imageList.append(images)
                 EN_reflList.append(pd.concat(POL_reflList, axis=1, keys=pols))
@@ -428,6 +409,5 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl(backend = "multi")
+    test1 = Refl(backend="multi")
     test1.plot(kind = "en")
-    A = 10

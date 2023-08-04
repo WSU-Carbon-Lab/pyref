@@ -4,11 +4,13 @@ from tkinter import font
 from typing import Literal, Final
 from pathlib import Path
 from warnings import warn
+from matplotlib import axes
 import pandas as pd
 import plotly.express as px
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 sns.set_style("whitegrid")
 sns.set_palette("colorblind")
 
@@ -191,12 +193,14 @@ class SingleRefl(DataBackend):
         obj.energies = obj.path.name
         obj.polarization = obj.path.name
 
+        if source == "fits":
+            metaDataFrames, imageLists = MultiReader.prepareReflData(
+                obj.path, **dataKWArgs
+            )
 
-
-        if source == "fits":        
-            metaDataFrames, imageLists = MultiReader.prepareReflData(obj.path, **dataKWArgs)
-
-            obj.images, reflDataFrames = ReflFactory.main(imageLists, metaDataFrames, obj.mask, **dataKWArgs)
+            obj.images, reflDataFrames = ReflFactory.main(
+                imageLists, metaDataFrames, obj.mask, **dataKWArgs
+            )
 
             obj.refl = StitchManager.scaleDataFrame(reflDataFrames, **dataKWArgs)
 
@@ -210,16 +214,27 @@ class SingleRefl(DataBackend):
         Reuse.saveForReuse(obj)
 
     def plot(self, obj: Refl, *args, **kwargs):
-        obj.refl.plot(
-            x=REFL_COLUMN_NAMES["Q"],
-            y=REFL_COLUMN_NAMES["R"],
-            yerr=REFL_COLUMN_NAMES["R Err"],
-            logy=True,
-            kind="scatter",
-            *args,
-            **kwargs,
-        )
-        plt.show()
+        if "ax" in kwargs.keys() and isinstance(kwargs["ax"], plt.Axes):
+            axes = obj.refl.plot(
+                x=REFL_COLUMN_NAMES["Q"],
+                y=REFL_COLUMN_NAMES["R"],
+                yerr=REFL_COLUMN_NAMES["R Err"],
+                logy=True,
+                kind = "scatter",
+                *args,
+                **kwargs,
+            )
+            return axes
+        else:
+            obj.refl.plot(
+                x=REFL_COLUMN_NAMES["Q"],
+                y=REFL_COLUMN_NAMES["R"],
+                yerr=REFL_COLUMN_NAMES["R Err"],
+                logy=True,
+                kind = "scatter",
+                *args,
+                **kwargs,
+            )
 
     def display(self, obj: Refl):
         fig = px.scatter(
@@ -310,12 +325,17 @@ class MultiRefl(DataBackend):
                         )
 
                     if dataDir.exists():
-                        metaDataFrames, imageLists = MultiReader.prepareReflData(dataDir, **dataKWArgs)
+                        metaDataFrames, imageLists = MultiReader.prepareReflData(
+                            dataDir, **dataKWArgs
+                        )
 
+                        images, reflDataFrames = ReflFactory.main(
+                            imageLists, metaDataFrames, obj.mask, **dataKWArgs
+                        )
 
-                        images, reflDataFrames = ReflFactory.main(imageLists, metaDataFrames, obj.mask, **dataKWArgs)
-
-                        refl = StitchManager.scaleDataFrame(reflDataFrames, **dataKWArgs)
+                        refl = StitchManager.scaleDataFrame(
+                            reflDataFrames, **dataKWArgs
+                        )
 
                         POL_reflList.append(refl)
                         POL_imageList.append(images)
@@ -387,11 +407,10 @@ class MultiRefl(DataBackend):
             for ax in axes:
                 ax.set_xlim(auto=True)
                 ax.set_ylim(auto=True)
-                ax.set_ylim(top = 1.1)  # Ensure all plots have same y-axis
+                ax.set_ylim(top=1.1)  # Ensure all plots have same y-axis
 
             fig.suptitle(f"Normalized Reflectance Curve - {obj.path.name}", fontsize=16)
             plt.show()
-
 
         elif kind == "pol":
             ...
@@ -403,6 +422,8 @@ class MultiRefl(DataBackend):
 
     def debug(self, obj: Refl):
         ...
+
+
 BACKEND: Final[dict] = {
     "single": SingleRefl,
     "multi": MultiRefl,
@@ -410,4 +431,4 @@ BACKEND: Final[dict] = {
 
 if __name__ == "__main__":
     test1 = Refl(backend="multi")
-    test1.plot(kind = "en")
+    test1.plot(kind="en")

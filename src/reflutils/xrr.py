@@ -15,18 +15,11 @@ sns.set_style("whitegrid")
 sns.set_palette("colorblind")
 
 
-try:
-    from reflutils.refl_manager import ReflFactory, StitchManager, OutlierDetection
-    from reflutils.load_fits import MultiReader
-    from reflutils.refl_reuse import Reuse
-    from reflutils.toolkit import FileDialog
-    from reflutils._config import REFL_COLUMN_NAMES
-except:
-    from refl_manager import ReflFactory, StitchManager, OutlierDetection
-    from load_fits import MultiReader
-    from refl_reuse import Reuse
-    from toolkit import FileDialog
-    from _config import REFL_COLUMN_NAMES
+from .refl_manager import ReflFactory, StitchManager, OutlierDetection
+from .load_fits import MultiReader
+from .refl_reuse import Reuse
+from .toolkit import FileDialog
+from ._config import REFL_COLUMN_NAMES
 
 
 class Refl:

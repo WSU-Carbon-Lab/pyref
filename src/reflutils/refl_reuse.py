@@ -2,10 +2,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import fastparquet
-try:
-    from reflutils._config import FILE_NAMES
-except:
-    from _config import FILE_NAMES
+from ._config import FILE_NAMES
+from ._config import FILE_NAMES
 
 
 class Reuse:
@@ -16,8 +14,7 @@ class Reuse:
         saveDir = str(obj.path.parent.parent / f"{energy}_{pol}")
 
         images = obj.refl.applymap(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
-        images.to_parquet(str(saveDir) + FILE_NAMES["image.parquet"], index = False, compression = 'gzip')
-        obj.refl.to_parquet(str(saveDir) + FILE_NAMES["meta.parquet"], index = False, compression = 'gzip')
+        images.to_parquet(str(saveDir) + FILE_NAMES["image.parquet"], index = False, compression = 'gzip')        obj.refl.to_parquet(str(saveDir) + FILE_NAMES["meta.parquet"], index = False, compression = 'gzip')
         obj.refl.to_json(str(saveDir) + FILE_NAMES[".json"], orient = "columns", compression = 'gzip')
 
     @staticmethod

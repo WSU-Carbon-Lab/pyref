@@ -2,14 +2,10 @@ from pathlib import Path
 from shutil import copy2
 from concurrent.futures import ThreadPoolExecutor
 
-try:
-    from reflutils.load_fits import MultiReader
-    from reflutils._config import FLAGS, HEADER_DICT
-    from reflutils.toolkit import FileDialog
-except:
-    from load_fits import MultiReader
-    from _config import FLAGS, HEADER_DICT
-    from toolkit import FileDialog
+from .load_fits import MultiReader
+from ._config import FLAGS, HEADER_DICT
+from .toolkit import FileDialog
+
 
 
 class FitsSorter:

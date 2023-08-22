@@ -11,14 +11,9 @@ from warnings import warn
 
 import matplotlib.pyplot as plt
 
-try:
-    from reflutils._config import REFL_COLUMN_NAMES
-    from reflutils.image_manager import ImageProcs
-    from reflutils.toolkit import XrayDomainTransform
-except:
-    from _config import REFL_COLUMN_NAMES
-    from image_manager import ImageProcs
-    from toolkit import XrayDomainTransform
+from ._config import REFL_COLUMN_NAMES
+from .image_manager import ImageProcs
+from .toolkit import XrayDomainTransform
 
 
 class ErrorManager:

@@ -1,25 +1,25 @@
 """Main module."""
 from abc import ABC, abstractclassmethod
+from tkinter import font
 from typing import Literal, Final
 from pathlib import Path
 from warnings import warn
+from matplotlib import axes
 import pandas as pd
 import plotly.express as px
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-try:
-    from xrr.refl_manager import ReflFactory, StitchManager, OutlierDetection
-    from xrr.load_fits import MultiReader
-    from xrr.refl_reuse import Reuse
-    from xrr.toolkit import FileDialog
-    from xrr._config import REFL_COLUMN_NAMES
-except:
-    from refl_manager import ReflFactory, StitchManager, OutlierDetection
-    from load_fits import MultiReader
-    from refl_reuse import Reuse
-    from toolkit import FileDialog
-    from _config import REFL_COLUMN_NAMES
+sns.set_style("whitegrid")
+sns.set_palette("colorblind")
+
+
+from .refl_manager import ReflFactory, StitchManager, OutlierDetection
+from .load_fits import MultiReader
+from .refl_reuse import Reuse
+from .toolkit import FileDialog
+from ._config import REFL_COLUMN_NAMES
 
 
 class Refl:
@@ -81,11 +81,12 @@ class Refl:
     ):
         global BACKEND
 
-        self.path = path
+        self.path: Path = path  # type: ignore
         self.refl: pd.DataFrame = True  # type: ignore
         self.images: pd.DataFrame = True  # type: ignore
         self.energies: list[str] | str = True  # type: ignore
         self.polarization: list[tuple[str, str]] | str = True  # type: ignore
+        self.mask: np.ndarray = True  # type: ignore
 
         self.backendKey: Literal["single", "multi"] = backend
         self.backendProcessor = BACKEND[backend](*backArgs, **backKWArgs)
@@ -95,23 +96,11 @@ class Refl:
     def __str__(self) -> str:
         return self.refl.__str__()
 
-    @property
-    def mask(self):
-        if not self.mask is None:
-            plt.imshow(self.mask)
-        else:
-            return self.mask
-
-    @mask.setter
-    def mask(self, mask: np.ndarray):
-        backKWArgs = {"mask": mask}
-        self.__init__(path=self.path, backend=self.backendKey, **backKWArgs)
-
     def saveData(self, savePath):
         self.backendProcessor.saveData(self, savePath)
 
-    def plot(self, kind: Literal['en', 'pol'], *pltArgs, **pltKWArgs):
-        self.backendProcessor.plot(self, kind, *pltArgs, **pltKWArgs)
+    def plot(self, *pltArgs, **pltKWArgs):
+        self.backendProcessor.plot(self, *pltArgs, **pltKWArgs)
 
     def display(self, *dispArgs, **dispKWArgs):
         self.backendProcessor.display(self, *dispArgs, **dispKWArgs)
@@ -193,22 +182,20 @@ class SingleRefl(DataBackend):
             obj.path = FileDialog.getDirectory(
                 title="Choose Single Polarization Directory"
             )
-
+        obj.mask = mask
         obj.energies = obj.path.name
         obj.polarization = obj.path.name
 
-        metadata, images = MultiReader.readFile(obj.path, **dataKWArgs)
-
         if source == "fits":
-            obj.images, beamSpots, darkSpots = ReflFactory.getBeamSpots(
-                images, mask=mask
+            metaDataFrames, imageLists = MultiReader.prepareReflData(
+                obj.path, **dataKWArgs
             )
 
-            OutlierDetection.visualizeDataPoints(beamSpots, images[0].shape)
+            obj.images, reflDataFrames = ReflFactory.main(
+                imageLists, metaDataFrames, obj.mask, **dataKWArgs
+            )
 
-            obj.images = ReflFactory.getSubImages(obj.images, beamSpots, darkSpots)
-            pureReflDF = ReflFactory.getDf(metadata, obj.images)
-            obj.refl = StitchManager.scaleDataFrame(pureReflDF, **dataKWArgs)
+            obj.refl = StitchManager.scaleDataFrame(reflDataFrames, **dataKWArgs)
 
         elif source == "csv":
             Reuse.openForReuse(obj)
@@ -220,16 +207,27 @@ class SingleRefl(DataBackend):
         Reuse.saveForReuse(obj)
 
     def plot(self, obj: Refl, *args, **kwargs):
-        obj.refl.plot(
-            x=REFL_COLUMN_NAMES["Q"],
-            y=REFL_COLUMN_NAMES["R"],
-            yerr=REFL_COLUMN_NAMES["R Err"],
-            logy=True,
-            kind="scatter",
-            *args,
-            **kwargs,
-        )
-        plt.show()
+        if "ax" in kwargs.keys() and isinstance(kwargs["ax"], plt.Axes):
+            axes = obj.refl.plot(
+                x=REFL_COLUMN_NAMES["Q"],
+                y=REFL_COLUMN_NAMES["R"],
+                yerr=REFL_COLUMN_NAMES["R Err"],
+                logy=True,
+                kind = "scatter",
+                *args,
+                **kwargs,
+            )
+            return axes
+        else:
+            obj.refl.plot(
+                x=REFL_COLUMN_NAMES["Q"],
+                y=REFL_COLUMN_NAMES["R"],
+                yerr=REFL_COLUMN_NAMES["R Err"],
+                logy=True,
+                kind = "scatter",
+                *args,
+                **kwargs,
+            )
 
     def display(self, obj: Refl):
         fig = px.scatter(
@@ -320,17 +318,18 @@ class MultiRefl(DataBackend):
                         )
 
                     if dataDir.exists():
-                        metadata, images = MultiReader.readFile(dataDir, **dataKWArgs)
-
-                        imageList, beamSpots, darkSpots = ReflFactory.getBeamSpots(
-                            images, mask=mask
+                        metaDataFrames, imageLists = MultiReader.prepareReflData(
+                            dataDir, **dataKWArgs
                         )
-                        images = ReflFactory.getSubImages(
-                            imageList, beamSpots, darkSpots
-                        )
-                        pureReflDF = ReflFactory.getDf(metadata, images)
 
-                        refl = StitchManager.scaleDataFrame(pureReflDF, **dataKWArgs)
+                        images, reflDataFrames = ReflFactory.main(
+                            imageLists, metaDataFrames, obj.mask, **dataKWArgs
+                        )
+
+                        refl = StitchManager.scaleDataFrame(
+                            reflDataFrames, **dataKWArgs
+                        )
+
                         POL_reflList.append(refl)
                         POL_imageList.append(images)
                 EN_reflList.append(pd.concat(POL_reflList, axis=1, keys=pols))
@@ -377,27 +376,33 @@ class MultiRefl(DataBackend):
 
     def plot(self, obj: Refl, kind: Literal["en", "pol"], *args, **kwargs):
         if kind == "en":
-            fig, axes = plt.subplots(ncols=len(obj.pol))
-            for i, pol in enumerate(obj.polarization[0]):
-                axes[i].set_xlabel(REFL_COLUMN_NAMES["Q"])
-                axes[i].set_ylabel(REFL_COLUMN_NAMES["R"])
-                axes[i].set_title(f"{pol}")
+            ncols = len(obj.polarization[0])
+            fig, axes = plt.subplots(ncols=ncols, figsize=(10, 7.5))
+            axes = np.atleast_1d(axes)  # Ensure axes is an array
+
+            for ax, pol in zip(axes, obj.polarization[0]):
+                ax.set_xlabel(REFL_COLUMN_NAMES["Q"] + r"$[\AA^{-1}]$")
+                ax.set_ylabel(REFL_COLUMN_NAMES["R"])
+                ax.set_title(f"P{int(float(pol))}")
+
                 for j, en in enumerate(obj.energies):
-                    scale = 10 ** (1.5 * j)
+                    scale = pow(10, -1.9 * j)
+
                     x = obj.refl[en][pol][REFL_COLUMN_NAMES["Q"]]
                     y = scale * obj.refl[en][pol][REFL_COLUMN_NAMES["R"]]
                     yerr = scale * obj.refl[en][pol][REFL_COLUMN_NAMES["R Err"]]
-                    axes[i].errorbar(x, y, yerr=yerr, fmt=".", label=f"{en}")
-                    xmax = max(x)
-                    if j == 0:
-                        axes[i].set_ylim(bottom=min(y) / 2)
-                    axes[i].set_ylim(top=scale)
-                    if axes[i].get_xlim()[1] > xmax:
-                        axes[i].set_xlim(right=xmax + 0.001)
-                    axes[i].set_xlim(left=0)
 
-                axes[i].set_yscale("log")
-                axes[i].legend()
+                    ax.errorbar(x, y, yerr=yerr, fmt=".", label=f"{en} eV")
+
+                ax.set_yscale("log")
+                ax.legend()
+
+            for ax in axes:
+                ax.set_xlim(auto=True)
+                ax.set_ylim(auto=True)
+                ax.set_ylim(top=1.1)  # Ensure all plots have same y-axis
+
+            fig.suptitle(f"Normalized Reflectance Curve - {obj.path.name}", fontsize=16)
             plt.show()
 
         elif kind == "pol":
@@ -418,6 +423,5 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl()
-    test1.plot()
-    A = 10
+    test1 = Refl(backend="multi")
+    test1.plot(kind="en")

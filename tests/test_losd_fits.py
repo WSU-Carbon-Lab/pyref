@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from xrr.load_fits import *
+from reflutils.load_fits import *
 
 test_fits_file = Path("tests/TestData/TestFits.fits").resolve()
 test_multi_path = Path("tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0").resolve()

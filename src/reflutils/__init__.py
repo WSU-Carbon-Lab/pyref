@@ -14,3 +14,17 @@ from . refl_reuse import *
 from . toolkit import *
 from . xrr import *
 from . display_path import *
+
+import seaborn as sns
+sns.set_style(
+    "white",
+    rc = {
+        "xtick.direction": "in", 
+        "ytick.direction": "in", 
+        "xtick.top":True, 
+        "ytick.right":True, 
+        "xtick.bottom" : True, 
+        "ytick.left":True, 
+        "grid.linestyle": "--"
+        })
+sns.set_context('notebook')

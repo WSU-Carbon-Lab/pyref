@@ -14,7 +14,6 @@ import seaborn as sns
 sns.set_style("whitegrid")
 sns.set_palette("colorblind")
 
-
 from .refl_manager import ReflFactory, StitchManager, OutlierDetection
 from .load_fits import MultiReader
 from .refl_reuse import Reuse

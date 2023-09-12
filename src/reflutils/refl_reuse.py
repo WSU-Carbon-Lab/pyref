@@ -14,7 +14,8 @@ class Reuse:
         saveDir = str(obj.path.parent.parent / f"{energy}_{pol}")
 
         images = obj.refl.applymap(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
-        images.to_parquet(str(saveDir) + FILE_NAMES["image.parquet"], index = False, compression = 'gzip')        obj.refl.to_parquet(str(saveDir) + FILE_NAMES["meta.parquet"], index = False, compression = 'gzip')
+        images.to_parquet(str(saveDir) + FILE_NAMES["image.parquet"], index = False, compression = 'gzip')        
+        obj.refl.to_parquet(str(saveDir) + FILE_NAMES["meta.parquet"], index = False, compression = 'gzip')
         obj.refl.to_json(str(saveDir) + FILE_NAMES[".json"], orient = "columns", compression = 'gzip')
 
     @staticmethod

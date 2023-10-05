@@ -35,13 +35,10 @@ REFL_COLUMN_NAMES: Final[dict] = HEADER_DICT | {
     "Dark Spot": "bg",
     "Raw": "adu",
     "R": "r",
-    "R Scale": "rs",
     "R Err": "dr",
     "Q": "q",
     "i0": "i0",
     "i0Err": "di0",
-    "Scale": "sf",
-    "Scale Err": "dsf",
     "Stat Update": "stat_update",
 }
 
@@ -51,7 +48,7 @@ POL: Final[dict] = {
 }
 
 FILE_NAMES = {
-    "meta.parquet": "_refl.parquet.gzip",
-    "image.parquet": "_image.parquet.gzip",
+    "meta.parquet": "_refl.csv",
+    "image.parquet": "_image.parquet",
     ".json": "_refl.json.gzip",
 }

@@ -1,6 +1,5 @@
 """Main module."""
 from abc import ABC, abstractclassmethod
-from tkinter import font
 from typing import Literal, Final
 from pathlib import Path
 from warnings import warn
@@ -9,16 +8,17 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 import seaborn as sns
 
 sns.set_style("whitegrid")
 sns.set_palette("colorblind")
 
-from .refl_manager import ReflFactory, StitchManager, OutlierDetection
-from .load_fits import MultiReader
-from .refl_reuse import Reuse
-from .toolkit import FileDialog
-from ._config import REFL_COLUMN_NAMES
+from refl_manager import ReflFactory, StitchManager
+from load_fits import MultiReader
+from refl_reuse import Reuse
+from toolkit import FileDialog
+from _config import REFL_COLUMN_NAMES
 
 
 class Refl:
@@ -190,11 +190,11 @@ class SingleRefl(DataBackend):
                 obj.path, **dataKWArgs
             )
 
-            obj.images, reflDataFrames = ReflFactory.main(
+            imageDataFrames, reflDataFrames = ReflFactory.main(
                 imageLists, metaDataFrames, obj.mask, **dataKWArgs
             )
 
-            obj.refl = StitchManager.scaleDataFrame(reflDataFrames, **dataKWArgs)
+            obj.refl, obj.images = StitchManager.scaleDataFrame(imageDataFrames, reflDataFrames, **dataKWArgs)
 
         elif source == "csv":
             Reuse.openForReuse(obj)
@@ -282,7 +282,20 @@ class SingleRefl(DataBackend):
         )
         plt.show()
 
+    def widget(self, obj: Refl, q: float = 0, *args, **kwargs):
+        images = obj.images.loc[obj.images[REFL_COLUMN_NAMES["Q"]] == q]
+        point = obj.refl.loc[obj.refl[REFL_COLUMN_NAMES["Q"]] == q]
+        
+        if images.shape[0] > 1:
+            avg = images.mean()
+            images = images.append(avg, ignore_index=True)
+        
+        rows = 2*images.shape[0]
+        cols = 3*images.shape[1]
 
+        fig = plt.figure(figsize=(8.5, 11))
+        gs = GridSpec(rows, cols, figure=fig)
+        raise NotImplementedError
 class MultiRefl(DataBackend):
     def getData(
         self,
@@ -422,5 +435,6 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl(backend="multi")
-    test1.plot(kind="en")
+    test1 = Refl()
+    print(test1)
+    test1.plot()

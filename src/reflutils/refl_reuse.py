@@ -2,8 +2,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import fastparquet
-from ._config import FILE_NAMES
-from ._config import FILE_NAMES
+from _config import FILE_NAMES
 
 
 class Reuse:

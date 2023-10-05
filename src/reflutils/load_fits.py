@@ -113,13 +113,12 @@ class MultiReader:
                 FitsReader.readHeader(file, headerValues=headerValues),
                 index=[i],
             )
+
             if fileName:
                 headerDF["File Path"] = file
                 
-            if (
-                i > 0
-                and headerDF[HEADER_DICT["Sample Theta"]].iat[0]
-                < headerDFList[-1][HEADER_DICT["Sample Theta"]].iat[0]
+            if (i > 0 and 
+                headerDF[HEADER_DICT["Sample Theta"]].iat[0]< headerDFList[-1][HEADER_DICT["Sample Theta"]].iat[0]
             ) or (i == len(list(dataFilePath.glob("*.fits"))) - 1):
                 offset += i + 1
                 stitchDF = pd.concat(headerDFList).reset_index(drop=True)

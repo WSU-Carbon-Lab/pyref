@@ -2,9 +2,9 @@ from pathlib import Path
 from shutil import copy2
 from concurrent.futures import ThreadPoolExecutor
 
-from .load_fits import MultiReader
-from ._config import FLAGS, HEADER_DICT
-from .toolkit import FileDialog
+from load_fits import MultiReader
+from _config import FLAGS, HEADER_DICT
+from toolkit import FileDialog
 
 
 

@@ -1,3 +1,5 @@
+from turtle import done
+from typing import Literal
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
@@ -20,32 +22,19 @@ class ErrorManager:
         """
 
         weight = 1 / variance
-        variance = 1 / weight.sum()
-        average = (nominal * weight).sum() * variance
+        variance = 1 / weight.sum(numeric_only=True)
+        average = (nominal * weight).sum(numeric_only=True) * variance
 
         return average, variance
     
     @staticmethod
-    def addAverageCol(df: pd.DataFrame, averagePoints, inPlace: bool = True):
+    def averageOfAbove(df: pd.DataFrame, label = "overlap"):
         """Adds a row to the dataframe with the averages of the columns"""
-        averageDF = {}
-        for col in df.columns:
-            if col == REFL_COLUMN_NAMES["R"]:
-                average, variance = ErrorManager.weightedAverage(df[col], df[REFL_COLUMN_NAMES["R Err"]])
-                averageDF[col] = average
-                averageDF[REFL_COLUMN_NAMES["R Err"]] = variance
-            elif col == REFL_COLUMN_NAMES["R Err"]:
-                pass
-            else:
-                averageDF[col] = df[col].mean()
-        average = pd.DataFrame(averageDF, index=[averagePoints - 1])
-        df_pre = df.iloc[:averagePoints]
-        df_pre.index = [0]*averagePoints
-        df_post = df.iloc[averagePoints:]
-        df = pd.concat([df_pre, average, df_post])
-
-        if not inPlace:
-            return df
+        averageDF = df.mean(numeric_only=True)
+        averageDF[REFL_COLUMN_NAMES["catagory"]] = label
+        averageDF[REFL_COLUMN_NAMES["i0"]] = averageDF[REFL_COLUMN_NAMES["Raw"]]
+        
+        return averageDF.to_frame().T
 
     @staticmethod
     def updateStats(
@@ -197,7 +186,7 @@ class ReflFactory:
         reflDF[REFL_COLUMN_NAMES["Raw"]] = (
             reflDF[REFL_COLUMN_NAMES["Beam Spot"]]
             - reflDF[REFL_COLUMN_NAMES["Dark Spot"]]
-        )
+        ) / metaData[REFL_COLUMN_NAMES["Beam Current"]]
 
         reflDF[REFL_COLUMN_NAMES["Q"]] = XrayDomainTransform.toQ(
             metaData[REFL_COLUMN_NAMES["Beamline Energy"]],
@@ -249,7 +238,6 @@ class ReflFactory:
 class OverlapFactory:
     @staticmethod
     def getOverlap(initialDataFrame, overlapDataFrame):
-
         initialPoint = overlapDataFrame[REFL_COLUMN_NAMES["Q"]].iat[0]
         izeroNumber = initialDataFrame[REFL_COLUMN_NAMES["Beam Current"]].where(initialDataFrame[REFL_COLUMN_NAMES["Q"]] == 0).count()
         initialOverlapPoints = overlapDataFrame[REFL_COLUMN_NAMES["Beam Current"]].where(overlapDataFrame[REFL_COLUMN_NAMES["Q"]] == initialPoint).count()
@@ -263,62 +251,67 @@ class OverlapFactory:
 
 class StitchManager:
     @staticmethod
-    def normalize(izeroDataFrame: pd.DataFrame, izeroCount: int):
-        """Normalizes the first stitch dataframe"""
-
-        # calculates the i0 collumn information
-        izero = izeroDataFrame[REFL_COLUMN_NAMES["Raw"]].iloc[:izeroCount].mean()
-        izeroVar = izeroDataFrame[REFL_COLUMN_NAMES["Raw"]].iloc[:izeroCount].var()
-        izeroDataFrame[REFL_COLUMN_NAMES["i0"]] = izero
-        izeroDataFrame[REFL_COLUMN_NAMES["i0Err"]] = izeroVar
-
-        # calculates the reflectivity collumn information
-        izeroDataFrame[REFL_COLUMN_NAMES["R"]] = izeroDataFrame[REFL_COLUMN_NAMES["Raw"]] / izero
-        izeroDataFrame[REFL_COLUMN_NAMES["R Err"]] = izeroDataFrame[REFL_COLUMN_NAMES["Stat Update"]]*izeroDataFrame[REFL_COLUMN_NAMES["R"]]
+    def labelDF(df, kind: Literal["i0", "ovp"], izeroCount: int, overlaps: int = 0):
+        if kind == 'i0':
+            df[REFL_COLUMN_NAMES["catagory"]] = "i0"
+            df[REFL_COLUMN_NAMES["catagory"]].iloc[izeroCount:] = "done"
+            return df.where(df[REFL_COLUMN_NAMES["catagory"]] == "i0").dropna(), df.where(df[REFL_COLUMN_NAMES["catagory"]] == "done").dropna()
+        elif kind == 'ovp':
+            df[REFL_COLUMN_NAMES["catagory"]] = "done"
+            df[REFL_COLUMN_NAMES["catagory"]].iloc[:izeroCount] = "i0"
+            df[REFL_COLUMN_NAMES["catagory"]].iloc[izeroCount:izeroCount+overlaps] = "overlaps"
+            return df.where(REFL_COLUMN_NAMES["catagory"] == "i0").dropna() ,df.where(df[REFL_COLUMN_NAMES["catagory"]] == "overlaps").dropna(), df.where(df[REFL_COLUMN_NAMES["catagory"]] == "done").dropna()
+        
 
     @staticmethod
-    def scaleFactor(currentStitchPoints, PriorStitchPoints):
-        """Calculates the scale factor for the current stitch dataframe"""
-        scaleFactors = PriorStitchPoints[REFL_COLUMN_NAMES["Raw"]] / currentStitchPoints[REFL_COLUMN_NAMES["Raw"]]
-        scaleVars = scaleFactors ** 2 * (
-            PriorStitchPoints[REFL_COLUMN_NAMES["Stat Update"]]
-            / PriorStitchPoints[REFL_COLUMN_NAMES["Raw"]]
-            + currentStitchPoints[REFL_COLUMN_NAMES["Stat Update"]]
-            / currentStitchPoints[REFL_COLUMN_NAMES["Raw"]]
-        )
+    def normalize(izeroDataFrame: pd.DataFrame, izeroCount: int, overlaps = 0, kind: Literal["i0", "init"] = "i0"):
+        """Normalizes the first stitch dataframe"""
+        # catagorize points in the dataframe
+        if kind == "i0":
+            i0, done = StitchManager.labelDF(izeroDataFrame, kind, izeroCount)
+            average = ErrorManager.averageOfAbove(i0, label="done")
 
-        scaleFactor, scaleVar = ErrorManager.weightedAverage(scaleFactors, scaleVars)
-        return scaleFactor, scaleVar
+            izeroDataFrame = pd.concat([i0,average, done], ignore_index=True)
+            izeroDataFrame[REFL_COLUMN_NAMES["i0"]] = average[REFL_COLUMN_NAMES["Raw"]]
+            izeroDataFrame[REFL_COLUMN_NAMES["i0Err"]] = average[REFL_COLUMN_NAMES["i0Err"]]
+
+            izeroDataFrame[REFL_COLUMN_NAMES["R"]] = izeroDataFrame[REFL_COLUMN_NAMES["Raw"]] / izeroDataFrame[REFL_COLUMN_NAMES["i0"]]
+            izeroDataFrame[REFL_COLUMN_NAMES["R Err"]] = ((izeroDataFrame[REFL_COLUMN_NAMES["Stat Update"]]**2 
+                                                           + izeroDataFrame[REFL_COLUMN_NAMES["i0Err"]] / izeroDataFrame[REFL_COLUMN_NAMES["i0"]]**2) 
+                                                           * izeroDataFrame[REFL_COLUMN_NAMES["R"]]**2)
+        elif kind == "init":
+            i0, overlaps, done = StitchManager(izeroDataFrame, kind, izeroCount, overlaps)
+            average = ErrorManager.averageOfAbove(i0, label="overlaps")
+            overlaps = pd.concat([average,overlaps], ignore_index=True)
+            return i0, overlaps, done
+        else:
+            raise ValueError("kind must be 'i0' or 'init'")
 
     @staticmethod
     def stitch(
         currentDataFrame: pd.DataFrame,
         priorDataFrame: pd.DataFrame,
         initialOverlapCount: int,
-        overlaps: int,
+        overlapPoints: int,
     ):
         '''Scales future stitch dataframes to their prior stitch dataframes'''
-        # deal with the inital overlap point
-        ErrorManager.addAverageCol(currentDataFrame, initialOverlapCount)
+        i0, overlaps, done = StitchManager.normalize(currentDataFrame, initialOverlapCount, overlapPoints, kind="init")
+        priorOverlaps = priorDataFrame.iloc[-overlapPoints:]
 
-        # slice dataframes into the overlap region
-        currentStitchPoints = currentDataFrame.iloc[overlaps-1:2*overlaps]
-        priorStitchPoints = priorDataFrame.iloc[-overlaps:]
+        overlaps[REFL_COLUMN_NAMES["i0"]] = overlaps[REFL_COLUMN_NAMES["Raw"]] / priorOverlaps[REFL_COLUMN_NAMES["R"]]
 
-       
-        scale, scaleVar = StitchManager.scaleFactor(currentStitchPoints, priorStitchPoints)
-        # calculate the scale factor
-        currentDataFrame[REFL_COLUMN_NAMES["i0"]] = scale
-        currentDataFrame[REFL_COLUMN_NAMES["i0Err"]] = scaleVar 
+        scale = overlaps[REFL_COLUMN_NAMES["i0"]].mean()
+        scaleVar = overlaps[REFL_COLUMN_NAMES["i0"]].var()
 
-        currentDataFrame[REFL_COLUMN_NAMES["R"]] = (
-            currentDataFrame[REFL_COLUMN_NAMES["Raw"]] * currentDataFrame[REFL_COLUMN_NAMES["i0"]]
-        )
+        overlaps[REFL_COLUMN_NAMES["R"]] = overlaps[REFL_COLUMN_NAMES["Raw"]] * scale
+        overlaps[REFL_COLUMN_NAMES["R Err"]] = overlaps[REFL_COLUMN_NAMES["R"]]**2 * (overlaps[REFL_COLUMN_NAMES["Stat Update"]]**2 + scaleVar / scale**2)
 
-        currentDataFrame[REFL_COLUMN_NAMES["R Err"]] = currentDataFrame[REFL_COLUMN_NAMES["R"]]**2 * (
-            currentDataFrame[REFL_COLUMN_NAMES["Stat Update"]] / currentDataFrame[REFL_COLUMN_NAMES["Raw"]]
-            + currentDataFrame[REFL_COLUMN_NAMES["i0Err"]] / priorDataFrame[REFL_COLUMN_NAMES["i0"]]**2
-        )
+        averageR = (overlaps[REFL_COLUMN_NAMES["R"]] + priorOverlaps[REFL_COLUMN_NAMES["R"]]) / 2
+        averageRErr = 1/(overlaps[REFL_COLUMN_NAMES["R Err"]] + priorOverlaps[REFL_COLUMN_NAMES["R Err"]])
+
+        averageDF = pd.DataFrame({REFL_COLUMN_NAMES["R"]: averageR, REFL_COLUMN_NAMES["R Err"]: averageRErr, REFL_COLUMN_NAMES["catagory"]: "done"})
+
+        currentDataFrame = pd.concat([i0, overlaps, averageDF, done], ignore_index=True)
 
 
     @staticmethod
@@ -328,11 +321,10 @@ class StitchManager:
 
         for i, df in enumerate(reflDataFrames):
             ErrorManager.updateStats(df, izeroCount)
+            df[REFL_COLUMN_NAMES["stitch num"]] = i
             if i == 0:
                 StitchManager.normalize(df, izeroCount)
             else:
-                if i == len(reflDataFrames) - 1:
-                    test = 0
                 StitchManager.stitch(df, reflDataFrames[i - 1], initialOverlapCount, overlaps)
         refl = pd.concat(reflDataFrames, ignore_index=True)
         image = pd.concat(imageDataFrames, ignore_index=True)

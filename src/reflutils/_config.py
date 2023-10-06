@@ -40,6 +40,8 @@ REFL_COLUMN_NAMES: Final[dict] = HEADER_DICT | {
     "i0": "i0",
     "i0Err": "di0",
     "Stat Update": "stat_update",
+    "catagory": "catagory",
+    "stitch num": "stitch_num",
 }
 
 POL: Final[dict] = {

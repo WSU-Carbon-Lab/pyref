@@ -6,7 +6,7 @@ __version__ = "0.1.0"
 
 from . _config import *
 from . beam_spot_filter import *
-from . data_sorter import *
+from . refl_sorter import *
 from . image_manager import *
 from . load_fits import *
 from . refl_manager import *

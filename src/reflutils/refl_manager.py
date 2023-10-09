@@ -1,5 +1,5 @@
 from turtle import done
-from typing import Literal
+from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +33,7 @@ class ErrorManager:
         averageDF = df.mean(numeric_only=True)
         averageDF[REFL_COLUMN_NAMES["catagory"]] = label
         averageDF[REFL_COLUMN_NAMES["i0"]] = averageDF[REFL_COLUMN_NAMES["Raw"]]
+        averageDF[REFL_COLUMN_NAMES["i0Err"]] = df.var(numeric_only=True)[REFL_COLUMN_NAMES["Raw"]]
         
         return averageDF.to_frame().T
 
@@ -69,6 +70,9 @@ class ErrorManager:
 
 
 class ReflFactory:
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        return self.main(*args, **kwds)
+
     @staticmethod
     def getBeamSpots(
         imageList: list, mask: np.ndarray | None = None
@@ -101,21 +105,16 @@ class ReflFactory:
                     lambda image: ImageProcs.findMaximum(image), filteredImages
                 )
             )
-            darkSpots = list(
-                executor.map(
-                    lambda spot: ImageProcs.oppositePoint(spot, trimmedImages[0].shape),
-                    beamSpots,
-                )
-            )
+            darkSpot = ImageProcs.oppositePoint(beamSpots[0], maskedImages[0].shape)
         images = pd.DataFrame(
             {
                 REFL_COLUMN_NAMES["Images"]: imageList,
                 REFL_COLUMN_NAMES["Masked"]: maskedImages,
                 REFL_COLUMN_NAMES["Filtered"]: filteredImages,
-                "Beam Spots": beamSpots,
-                "Dark Spots": darkSpots,
+                REFL_COLUMN_NAMES["Beam Spot"]: beamSpots,
             }
         )
+        images[REFL_COLUMN_NAMES["Dark Spot"]] = [darkSpot] * len(images)
         return images
 
     @staticmethod
@@ -126,8 +125,8 @@ class ReflFactory:
     ):
         '''This is the main process for generating the sub images. This takes a DataFrame with the images used to calculate the reflectivity as well as the beam and dark spots and returns a DataFrame with the sub images used to calculate the reflectivity.'''
         maskedImages = imageDF[REFL_COLUMN_NAMES["Masked"]]
-        beamSpots = imageDF["Beam Spots"]
-        darkSpots = imageDF["Dark Spots"]
+        beamSpots = imageDF[REFL_COLUMN_NAMES["Beam Spot"]]
+        darkSpots = imageDF[REFL_COLUMN_NAMES["Dark Spot"]]
 
         with ThreadPoolExecutor() as executor:
             directBeam = list(
@@ -260,27 +259,30 @@ class StitchManager:
             df[REFL_COLUMN_NAMES["catagory"]] = "done"
             df[REFL_COLUMN_NAMES["catagory"]].iloc[:izeroCount] = "i0"
             df[REFL_COLUMN_NAMES["catagory"]].iloc[izeroCount:izeroCount+overlaps] = "overlaps"
-            return df.where(REFL_COLUMN_NAMES["catagory"] == "i0").dropna() ,df.where(df[REFL_COLUMN_NAMES["catagory"]] == "overlaps").dropna(), df.where(df[REFL_COLUMN_NAMES["catagory"]] == "done").dropna()
+            i0 = df.where(df[REFL_COLUMN_NAMES["catagory"]] == "i0").dropna()
+            overlaps = df.where(df[REFL_COLUMN_NAMES["catagory"]] == "overlaps").dropna()
+            done = df.where(df[REFL_COLUMN_NAMES["catagory"]] == "done").dropna()
+            return i0, overlaps, done
         
 
     @staticmethod
-    def normalize(izeroDataFrame: pd.DataFrame, izeroCount: int, overlaps = 0, kind: Literal["i0", "init"] = "i0"):
+    def normalize(izeroDataFrame: pd.DataFrame, izeroCount: int, overlaps = 0, kind: Literal["i0", "ovp"] = "i0"):
         """Normalizes the first stitch dataframe"""
         # catagorize points in the dataframe
         if kind == "i0":
             i0, done = StitchManager.labelDF(izeroDataFrame, kind, izeroCount)
             average = ErrorManager.averageOfAbove(i0, label="done")
 
-            izeroDataFrame = pd.concat([i0,average, done], ignore_index=True)
-            izeroDataFrame[REFL_COLUMN_NAMES["i0"]] = average[REFL_COLUMN_NAMES["Raw"]]
-            izeroDataFrame[REFL_COLUMN_NAMES["i0Err"]] = average[REFL_COLUMN_NAMES["i0Err"]]
+            df = pd.concat([i0,average, done], ignore_index=True)
+            df[REFL_COLUMN_NAMES["i0"]] = average[REFL_COLUMN_NAMES["i0"]].iloc[0]
+            df[REFL_COLUMN_NAMES["i0Err"]] = average[REFL_COLUMN_NAMES["i0Err"]].iloc[0]
 
-            izeroDataFrame[REFL_COLUMN_NAMES["R"]] = izeroDataFrame[REFL_COLUMN_NAMES["Raw"]] / izeroDataFrame[REFL_COLUMN_NAMES["i0"]]
-            izeroDataFrame[REFL_COLUMN_NAMES["R Err"]] = ((izeroDataFrame[REFL_COLUMN_NAMES["Stat Update"]]**2 
-                                                           + izeroDataFrame[REFL_COLUMN_NAMES["i0Err"]] / izeroDataFrame[REFL_COLUMN_NAMES["i0"]]**2) 
-                                                           * izeroDataFrame[REFL_COLUMN_NAMES["R"]]**2)
-        elif kind == "init":
-            i0, overlaps, done = StitchManager(izeroDataFrame, kind, izeroCount, overlaps)
+            df[REFL_COLUMN_NAMES["R"]] = df[REFL_COLUMN_NAMES["Raw"]] / df[REFL_COLUMN_NAMES["i0"]]
+            df[REFL_COLUMN_NAMES["R Err"]] = ((izeroDataFrame[REFL_COLUMN_NAMES["Stat Update"]]**2 
+                                                           + df[REFL_COLUMN_NAMES["i0Err"]] / df[REFL_COLUMN_NAMES["i0"]]**2) 
+                                                           * df[REFL_COLUMN_NAMES["R"]]**2)
+        elif kind == "ovp":
+            i0, overlaps, done = StitchManager.labelDF(izeroDataFrame, kind, izeroCount, overlaps)
             average = ErrorManager.averageOfAbove(i0, label="overlaps")
             overlaps = pd.concat([average,overlaps], ignore_index=True)
             return i0, overlaps, done
@@ -295,7 +297,7 @@ class StitchManager:
         overlapPoints: int,
     ):
         '''Scales future stitch dataframes to their prior stitch dataframes'''
-        i0, overlaps, done = StitchManager.normalize(currentDataFrame, initialOverlapCount, overlapPoints, kind="init")
+        i0, overlaps, done = StitchManager.normalize(currentDataFrame, initialOverlapCount, overlapPoints, kind="ovp")
         priorOverlaps = priorDataFrame.iloc[-overlapPoints:]
 
         overlaps[REFL_COLUMN_NAMES["i0"]] = overlaps[REFL_COLUMN_NAMES["Raw"]] / priorOverlaps[REFL_COLUMN_NAMES["R"]]

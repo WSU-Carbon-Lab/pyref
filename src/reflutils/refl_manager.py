@@ -32,9 +32,8 @@ class ErrorManager:
         """Adds a row to the dataframe with the averages of the columns"""
         averageDF = df.mean(numeric_only=True)
         averageDF[REFL_COLUMN_NAMES["catagory"]] = label
-        averageDF[REFL_COLUMN_NAMES["i0"]] = averageDF[REFL_COLUMN_NAMES["Raw"]]
-        averageDF[REFL_COLUMN_NAMES["i0Err"]] = df.var(numeric_only=True)[REFL_COLUMN_NAMES["Raw"]]
-        
+        averageDF[REFL_COLUMN_NAMES["Raw"]]
+        averageDF[REFL_COLUMN_NAMES["Stat Update"]]
         return averageDF.to_frame().T
 
     @staticmethod
@@ -274,8 +273,8 @@ class StitchManager:
             average = ErrorManager.averageOfAbove(i0, label="done")
 
             df = pd.concat([i0,average, done], ignore_index=True)
-            df[REFL_COLUMN_NAMES["i0"]] = average[REFL_COLUMN_NAMES["i0"]].iloc[0]
-            df[REFL_COLUMN_NAMES["i0Err"]] = average[REFL_COLUMN_NAMES["i0Err"]].iloc[0]
+            df[REFL_COLUMN_NAMES["i0"]] = average[REFL_COLUMN_NAMES["Raw"]].iloc[0]
+            df[REFL_COLUMN_NAMES["i0Err"]] = average[REFL_COLUMN_NAMES["Raw"]].iloc[0] * df[REFL_COLUMN_NAMES["Stat Update"]]
 
             df[REFL_COLUMN_NAMES["R"]] = df[REFL_COLUMN_NAMES["Raw"]] / df[REFL_COLUMN_NAMES["i0"]]
             df[REFL_COLUMN_NAMES["R Err"]] = ((izeroDataFrame[REFL_COLUMN_NAMES["Stat Update"]]**2 

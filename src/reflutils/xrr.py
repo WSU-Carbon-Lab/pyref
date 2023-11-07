@@ -213,7 +213,6 @@ class SingleRefl(DataBackend):
                 y=REFL_COLUMN_NAMES["R"],
                 yerr=REFL_COLUMN_NAMES["R Err"],
                 logy=True,
-                kind = "scatter",
                 *args,
                 **kwargs,
             )
@@ -224,7 +223,6 @@ class SingleRefl(DataBackend):
                 y=REFL_COLUMN_NAMES["R"],
                 yerr=REFL_COLUMN_NAMES["R Err"],
                 logy=True,
-                kind = "scatter",
                 *args,
                 **kwargs,
             )
@@ -258,28 +256,24 @@ class SingleRefl(DataBackend):
             x=REFL_COLUMN_NAMES["Q"],
             y=REFL_COLUMN_NAMES["Beam Spot"],
             logy=True,
-            kind="scatter",
         )
         obj.refl.plot(
             ax=axes[0, 1],
             x=REFL_COLUMN_NAMES["Q"],
             y=REFL_COLUMN_NAMES["Dark Spot"],
             logy=True,
-            kind="scatter",
         )
         obj.refl.plot(
             ax=axes[1, 0],
             x=REFL_COLUMN_NAMES["Q"],
             y=REFL_COLUMN_NAMES["Raw"],
             logy=True,
-            kind="scatter",
         )
         obj.refl.plot(
             ax=axes[1, 1],
             x=REFL_COLUMN_NAMES["Q"],
             y=REFL_COLUMN_NAMES["R"],
             logy=True,
-            kind="scatter",
         )
         plt.show()
 

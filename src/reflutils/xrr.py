@@ -10,6 +10,7 @@ import plotly.express as px
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from refnx.dataset import ReflectDataset
 
 sns.set_style("whitegrid")
 sns.set_palette("colorblind")
@@ -107,6 +108,9 @@ class Refl:
 
     def debug(self, *dispArgs, **dispKWArgs):
         self.backendProcessor.debug(self, *dispArgs, **dispKWArgs)
+    
+    def reflectDataSet(self):
+        return self.backendProcessor.toReflectDataSet(self)
 
 
 class DataBackend(ABC):
@@ -167,6 +171,10 @@ class DataBackend(ABC):
 
     @abstractclassmethod
     def debug(self):
+        pass
+
+    @abstractclassmethod
+    def toReflectDataSet(self):
         pass
 
 
@@ -276,6 +284,9 @@ class SingleRefl(DataBackend):
             logy=True,
         )
         plt.show()
+    
+    def toReflectDataSet(self, obj: Refl):
+        return ReflectDataset(obj.refl[REFL_COLUMN_NAMES["Q"]], obj.refl[REFL_COLUMN_NAMES["R"]], obj.refl[REFL_COLUMN_NAMES["R Err"]])
 
 
 class MultiRefl(DataBackend):

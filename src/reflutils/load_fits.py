@@ -201,10 +201,10 @@ def _getSampleName(string: str) -> str:
 class IoStream:
     def __init__(self, data_path) -> None:
         self.data_path = data_path
-        self.sample_name = self.sampleName()
         self.scan_id = self.scanId()
+        self.sample_name = self.sampleName()
 
-    def sampleName(self):
+    def _sampleName(self) -> None:
         sample_list = []
         for file in self.data_path.glob("*.fits"):
             s = file.name.split(".")
@@ -213,14 +213,27 @@ class IoStream:
                 sample_list.append(sample)
         self.sample_name = sample_list
 
+    def sampleName(self):
+        self._sampleName()
+        if len(self.sample_name) > 1:
+            print(f"Multiple Samples Found for scan {self.scan_id}")
+            print("Please select the sample name from the list below")
+            for i, sample in enumerate(self.sample_name):
+                print(f"{i}: {sample}")
+            input_name = input("Enter the number of the sample, or enter a new name: ")
+            if input_name.isdigit():
+                return self.sample_name[int(input_name)]
+            else:
+                return input_name
+
     def scanId(self):
         scan_list = []
         for file in self.data_path.glob("*.fits"):
             s = file.name.split(".")
             scan = s.lstrip(self.sample_name)
             run = scan.split("-")[0]
-            if scan not in scan_list:
-                scan_list.append(scan)
+            if run not in scan_list:
+                scan_list.append(run)
         self.scan_id = scan_list
 
 

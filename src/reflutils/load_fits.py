@@ -1,14 +1,16 @@
-from email.mime import image
-import numpy as np
 import pandas as pd
 from pathlib import Path
 from astropy.io import fits
+from shutil import copy2
+import click
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 try:
-    from reflutils._config import HEADER_LIST, HEADER_DICT
+    from reflutils._config import HEADER_LIST, HEADER_DICT, FLAGS
     from reflutils.toolkit import FileDialog
 except:
-    from _config import HEADER_LIST, HEADER_DICT
+    from _config import HEADER_LIST, HEADER_DICT, FLAGS
     from toolkit import FileDialog
 
 
@@ -115,7 +117,7 @@ class MultiReader:
             )
             if fileName:
                 headerDF["File Path"] = file
-                
+
             if (
                 i > 0
                 and headerDF[HEADER_DICT["Sample Theta"]].iat[0]
@@ -126,7 +128,7 @@ class MultiReader:
                 headerStitchedDFList.append(stitchDF)
                 imageStitchedList.append(imageList)
 
-                assert(len(stitchDF) == len(imageList))
+                assert len(stitchDF) == len(imageList)
                 headerDFList = []
                 imageList = []
 
@@ -136,38 +138,113 @@ class MultiReader:
         return headerStitchedDFList, imageStitchedList
 
 
-def _constructTests():
-    multi_fits_directory = Path(
-        "tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0"
-    ).resolve()
-    fits_directory = Path(
-        "tests/TestData/Sorted/ZnPc_P100_E180276/282.5/190.0/ZnPc_P100_E180276-00001.fits"
-    ).resolve()
-    test_single_df = Path("tests/TestData/TestSingleDataFrame.csv").resolve()
-    test_single_u = Path("tests/TestData/TestSingleImage.txt").resolve()
-    test_df = Path("tests/TestData/TestDataFrame.csv").resolve()
+class FitsSorter:
+    @staticmethod
+    def sortDirectory(dataPath: Path, sortedPath: Path, sortedStructure: str) -> None:
+        flags = FitsSorter._getFlags(
+            sortedPath=sortedPath, sortedStructure=sortedStructure
+        )
+        FitsSorter._sortByFlags(dataPath, sortedPath, flags)
 
-    single_df, single_u = FitsReader.readFile(fits_directory)
-    single_df.to_csv(test_single_df, index=False)  # type: ignore
-    np.savetxt(test_single_u, single_u)  # type: ignore
+    @staticmethod
+    def _getFlags(sortedPath: Path, sortedStructure: str) -> list:
+        global FLAGS
 
-    df, _ = MultiReader.readFile(multi_fits_directory)
-    df.to_csv(test_df, index=False)
+        structureChildren = sortedStructure.split("/")
+
+        directories = []
+        flags = []
+        for child in structureChildren:
+            if child.startswith("-"):
+                flags.append(FLAGS[child])
+            else:
+                directories.append(child)
+            directoryPath = sortedPath / "/".join(directories)
+            directoryPath.mkdir(exist_ok=True)
+        return flags
+
+    @staticmethod
+    def _sortByFlags(dataPath: Path, sortedPath: Path, flags: list):
+        headerDF = MultiReader.readHeader(dataPath, headerValues=flags, fileName=True)
+        headerDF.reindex(columns=flags)
+        with ThreadPoolExecutor() as executor:
+            list(
+                executor.map(
+                    lambda row: copyFile(row[1], sortedPath=sortedPath, flags=flags),
+                    headerDF.iterrows(),
+                )
+            )
+
+
+def copyFile(row, sortedPath: Path, flags: list) -> None:
+    sourceFile: Path = row[-1]  # type: ignore
+    targetDirectory = sortedPath
+
+    for flag in flags:
+        if flag == FLAGS["-n"]:
+            append = _getSampleName(row[flag])
+        else:
+            append = str(round(row[HEADER_DICT[flag]], 1))
+
+        targetDirectory = targetDirectory / append
+        targetDirectory.mkdir(exist_ok=True)
+
+    copy2(sourceFile, targetDirectory)
+
+
+def _getSampleName(string: str) -> str:
+    """General File Structure "Sample-ScanID.fits" this parses sample"""
+    fileName = Path(string).name.split(".")
+    return fileName[0].split("-")[0]
+
+
+class IoStream:
+    def __init__(self, data_path) -> None:
+        self.data_path = data_path
+        self.sample_name = self.sampleName()
+        self.scan_id = self.scanId()
+
+    def sampleName(self):
+        sample_list = []
+        for file in self.data_path.glob("*.fits"):
+            s = file.name.split(".")
+            sample = s.rstrip("123456789")
+            if sample not in sample_list:
+                sample_list.append(sample)
+        self.sample_name = sample_list
+
+    def scanId(self):
+        scan_list = []
+        for file in self.data_path.glob("*.fits"):
+            s = file.name.split(".")
+            scan = s.lstrip(self.sample_name)
+            run = scan.split("-")[0]
+            if scan not in scan_list:
+                scan_list.append(scan)
+        self.scan_id = scan_list
+
+
+@click.group()
+@click.argument("dir", default=os.getcwd())
+def cli():
+    reader = MultiReader()
+
+
+@click.command()
+def init():
+    dataPath = FileDialog.getDirectory(title="Select the Data Directory")
+    sortedPath = FileDialog.getDirectory(title="Select the Sorted Directory")
+
+
+@click.command()
+def main():
+    dataPath = FileDialog.getDirectory(title="Select the Data Directory")
+    sortedPath = FileDialog.getDirectory(title="Select the Sorted Directory")
+    sampleName = input("What Is the Sample Name?")
+    sortedPath = sortedPath / sampleName
+    sortedStructure = "/-en/-pol"
+    FitsSorter.sortDirectory(dataPath, sortedPath, sortedStructure)
 
 
 if __name__ == "__main__":
-    ###########################################################################
-    # # Use this to construct new test cases if needed
-    _constructTests()
-
-    ###########################################################################
-    # The outcome of this test should run approximately 12 sec
-
-    # import timeit
-
-    # fits_directory = Path("tests/TestData/CCD").resolve()
-    # # Measure the execution time for the original loadMultipleFits function
-    # timer1 = timeit.Timer(lambda: MultiReader.readHeader(fits_directory))
-
-    # # Print the execution times
-    # print("Original Load Time:", timer1.timeit(10))
+    main()

@@ -4,6 +4,7 @@ from astropy.io import fits
 from shutil import copy2
 import click
 import os
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 try:
@@ -12,6 +13,18 @@ try:
 except:
     from _config import HEADER_LIST, HEADER_DICT, FLAGS
     from toolkit import FileDialog
+
+DATA_PATH = (
+    Path("Washington State University (email.wsu.edu)")
+    / "Carbon Lab Research Group - Documents"
+    / "Synchrotron Logistics and Data"
+    / "ALS - Berkeley"
+    / "Data"
+    / "BL1101"
+)
+date = datetime.datetime.now()
+BEAMTIME = date.strftime("%Y%b")
+DAY = date.strftime("%Y %m %d")
 
 
 class FitsReader:
@@ -199,19 +212,20 @@ def _getSampleName(string: str) -> str:
 
 
 class IoStream:
-    def __init__(self, data_path) -> None:
+    def __init__(self, data_path: Path) -> None:
         self.data_path = data_path
         self.scan_id = self.scanId()
         self.sample_name = self.sampleName()
+        self.sorted_path = None
 
     def _sampleName(self) -> None:
-        sample_list = []
+        sample_list: list[str] = []
         for file in self.data_path.glob("*.fits"):
-            s = file.name.split(".")
+            s = str(file.name.split("."))
             sample = s.rstrip("123456789")
             if sample not in sample_list:
                 sample_list.append(sample)
-        self.sample_name = sample_list
+        self.sample_name = str(sample_list)
 
     def sampleName(self):
         self._sampleName()
@@ -222,42 +236,56 @@ class IoStream:
                 print(f"{i}: {sample}")
             input_name = input("Enter the number of the sample, or enter a new name: ")
             if input_name.isdigit():
-                return self.sample_name[int(input_name)]
+                return str(self.sample_name[int(input_name)])
             else:
-                return input_name
+                return str(input_name)
 
     def scanId(self):
         scan_list = []
         for file in self.data_path.glob("*.fits"):
-            s = file.name.split(".")
+            s = str(file.name.split("."))
             scan = s.lstrip(self.sample_name)
             run = scan.split("-")[0]
             if run not in scan_list:
                 scan_list.append(run)
         self.scan_id = scan_list
 
+    def sortedPath(self, path):
+        self.sorted_path = path
+        if self.sample_name not in self.sorted_path:
+            print(f"Sample {self.sample_name} not found in sorted path")
+            print(f"Creating new directory for {self.sample_name}")
+        self.sorted_path = self.sorted_path / self.sample_name
+        print(f"{self.sample_name}")
+        for en in self.sorted_path.iterdir():
+            print(f"{en.name}")
+            for pol in en.iterdir():
+                print(f"{pol.name}")
+
+    def sortData(self):
+        if self.sorted_path == None:
+            print("Please select a sorted path")
+            return
+        else:
+            FitsSorter.sortDirectory(
+                self.data_path, self.sorted_path, sortedStructure="/-en/-pol"
+            )
+            print("Data Sorted")
+
 
 @click.group()
-@click.argument("dir", default=os.getcwd())
-def cli():
-    reader = MultiReader()
+@click.option("--beam_time", "-bt", default=BEAMTIME, help="YearMonth of the beamtime")
+@click.pass_context
+def cli(ctx, beam_time):
+    ctx.ensure_object(dict)
+    ctx.obj["xrr_path"] = DATA_PATH / beam_time / "XRR"
 
 
-@click.command()
-def init():
-    dataPath = FileDialog.getDirectory(title="Select the Data Directory")
-    sortedPath = FileDialog.getDirectory(title="Select the Sorted Directory")
-
-
-@click.command()
-def main():
-    dataPath = FileDialog.getDirectory(title="Select the Data Directory")
-    sortedPath = FileDialog.getDirectory(title="Select the Sorted Directory")
-    sampleName = input("What Is the Sample Name?")
-    sortedPath = sortedPath / sampleName
-    sortedStructure = "/-en/-pol"
-    FitsSorter.sortDirectory(dataPath, sortedPath, sortedStructure)
+@cli.command()
+@click.pass_context
+def show_info(ctx):
+    click.echo(ctx.obj["xrr_path"])
 
 
 if __name__ == "__main__":
-    main()
+    cli()

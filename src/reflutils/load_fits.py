@@ -6,6 +6,10 @@ import click
 import os
 import datetime
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import Pool
+import art
+import numpy as np
+from tqdm import tqdm
 
 try:
     from reflutils._config import HEADER_LIST, HEADER_DICT, FLAGS
@@ -27,6 +31,18 @@ BEAMTIME = date.strftime("%Y%b")
 DAY = date.strftime("%Y %m %d")
 
 
+class bcolors:
+    HEADER = "\033[95m"
+    OKBLUE = "\033[94m"
+    OKCYAN = "\033[96m"
+    OKGREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+
+
 class FitsReader:
     @staticmethod
     def readHeader(fitsFilePath: Path, headerValues: list[str] = HEADER_LIST) -> dict:
@@ -35,6 +51,8 @@ class FitsReader:
 
         return {
             HEADER_DICT[key]: round(headerData[key], 4)
+            if isinstance(headerData[key], (int, float))
+            else headerData[key]
             for key in headerValues
             if key in headerData
         }
@@ -75,7 +93,7 @@ class MultiReader:
                 FitsReader.readHeader(file, headerValues=headerValues), index=[0]
             )
             if fileName:
-                headerDF["File Path"] = file
+                headerDF["File Path"] = file.name
             headerDFList.append(headerDF)
 
         return pd.concat(headerDFList)
@@ -147,7 +165,6 @@ class MultiReader:
 
             headerDFList.append(headerDF)
             imageList.append(FitsReader.readImage(file))
-
         return headerStitchedDFList, imageStitchedList
 
 
@@ -211,80 +228,286 @@ def _getSampleName(string: str) -> str:
     return fileName[0].split("-")[0]
 
 
-class IoStream:
-    def __init__(self, data_path: Path) -> None:
-        self.data_path = data_path
-        self.scan_id = self.scanId()
-        self.sample_name = self.sampleName()
-        self.sorted_path = None
+class DatabaseInterface:
+    def __init__(self, experiment_directory: Path) -> None:
+        self.experiment_directory = experiment_directory
+        self.processed_directory = experiment_directory / "Processed"
+        self.day_information: None | pd.DataFrame | dict = None
 
-    def _sampleName(self) -> None:
-        sample_list: list[str] = []
-        for file in self.data_path.glob("*.fits"):
-            s = str(file.name.split("."))
-            sample = s.rstrip("123456789")
-            if sample not in sample_list:
-                sample_list.append(sample)
-        self.sample_name = str(sample_list)
+        if not self.processed_directory.exists():
+            self.processed_directory.mkdir()
+            print(f"{bcolors.OKGREEN}Created Processed Directory{bcolors.ENDC}")
 
-    def sampleName(self):
-        self._sampleName()
-        if len(self.sample_name) > 1:
-            print(f"Multiple Samples Found for scan {self.scan_id}")
-            print("Please select the sample name from the list below")
-            for i, sample in enumerate(self.sample_name):
-                print(f"{i}: {sample}")
-            input_name = input("Enter the number of the sample, or enter a new name: ")
-            if input_name.isdigit():
-                return str(self.sample_name[int(input_name)])
+        os.system("cls")
+        art.tprint("XRR Sorter")
+
+        self._beamtime = self.experiment_directory.parent.name
+        print(f"{bcolors.HEADER}Beamtime: {self._beamtime}{bcolors.ENDC}")
+        print("=" * os.get_terminal_size().columns)
+        print("/" * os.get_terminal_size().columns)
+        print("=" * os.get_terminal_size().columns)
+
+        self.main_menue()
+        self.select_day_to_sort()
+
+        os.system("cls")
+        art.tprint("XRR Sorter")
+
+        self._day = self.data_path.name
+        self._beamtime = self.experiment_directory.parent.name
+        print(f"{bcolors.HEADER}{'Beamtime:':<12} {self._beamtime}{bcolors.ENDC}")
+        print(f"{bcolors.HEADER}{'Day:':<12} {self._day}{bcolors.ENDC}")
+        print("=" * os.get_terminal_size().columns)
+        print("/" * os.get_terminal_size().columns)
+        print("=" * os.get_terminal_size().columns)
+
+        self.scan_menue()
+
+        self.sort_scan()
+
+        restart = input("reastart?")
+        if restart in ["y", "Y", "yes", "Yes", "YES"]:
+            self.__init__(self.experiment_directory)
+
+    def main_menue(self):
+        # TODO: Move to seperate object that can be initialized
+        print(f" {'Day:':<12}{'Experiment Name:':<30}{'Number of scans:':<10}")
+        for i, directory in enumerate(self.experiment_directory.iterdir()):
+            n_scans = N_scans(directory)
+            if directory.name == "Processed" or directory.name == ".macro":
+                print(f"{bcolors.WARNING} {i:<12}{directory.name:<30}{bcolors.ENDC}")
+            elif n_scans == 0:
+                print(
+                    f"{bcolors.FAIL} {i:<12}{directory.name:<30}{n_scans:<10}{bcolors.ENDC}"
+                )
             else:
-                return str(input_name)
+                print(
+                    f"{bcolors.OKGREEN} {i:<12}{directory.name:<30}{n_scans:<10}{bcolors.ENDC}"
+                )
+        print("-" * os.get_terminal_size().columns)
 
-    def scanId(self):
-        scan_list = []
-        for file in self.data_path.glob("*.fits"):
-            s = str(file.name.split("."))
-            scan = s.lstrip(self.sample_name)
-            run = scan.split("-")[0]
-            if run not in scan_list:
-                scan_list.append(run)
-        self.scan_id = scan_list
+    def select_day_to_sort(self):
+        __selection = input(f"Select a directory to sort or enter to restart:")
+        if __selection == "":
+            self.__init__(self.experiment_directory)
 
-    def sortedPath(self, path):
-        self.sorted_path = path
-        if self.sample_name not in self.sorted_path:
-            print(f"Sample {self.sample_name} not found in sorted path")
-            print(f"Creating new directory for {self.sample_name}")
-        self.sorted_path = self.sorted_path / self.sample_name
-        print(f"{self.sample_name}")
-        for en in self.sorted_path.iterdir():
-            print(f"{en.name}")
-            for pol in en.iterdir():
-                print(f"{pol.name}")
+        elif int(__selection) > len(list(self.experiment_directory.iterdir())):
+            print("Invalid Selection")
+            self.select_day_to_sort()
 
-    def sortData(self):
-        if self.sorted_path == None:
-            print("Please select a sorted path")
-            return
-        else:
-            FitsSorter.sortDirectory(
-                self.data_path, self.sorted_path, sortedStructure="/-en/-pol"
+        _selection = int(__selection)
+        selection = list(self.experiment_directory.iterdir())[_selection]
+        print(f"Selected: {selection.name}\n")
+        self.data_path = selection
+        if self.data_path.name == "Processed":
+            print("Cannot sort processed data")
+            self.__init__(self.experiment_directory)
+
+        elif self.data_path.name == ".macro":
+            print("Cannot sort macro files")
+            self.__init__(self.experiment_directory)
+
+        elif N_scans(self.data_path) == 0:
+            print("No scans in directory")
+            self.__init__(self.experiment_directory)
+
+    def scan_menue(self, names: bool = True):
+        # TODO: Move to seperate object that can be initialized
+        print(
+            f" {' ':<4}{'Scan Number:':<20}{'Sample Name':<15}{'Elapsed Time':<20}{'Pol': <12}{'Energies:':<10}"
+        )
+        if isinstance(self.day_information, type(None)):
+            self.day_information = pd.DataFrame(
+                columns=[
+                    "Scan",
+                    "Sample Name",
+                    "Pol",
+                    "Energies",
+                    "Elapsed Time",
+                    "Meta Data",
+                ]
             )
-            print("Data Sorted")
+            self.scans = list(self.data_path.iterdir())  # type: ignore
+            df_list = []
+            for i, scan in enumerate(self.scans):
+                scan_name = scan.name
+                if scan_name.startswith("CCD Scan"):
+                    series = pd.Series()
+                    series["Scan"] = i
+                    series["Scan Number"] = scan_name
+                    header = HEADER_LIST.append("DATE")
+                    meta_data = MultiReader.readHeader(scan / "CCD", fileName=True)
+                    series["Meta Data"] = meta_data
+                    series["Pol"] = series["Meta Data"]["POL"].iat[0]
+                    energies = meta_data["Energy"].round(1).value_counts()  # type: ignore
+                    n_fits = energies.to_numpy()
+
+                    series["Energies"] = ", ".join(
+                        [f"{en}, ({n_fits[i]})" for i, en in enumerate(energies.index)]
+                    )
+                    scan_num = scan.name.split(" ")[-1]
+                    series["Sample Name"] = (
+                        series["Meta Data"]["File Path"]
+                        .apply(lambda x: x.split(scan_num[0])[0])
+                        .iloc[0]
+                    )
+                    series["Elapsed Time"] = str(
+                        series["Meta Data"]["Date"].astype("datetime64[ns]").max()
+                        - series["Meta Data"]["Date"].astype("datetime64[ns]").min()
+                    ).split(" ")[-1]
+                    self.show_scans(series, n_fits)
+                    df_list.append(series)
+            self.day_information = pd.concat(df_list, axis=1).transpose()
+            self.day_information.set_index("Scan", inplace=True)
+        else:
+            for i, series in self.day_information.iterrows():  # type: ignore
+                energies = series["Meta Data"]["Energy"].round(1).value_counts()  # type: ignore
+                n_fits = energies.to_numpy()
+                self.show_scans(series, n_fits, index=i)
+
+        print("-" * os.get_terminal_size().columns)
+        if names:
+            self.ensure_names()
+
+    def ensure_names(self):
+        correct = input("Are all sample names correct? [y, n]")
+        if correct in ["y", "Y", "yes", "Yes", "YES"]:
+            os.system("cls")
+            art.tprint("XRR Sorter")
+            print(f"{bcolors.HEADER}{'Beamtime:':<12} {self._beamtime}{bcolors.ENDC}")
+            print(f"{bcolors.HEADER}{'Day:':<12} {self._day}{bcolors.ENDC}")
+            print("=" * os.get_terminal_size().columns)
+            print("/" * os.get_terminal_size().columns)
+            print("=" * os.get_terminal_size().columns)
+            self.scan_menue(names=False)
+
+        elif correct in ["n", "N", "no", "No", "NO"]:
+            file_num = input("Enter the scan number to change: ")
+            old_sample_name = self.day_information["Sample Name"].iloc[int(file_num)]  # type: ignore
+            print(f"Current Sample Name: {old_sample_name}")
+            print(f"The following scans share this name:")
+            similar_scans = self.day_information[  # type: ignore
+                self.day_information["Sample Name"] == old_sample_name  # type: ignore
+            ]
+            print(similar_scans["Scan Number"].to_string())
+            apply_to_all = input("Apply to all? [y, n]")
+            new_sample_name = input("Enter the new sample name: ")
+            if apply_to_all in ["y", "Y", "yes", "Yes", "YES"]:
+                for i in similar_scans.index:
+                    scan = self.scans[i]
+                    scan_num = scan.name.split(" ")[-1]
+                    self.rename_fits(scan, new_sample_name, scan_num)
+                    self.day_information["Sample Name"].iloc[i] = new_sample_name  # type: ignore
+            elif apply_to_all in ["n", "N", "no", "No", "NO"]:
+                scan = self.scans[int(file_num)]
+                scan_num = scan.name.split(" ")[-1]
+                self.rename_fits(scan, new_sample_name, scan_num)
+                self.day_information["Sample Name"].iloc[int(file_num)] = new_sample_name  # type: ignore
+            elif apply_to_all == "":
+                self.ensure_names()
+            else:
+                print("Invalid input")
+                self.ensure_names()
+
+            os.system("cls")
+            art.tprint("XRR Sorter")
+            print(f"{bcolors.HEADER}{'Beamtime:':<12} {self._beamtime}{bcolors.ENDC}")
+            print(f"{bcolors.HEADER}{'Day:':<12} {self._day}{bcolors.ENDC}")
+            print("=" * os.get_terminal_size().columns)
+            print("/" * os.get_terminal_size().columns)
+            print("=" * os.get_terminal_size().columns)
+            self.scan_menue()
+        elif correct == "":
+            self.__init__(self.experiment_directory)
+        else:
+            print("Invalid input")
+            self.ensure_names()
+
+    def rename_fits(self, scan: Path, sample_name: str, scan_num: str):
+        ccd = scan / "CCD"
+        for file in ccd.iterdir():
+            if file.name.endswith(".fits"):
+                image_number = file.name.split("-")[-1].split(".")[0]
+                new_name = f"{sample_name}{scan_num}-{image_number}.fits"
+                file.rename(file.parent / new_name)
+
+    def show_scans(self, series, n_fits, index=None):
+        if index != None:
+            if np.any(n_fits < 12):
+                print(
+                    f"{bcolors.FAIL} {index:<4}{series['Scan Number']:<20}{series['Sample Name']:<15}{series['Elapsed Time']:<20}{series['Pol']:<12}{series['Energies']:<10}{bcolors.ENDC}"  # type: ignore
+                )
+            else:
+                print(
+                    f"{bcolors.OKGREEN} {index:<4}{series['Scan Number']:<20}{series['Sample Name']:<15}{series['Elapsed Time']:<20}{series['Pol']:<12}{series['Energies']:<10}{bcolors.ENDC}"  # type: ignore
+                )
+        else:
+            if np.any(n_fits < 12):
+                print(
+                    f"{bcolors.FAIL} {series['Scan']:<4}{series['Scan Number']:<20}{series['Sample Name']:<15}{series['Elapsed Time']:<20}{series['Pol']:<12}{series['Energies']:<10}{bcolors.ENDC}"  # type: ignore
+                )
+            else:
+                print(
+                    f"{bcolors.OKGREEN} {series['Scan']:<4}{series['Scan Number']:<20}{series['Sample Name']:<15}{series['Elapsed Time']:<20}{series['Pol']:<12}{series['Energies']:<10}{bcolors.ENDC}"  # type: ignore
+                )
+
+    def _sort_scan(self, scan_info: pd.Series):
+        target_dir = scan_info["Target"]
+        ccd_path = self.data_path / scan_info["Scan Number"] / "CCD"
+        energies = scan_info["Energies"].split(",")[::2]
+        scan_name = scan_info["Scan Number"]
+        pol = str(scan_info["Pol"])
+        with click.progressbar(
+            enumerate(energies),
+            label=f"Sorting Scan {bcolors.WARNING}{scan_name}{bcolors.ENDC}:",
+        ) as bar:
+            for i, energy in bar:
+                df = scan_info["Meta Data"][
+                    scan_info["Meta Data"]["Energy"].round(1) == float(energy)
+                ]
+
+                for j, file in df.iterrows():
+                    file_path = ccd_path / file["File Path"]
+                    target_path = target_dir / energy / pol
+                    if not target_path.exists():
+                        target_path.mkdir(parents=True)
+                    copy2(file_path, target_path)
+
+    def sort_scan(self):
+        # TODO: Set this up so the folders are initialized before the sorting begins
+        print("Sorting Scans...")
+        rows = []
+        for i, row in self.day_information.iterrows():
+            sample_directory = self.processed_directory / row["Sample Name"]
+            if not sample_directory.exists():
+                sample_directory.mkdir()
+
+            processed_scan_dir = sample_directory / row["Scan Number"]
+            if not processed_scan_dir.exists():
+                processed_scan_dir.mkdir()
+
+            row["Target"] = processed_scan_dir
+            rows.append(row)
+
+        with Pool() as p:
+            p.map(self._sort_scan, rows)
 
 
-@click.group()
+def N_scans(data_dir: Path):
+    n_scans = len(
+        [dir for dir in data_dir.iterdir() if dir.name.startswith("CCD Scan")]
+    )
+    return n_scans
+
+
+@click.command()
 @click.option("--beam_time", "-bt", default=BEAMTIME, help="YearMonth of the beamtime")
-@click.pass_context
-def cli(ctx, beam_time):
-    ctx.ensure_object(dict)
-    ctx.obj["xrr_path"] = DATA_PATH / beam_time / "XRR"
-
-
-@cli.command()
-@click.pass_context
-def show_info(ctx):
-    click.echo(ctx.obj["xrr_path"])
+def cli(
+    beam_time,
+):
+    os.system("cls")
+    experiment_directory = Path.home() / DATA_PATH / beam_time / "XRR"
+    interface = DatabaseInterface(experiment_directory)
 
 
 if __name__ == "__main__":

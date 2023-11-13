@@ -23,6 +23,7 @@ HEADER_DICT: Final[dict[str, str]] = {
     "Higher Order Suppressor": "HOS",
     "EPU Polarization": "POL",
     "EXPOSURE": "Exposure",
+    "DATE": "Date",
 }
 
 REFL_COLUMN_NAMES: Final[dict] = HEADER_DICT | {
@@ -38,7 +39,7 @@ REFL_COLUMN_NAMES: Final[dict] = HEADER_DICT | {
     "R Err": "Err",
     "Q": "Q",
     "i0": "izero",
-    "i0Err": "izeroErr"
+    "i0Err": "izeroErr",
 }
 
 POL: Final[dict] = {

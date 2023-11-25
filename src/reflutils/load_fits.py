@@ -273,6 +273,8 @@ class DatabaseInterface:
         # TODO: Move to seperate object that can be initialized
         print(f" {'Day:':<12}{'Experiment Name:':<30}{'Number of scans:':<10}")
         for i, directory in enumerate(self.experiment_directory.iterdir()):
+            if directory.is_file():
+                continue
             n_scans = N_scans(directory)
             if directory.name == "Processed" or directory.name == ".macro":
                 print(f"{bcolors.WARNING} {i:<12}{directory.name:<30}{bcolors.ENDC}")
@@ -468,7 +470,7 @@ class DatabaseInterface:
 
                 for j, file in df.iterrows():
                     file_path = ccd_path / file["File Path"]
-                    target_path = target_dir / energy / pol
+                    target_path = target_dir / energy.replace(" ", "") / pol
                     if not target_path.exists():
                         target_path.mkdir(parents=True)
                     copy2(file_path, target_path)
@@ -488,9 +490,8 @@ class DatabaseInterface:
 
             row["Target"] = processed_scan_dir
             rows.append(row)
-
-        with Pool() as p:
-            p.map(self._sort_scan, rows)
+        with Pool() as pool:
+            pool.map(self._sort_scan, rows)
 
 
 def N_scans(data_dir: Path):

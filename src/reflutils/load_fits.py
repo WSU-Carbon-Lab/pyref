@@ -1,3 +1,8 @@
+""" 
+Im sorry to whoever has to read this code.
+"""
+
+from email.mime import image
 import pandas as pd
 from pathlib import Path
 from astropy.io import fits
@@ -10,6 +15,7 @@ from multiprocessing import Pool
 import art
 import numpy as np
 from tqdm import tqdm
+import h5py
 
 try:
     from reflutils._config import HEADER_LIST, HEADER_DICT, FLAGS
@@ -121,7 +127,7 @@ class MultiReader:
                 FitsReader.readHeader(file, headerValues=headerValues), index=[i]
             )
             if fileName:
-                headerDF["File Path"] = file
+                headerDF["File Path"] = file.name
             headerDFList.append(headerDF)
             imageList.append(FitsReader.readImage(file))
 
@@ -135,36 +141,42 @@ class MultiReader:
     ) -> tuple[list[pd.DataFrame], list[list]]:
         if dataFilePath == None:
             raise ValueError("Restart operation and choose a file path")
+        pol = dataFilePath.name
+        en = dataFilePath.parent.name
+        scan_number = dataFilePath.parent.parent.stem
+        sample = dataFilePath.parent.parent.parent.stem
+        sample_path = dataFilePath.parent.parent.parent
 
-        imageList = []
-        headerDFList = []
+        file_name = f"{sample}_{en}_{pol} ({scan_number})"
+        if (sample_path / f"{file_name}.npz").exists():
+            loaded_images = np.load(sample_path / f"{file_name}.npz")
+            images = [loaded_images[key] for key in loaded_images.keys()]
+            meta_data = pd.read_parquet(sample_path / f"{file_name}.parquet")
+        else:
+            meta_data, images = MultiReader.readFile(
+                dataFilePath, headerValues=headerValues, fileName=fileName
+            )
+            meta_data.to_parquet(sample_path / f"{file_name}.parquet")
+            np.savez(sample_path / f"{file_name}.npz", *images)
+
         headerStitchedDFList = []
         imageStitchedList = []
-        offset = 0
-        for i, file in enumerate(dataFilePath.glob("*.fits")):
-            headerDF = pd.DataFrame(
-                FitsReader.readHeader(file, headerValues=headerValues),
-                index=[i],
-            )
-            if fileName:
-                headerDF["File Path"] = file
-
+        j = 0
+        for i, _ in enumerate(images):
             if (
-                i > 0
-                and headerDF[HEADER_DICT["Sample Theta"]].iat[0]
-                < headerDFList[-1][HEADER_DICT["Sample Theta"]].iat[0]
-            ) or (i == len(list(dataFilePath.glob("*.fits"))) - 1):
-                offset += i + 1
-                stitchDF = pd.concat(headerDFList).reset_index(drop=True)
-                headerStitchedDFList.append(stitchDF)
-                imageStitchedList.append(imageList)
+                i == 0
+                or meta_data["Theta"].iloc[i] >= meta_data["Theta"].iloc[i - 1]
+                and i < len(images) - 1
+            ):
+                continue
+            else:
+                if i == len(images) - 1:
+                    i += 1
+                stitch_df = meta_data.iloc[j:i].copy()
+                headerStitchedDFList.append(stitch_df)
+                imageStitchedList.append(images[j:i])
+                j = i
 
-                assert len(stitchDF) == len(imageList)
-                headerDFList = []
-                imageList = []
-
-            headerDFList.append(headerDF)
-            imageList.append(FitsReader.readImage(file))
         return headerStitchedDFList, imageStitchedList
 
 
@@ -338,8 +350,11 @@ class DatabaseInterface:
                     series["Scan"] = i
                     series["Scan Number"] = scan_name
                     header = HEADER_LIST.append("DATE")
-                    meta_data = MultiReader.readHeader(scan / "CCD", fileName=True)
+                    meta_data, image_data = MultiReader.readFile(
+                        scan / "CCD", fileName=True
+                    )
                     series["Meta Data"] = meta_data
+                    series["Image Data"] = image_data
                     series["Pol"] = series["Meta Data"]["POL"].iat[0]
                     energies = meta_data["Energy"].round(1).value_counts()  # type: ignore
                     n_fits = energies.to_numpy()
@@ -350,7 +365,7 @@ class DatabaseInterface:
                     scan_num = scan.name.split(" ")[-1]
                     series["Sample Name"] = (
                         series["Meta Data"]["File Path"]
-                        .apply(lambda x: x.split(scan_num[0])[0])
+                        .apply(lambda x: str(x).split(scan_num[0])[0])
                         .iloc[0]
                     )
                     series["Elapsed Time"] = str(
@@ -464,16 +479,29 @@ class DatabaseInterface:
             label=f"Sorting Scan {bcolors.WARNING}{scan_name}{bcolors.ENDC}:",
         ) as bar:
             for i, energy in bar:
-                df = scan_info["Meta Data"][
+                mask = (
                     scan_info["Meta Data"]["Energy"].round(1) == float(energy)
-                ]
-
+                ).to_numpy(dtype=bool)
+                df = scan_info["Meta Data"][mask]
+                images = np.asarray(scan_info["Image Data"])[mask]
+                en = energy.replace(" ", "")
                 for j, file in df.iterrows():
                     file_path = ccd_path / file["File Path"]
-                    target_path = target_dir / energy.replace(" ", "") / pol
+                    target_path = target_dir / en / pol
                     if not target_path.exists():
                         target_path.mkdir(parents=True)
                     copy2(file_path, target_path)
+                saved_df = df.drop(columns=["Date", "File Path"], axis=1)
+                assert len(images) == len(saved_df)
+                saved_df.to_parquet(
+                    target_dir.parent
+                    / f"{target_dir.parent.stem}_{en}_{pol} ({scan_name}).parquet"
+                )
+                np.savez(
+                    target_dir.parent
+                    / f"{target_dir.parent.stem}_{en}_{pol} ({scan_name}).npz",
+                    *images,
+                )
 
     def sort_scan(self):
         # TODO: Set this up so the folders are initialized before the sorting begins

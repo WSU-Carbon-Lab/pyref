@@ -15,12 +15,19 @@ from refnx.dataset import ReflectDataset
 sns.set_style("whitegrid")
 sns.set_palette("colorblind")
 
+try:
+    from .refl_manager import ReflFactory, StitchManager, OutlierDetection
+    from .load_fits import MultiReader
+    from .refl_reuse import Reuse
+    from .toolkit import FileDialog
+    from ._config import REFL_COLUMN_NAMES
 
-from .refl_manager import ReflFactory, StitchManager, OutlierDetection
-from .load_fits import MultiReader
-from .refl_reuse import Reuse
-from .toolkit import FileDialog
-from ._config import REFL_COLUMN_NAMES
+except ImportError:
+    from refl_manager import ReflFactory, StitchManager, OutlierDetection
+    from load_fits import MultiReader
+    from refl_reuse import Reuse
+    from toolkit import FileDialog
+    from _config import REFL_COLUMN_NAMES
 
 
 class Refl:
@@ -92,13 +99,15 @@ class Refl:
         self.backendKey: Literal["single", "multi"] = backend
         self.backendProcessor = BACKEND[backend](*backArgs, **backKWArgs)
         self.backendProcessor.getData(self)
-        self.backendProcessor.saveData(self)
 
     def __str__(self) -> str:
         return self.refl.__str__()
 
-    def saveData(self, savePath):
-        self.backendProcessor.saveData(self, savePath)
+    def to_parquet(self, savePath=None):
+        self.backendProcessor.saveData(self, savePath, kind="parquet")
+
+    def to_csv(self, savePath=None):
+        self.backendProcessor.saveData(self, savePath, kind="csv")
 
     def plot(self, *pltArgs, **pltKWArgs):
         self.backendProcessor.plot(self, *pltArgs, **pltKWArgs)
@@ -108,7 +117,7 @@ class Refl:
 
     def debug(self, *dispArgs, **dispKWArgs):
         self.backendProcessor.debug(self, *dispArgs, **dispKWArgs)
-    
+
     def reflectDataSet(self):
         return self.backendProcessor.toReflectDataSet(self)
 
@@ -211,8 +220,35 @@ class SingleRefl(DataBackend):
         else:
             raise ValueError("Invalid Data Source - choose 'csv' or 'fits'")
 
-    def saveData(self, obj: Refl):
-        Reuse.saveForReuse(obj)
+    def saveData(
+        self,
+        obj: Refl,
+        savePath: Path | None = None,
+        kind: Literal["parquet", "csv"] = "parquet",
+    ):
+        if isinstance(savePath, type(None)):
+            pol = obj.path.name
+            en = obj.path.parent.name
+            scan_number = obj.path.parent.parent.stem
+            sample = obj.path.parent.parent.parent.stem
+            sample_path = obj.path.parent.parent.parent
+            file_name = f"{sample}_{en}_{pol}_refl ({scan_number})"
+            if kind == "parquet":
+                savePath = sample_path / f"{file_name}.parquet"
+            elif kind == "csv":
+                csv_loc = (
+                    Path.home()
+                    / "Washington State University (email.wsu.edu)"
+                    / "Carbon Lab Research Group - Documents"
+                    / "Harlan Heilman"
+                    / ".refl"
+                    / ".csv"
+                )
+                savePath = csv_loc / f"{file_name}.csv"
+        if kind == "csv":
+            obj.refl.to_csv(savePath, index=False)
+        elif kind == "parquet":
+            obj.refl.to_parquet(savePath)
 
     def plot(self, obj: Refl, *args, **kwargs):
         if "ax" in kwargs.keys() and isinstance(kwargs["ax"], plt.Axes):
@@ -284,9 +320,13 @@ class SingleRefl(DataBackend):
             logy=True,
         )
         plt.show()
-    
+
     def toReflectDataSet(self, obj: Refl):
-        return ReflectDataset(obj.refl[REFL_COLUMN_NAMES["Q"]], obj.refl[REFL_COLUMN_NAMES["R"]], obj.refl[REFL_COLUMN_NAMES["R Err"]])
+        return ReflectDataset(
+            obj.refl[REFL_COLUMN_NAMES["Q"]],
+            obj.refl[REFL_COLUMN_NAMES["R"]],
+            obj.refl[REFL_COLUMN_NAMES["R Err"]],
+        )
 
 
 class MultiRefl(DataBackend):
@@ -428,5 +468,4 @@ BACKEND: Final[dict] = {
 }
 
 if __name__ == "__main__":
-    test1 = Refl(backend="multi")
-    test1.plot(kind="en")
+    test1 = Refl()

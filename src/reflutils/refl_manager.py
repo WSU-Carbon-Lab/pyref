@@ -11,9 +11,14 @@ from warnings import warn
 
 import matplotlib.pyplot as plt
 
-from ._config import REFL_COLUMN_NAMES
-from .image_manager import ImageProcs
-from .toolkit import XrayDomainTransform
+try:
+    from ._config import REFL_COLUMN_NAMES
+    from .image_manager import ImageProcs
+    from .toolkit import XrayDomainTransform
+except ImportError:
+    from _config import REFL_COLUMN_NAMES
+    from image_manager import ImageProcs
+    from toolkit import XrayDomainTransform
 
 
 class ErrorManager:
@@ -85,16 +90,16 @@ class ErrorManager:
             )
         else:
             raise ValueError(f"{refl} not in dataframe")
-        
+
         cols = df.drop(columns=[refl, var]).columns
         mean = df.copy()[cols].loc[:meanCutoff].mean().round(4)
         for col in cols:
-            df.loc[:,col].iloc[:meanCutoff] = mean[col]
-        
+            df.loc[:, col].iloc[:meanCutoff] = mean[col]
+
         df[refl].iloc[:meanCutoff] = weightedAverage
         df[var].iloc[:meanCutoff] = weightedVariance
 
-        df.drop(df.index[:meanCutoff -1], inplace=True)
+        df.drop(df.index[: meanCutoff - 1], inplace=True)
         df.reset_index(drop=True, inplace=True)
 
         if not inplace:
@@ -244,7 +249,7 @@ class ReflFactory:
         Main process for generating the initial reflectivity DataFrame. This initialized important columns such as the error, spot intensities and other values. This appends to the metaData information collected from the imageDF
         """
         reflDF = ReflFactory.getRefl(imageDF)
-        reflDF.reset_index(drop=True, inplace=True)
+        metaData.reset_index(drop=True, inplace=True)
 
         reflDF[REFL_COLUMN_NAMES["Raw"]] = (
             reflDF[REFL_COLUMN_NAMES["Beam Spot"]]
@@ -387,18 +392,26 @@ class OverlapFactory:
     def getOverlap(initialDataFrame, overlapDataFrame):
         initialPoint = overlapDataFrame[REFL_COLUMN_NAMES["Q"]].iat[0]
 
-        izeroNumber = initialDataFrame[REFL_COLUMN_NAMES["Beam Current"]].where(initialDataFrame[REFL_COLUMN_NAMES["Q"]] == 0).count()
+        izeroNumber = (
+            initialDataFrame[REFL_COLUMN_NAMES["Beam Current"]]
+            .where(initialDataFrame[REFL_COLUMN_NAMES["Q"]] == 0)
+            .count()
+        )
 
-        initialOverlapPoints = overlapDataFrame[REFL_COLUMN_NAMES["Beam Current"]].where(overlapDataFrame[REFL_COLUMN_NAMES["Q"]] == initialPoint).count()
-        
+        initialOverlapPoints = (
+            overlapDataFrame[REFL_COLUMN_NAMES["Beam Current"]]
+            .where(overlapDataFrame[REFL_COLUMN_NAMES["Q"]] == initialPoint)
+            .count()
+        )
+
         numberOfOverlaps = 1
         for i, q in enumerate(reversed(initialDataFrame[REFL_COLUMN_NAMES["Q"]])):
             if q == overlapDataFrame[REFL_COLUMN_NAMES["Q"]].iat[0]:
                 numberOfOverlaps = i
                 break
         return izeroNumber, initialOverlapPoints, numberOfOverlaps + 1
-    
-    
+
+
 class OutlierDetection:
     """
     Wrapper class for removing outliers from the dataset.
@@ -449,8 +462,13 @@ class StitchManager:
             izeroDataFrame[REFL_COLUMN_NAMES["R"]] / izero
         )
 
-        izeroDataFrame[REFL_COLUMN_NAMES["R Err"]] = (izeroDataFrame[REFL_COLUMN_NAMES["R"]]**2) * ((izeroDataFrame['k'] / izeroDataFrame[REFL_COLUMN_NAMES["Raw"]]) + (izeroVar / izero**2))
-        izeroDataFrame.drop(index = 0, inplace=True)
+        izeroDataFrame[REFL_COLUMN_NAMES["R Err"]] = (
+            izeroDataFrame[REFL_COLUMN_NAMES["R"]] ** 2
+        ) * (
+            (izeroDataFrame["k"] / izeroDataFrame[REFL_COLUMN_NAMES["Raw"]])
+            + (izeroVar / izero**2)
+        )
+        izeroDataFrame.drop(index=0, inplace=True)
 
     @staticmethod
     def getScaled(
@@ -486,15 +504,15 @@ class StitchManager:
 
     @staticmethod
     def replace(currentDataFrame: pd.DataFrame, priorDataFrame: pd.DataFrame, overlaps):
-        mean = (currentDataFrame[:overlaps] + priorDataFrame[-overlaps:].values)/2
+        mean = (currentDataFrame[:overlaps] + priorDataFrame[-overlaps:].values) / 2
         currentDataFrame[:overlaps] = mean
         priorDataFrame.drop(priorDataFrame.tail(overlaps).index, inplace=True)
 
-
     @staticmethod
     def scaleDataFrame(reflDataFrames: list[pd.DataFrame]):
-        
-        izeroCount, initialOverlapCount, overlaps = OverlapFactory.getOverlap(reflDataFrames[0], reflDataFrames[1])
+        izeroCount, initialOverlapCount, overlaps = OverlapFactory.getOverlap(
+            reflDataFrames[0], reflDataFrames[1]
+        )
 
         for i, df in enumerate(reflDataFrames):
             if i == 0:
@@ -502,19 +520,24 @@ class StitchManager:
             else:
                 if i == len(reflDataFrames) - 1:
                     test = 0
-                StitchManager.getScaled(df, reflDataFrames[i - 1], initialOverlapCount, overlaps)
-        
+                StitchManager.getScaled(
+                    df, reflDataFrames[i - 1], initialOverlapCount, overlaps
+                )
+
         return pd.concat(reflDataFrames, ignore_index=True)
 
 
-
 if __name__ == "__main__":
-    testInitial = pd.DataFrame({
-        "Q": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    })
-    testOverlap = pd.DataFrame({
-        "Q": [7,7, 8, 9, 10, 11, 12, 13, 14, 15],
-    })
+    testInitial = pd.DataFrame(
+        {
+            "Q": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        }
+    )
+    testOverlap = pd.DataFrame(
+        {
+            "Q": [7, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        }
+    )
     testInitial["Q"][:2] = testOverlap["Q"][:2]
     print(testInitial)
     # print(OverlapFactory.getOverlaps(testInitial, testOverlap))

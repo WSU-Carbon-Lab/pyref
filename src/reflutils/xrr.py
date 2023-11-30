@@ -29,6 +29,15 @@ except ImportError:
     from toolkit import FileDialog
     from _config import REFL_COLUMN_NAMES
 
+def hdh_path():
+    path = (
+        Path.home()
+        / "Washington State University (email.wsu.edu)"
+        / "Carbon Lab Research Group - Documents"
+    )
+    hdh_path = path / next(path.glob("*Harlan Heilman*"))
+    csv = hdh_path / "Harlan Heilman" / ".refl" / ".csv"
+    return csv
 
 class Refl:
     """
@@ -236,14 +245,7 @@ class SingleRefl(DataBackend):
             if kind == "parquet":
                 savePath = sample_path / f"{file_name}.parquet"
             elif kind == "csv":
-                csv_loc = (
-                    Path.home()
-                    / "Washington State University (email.wsu.edu)"
-                    / "Carbon Lab Research Group - Documents"
-                    / "Harlan Heilman"
-                    / ".refl"
-                    / ".csv"
-                )
+                csv_loc = hdh_path()
                 savePath = csv_loc / f"{file_name}.csv"
         if kind == "csv":
             obj.refl.to_csv(savePath, index=False)

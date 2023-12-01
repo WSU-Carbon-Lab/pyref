@@ -14,8 +14,6 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
 import art
 import numpy as np
-from tqdm import tqdm
-import h5py
 
 try:
     from reflutils._config import HEADER_LIST, HEADER_DICT, FLAGS

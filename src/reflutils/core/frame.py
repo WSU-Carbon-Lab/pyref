@@ -7,6 +7,7 @@ associated methods for working with reflectometry data.
 @Author: Harlan Heilman
 """
 
+import warnings
 from typing import Union
 
 import numpy as np
@@ -36,6 +37,11 @@ class ReflDataFrame(pd.DataFrame):
 
         if isinstance(raw_images, ArrayLike):
             self.raw_images = raw_images
+            self.meta_data = meta_data
+
+        elif isinstance(raw_images, ReflIO):
+            self.raw_images = raw_images.get_image()
+            self.meta_data = raw_images.get_header()
 
     def __repr__(self):
         return super().__repr__() + "\n" + self.meta_data.__repr__()

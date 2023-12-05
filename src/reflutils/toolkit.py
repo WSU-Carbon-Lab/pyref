@@ -1,4 +1,3 @@
-from msilib.schema import File
 from typing import Final
 import numpy as np
 from pathlib import Path

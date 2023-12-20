@@ -1,30 +1,33 @@
-"""prsoxs_xrr package"""
+"""
+Expansion Module for xray reflectivity modeling and data reduction 
+in python. 
+
+@Author: Harlan Heilman
+"""
 
 __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
 __version__ = "0.1.0"
 
+import matplotlib
 import seaborn as sns
 
-from reflutils._config import *
-from reflutils.core import *
-from reflutils.image_manager import *
-from reflutils.load_fits import *
-from reflutils.refl_manager import *
-from reflutils.refl_reuse import *
-from reflutils.toolkit import *
-from reflutils.xrr import *
+from ._config import *
+from .core import *
+from .image_manager import *
+from .load_fits import *
+from .refl_manager import *
+from .refl_reuse import *
+from .sorter import *
+from .toolkit import *
+from .xrr import *
 
-sns.set_style(
-    "white",
-    rc={
-        "xtick.direction": "in",
-        "ytick.direction": "in",
-        "xtick.top": True,
-        "ytick.right": True,
-        "xtick.bottom": True,
-        "ytick.left": True,
-        "grid.linestyle": "--",
-    },
+sns.set_context("paper", font_scale=1.5)
+
+matplotlib.rcParams["mathtext.fontset"] = "stix"
+matplotlib.rcParams["font.family"] = "STIXGeneral"
+
+sns.set_theme(
+    rc={"figure.figsize": (10, 5), "axes.xmargin": 0.01, "axes.ymargin": 0.02}
 )
-sns.set_context("notebook")
+sns.set_palette("coolwarm")

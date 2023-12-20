@@ -36,7 +36,7 @@ def hdh_path():
         / "Carbon Lab Research Group - Documents"
     )
     hdh_path = path / next(path.glob("*Harlan Heilman*"))
-    csv = hdh_path / "Harlan Heilman" / ".refl" / ".csv"
+    csv = hdh_path / ".refl" / ".csv"
     return csv
 
 class Refl:

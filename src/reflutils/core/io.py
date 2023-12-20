@@ -36,6 +36,69 @@ HEADER_DICT: Final[dict[str, str]] = {
     "DATE": "Date",
 }
 
+ANGLES: Final[list[str]] = ["90", "70", "55", "40", "20"]
+
+
+class NexafsIO(Path):
+    """
+    A subclass of pathlib.Path that incorporates methods for working with
+    nexafs data stored in a .csv file.
+
+    Parameters
+    ----------
+    Path : Path | str
+        A string or path-like object representing a path on the filesystem.
+    """
+
+    # Constructors
+    # --------------------------------------------------------------
+    def __init__(self, path):
+        super().__init__(path)
+
+    def __repr__(self) -> str:
+        return super().__repr__()
+
+    def __str__(self) -> str:
+        return super().__str__()
+
+    # Methods
+    # --------------------------------------------------------------
+    def get_nexafs(self, angles: list[str] = ANGLES) -> pd.DataFrame:
+        """
+        Method for extracting nexafs data from a csv file. If the csv file
+        comes from a dft calculation, the first and last two rows are dropped.
+        each energy collumn should start with "Energy" or "energy".
+
+        Parameters
+        ----------
+        angles : list[str], optional
+            A list of angles to be used as column names, by default
+            [20, 40, 55, 70, 90]
+
+        Returns
+        -------
+        pd.DataFrame
+            A dataframe of nexafs data.
+        """
+
+        df = pd.read_csv(self, dtype="float64[pyarrow]")
+        df = df.iloc[1:-2]
+
+        cols = df.columns
+        if cols[0] == "":
+            df = df.drop(cols[0], axis=1)
+
+        en_cols = [col for col in cols if "Energy" in col]
+        df["Energy [eV]"] = df[en_cols].mean(axis=1)
+        df.drop(en_cols, axis=1, inplace=True)
+        df.set_index("Energy [eV]", inplace=True)
+        df.rename(
+            columns={col: f"{angles[i]}" for i, col in enumerate(df.columns)},
+            inplace=True,
+        )
+
+        return df
+
 
 class FitsIO(Path):
     """

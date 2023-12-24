@@ -1,15 +1,13 @@
-from email.mime import image
-import re
-from turtle import heading, width
-import numpy as np
-import pandas as pd
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from sklearn.ensemble import IsolationForest
-from sklearn.inspection import DecisionBoundaryDisplay
+from turtle import heading, width
 from warnings import warn
 
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+from sklearn.inspection import DecisionBoundaryDisplay
 
 try:
     from ._config import REFL_COLUMN_NAMES

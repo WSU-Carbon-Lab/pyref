@@ -1,29 +1,13 @@
-[project]
+[[project]
 name = "reflutils"
-version = "1.2.0"
-description = "A simple package for processing reflectivity data collected in the FITS file format"
-authors = [
-    { name = "Harlan Heilman", email = "Harlan.Heilman@wsu.edu"},
+authors = [{name = "Harlan Heilman", email = "Harlan.Heilman@wsu.edu"}]
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "requests"
 ]
-license = {file = "LICENSE"}
-readme = "README.md"
-classifiers = [
-    "Programming Language :: Python :: 3.11",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+
+[project.optional-dependencies]
+dev = [
+    "pytest"
 ]
-requires-python = ">=3.11"
-dynamic = ["dependencies"]
-
-[project.urls]
-"Homepage" = "https://github.com/WSU-Carbon-Lab/Refl-Utils"
-
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
-
-[build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
-[tools.setuptools.packages.find]
-where = ["src"]

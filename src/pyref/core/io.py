@@ -10,6 +10,7 @@ An object for handling the input and output of reflectometry data.
 @Author: Harlan Heilman
 """
 
+import re
 from pathlib import Path
 from typing import Final, Union
 
@@ -63,7 +64,7 @@ class NexafsIO(Path):
 
     # Methods
     # --------------------------------------------------------------
-    def get_nexafs(self, angles: list[str] = ANGLES) -> pd.DataFrame:
+    def get_nexafs(self, angles: list[str] | None = ANGLES, **kwargs) -> pd.DataFrame:
         """
         Method for extracting nexafs data from a csv file. If the csv file
         comes from a dft calculation, the first and last two rows are dropped.
@@ -80,22 +81,29 @@ class NexafsIO(Path):
         pd.DataFrame
             A dataframe of nexafs data.
         """
-        
-        df = pd.read_csv(self, dtype="float64[pyarrow]")
+        df = pd.read_csv(self, dtype="float64[pyarrow]", **kwargs)
         df = df.iloc[1:-2]
 
         cols = df.columns
         if cols[0] == "":
             df = df.drop(cols[0], axis=1)
 
-        en_cols = [col for col in cols if "Energy" in col]
-        df["Energy [eV]"] = df[en_cols].mean(axis=1)
-        df.drop(en_cols, axis=1, inplace=True)
+        # use regex to find energy columns
+        # Energy columns should have "energy", "en", "e", "w", "E", "X", or "x"
+        # in the column name
+        pattern = re.compile(r'Energy|En|energy|x|X')
+        en_df = df.filter(regex=pattern)
+
+        df["Energy [eV]"] = en_df.mean(axis=1)
+        df.drop(en_df.columns, axis=1, inplace=True)
         df.set_index("Energy [eV]", inplace=True)
-        df.rename(
-            columns={col: f"{angles[i]}" for i, col in enumerate(df.columns)},
-            inplace=True,
-        )
+        if angles is None:
+            df.columns = ["55"]
+        else:
+            df.rename(
+                columns={col: f"{angles[i]}" for i, col in enumerate(df.columns)},
+                inplace=True,
+            )
 
         return df
 

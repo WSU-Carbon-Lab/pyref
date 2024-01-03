@@ -72,18 +72,19 @@ def df_to_db(df: pd.DataFrame, molecular_name, orientation: Literal["iso", "xx",
     config = Path(__file__).parent / "config.json"
     with open(config, "r") as f:
         __db = Path(json.load(f)["db"])
-    with open( __db / "db.json", "w") as f:
-        db = json.load(f)
+    with open(__db / "db.json", "r+") as f:
+        data = json.load(f)
 
-        if molecular_name in db[".data"]["nexafs"]:
-            warnings.warn("The molecular name already exists in the database. The data will be overwritten.")
-            db[".data"]["nexafs"].remove(f"{molecular_name}")
-            db[".data"]["nexafs"].remove(f"{molecular_name}")
-            db[".ocs"].remove(f"{molecular_name}")
+        if molecular_name in data["data"]["nexafs"]:
+            data["data"]["nexafs"].remove(f"{molecular_name}")
+            data["ocs"].remove(f"{molecular_name}")
         
-        db[".data"]["nexafs"].append(f"{molecular_name}")
-        db[".data"]["nexafs"].append(f"{molecular_name}")
-        db[".ocs"].append(f"{molecular_name}")
+        data["data"]["nexafs"].append(f"{molecular_name}")
+        data["ocs"].append(f"{molecular_name}")
+
+        f.seek(0)
+        json.dump(data, f, indent=4)
+
     
     # save the data
     parquet = __db / ".data"/ "nexafs" / f"{molecular_name}.parquet"

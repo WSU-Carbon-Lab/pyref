@@ -1,33 +1,27 @@
 """Main module."""
 from abc import ABC, abstractclassmethod
-from tkinter import font
-from typing import Literal, Final
 from pathlib import Path
+from tkinter import font
+from typing import Final, Literal
 from warnings import warn
-from matplotlib import axes
+
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import plotly.express as px
-import numpy as np
-import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib import axes
 from refnx.dataset import ReflectDataset
 
 sns.set_style("whitegrid")
 sns.set_palette("colorblind")
 
-try:
-    from .refl_manager import ReflFactory, StitchManager, OutlierDetection
-    from .load_fits import MultiReader
-    from .refl_reuse import Reuse
-    from .toolkit import FileDialog
-    from ._config import REFL_COLUMN_NAMES
+from ._config import REFL_COLUMN_NAMES
+from .load_fits import MultiReader
+from .refl_manager import OutlierDetection, ReflFactory, StitchManager
+from .refl_reuse import Reuse
+from .toolkit import FileDialog
 
-except ImportError:
-    from refl_manager import ReflFactory, StitchManager, OutlierDetection
-    from load_fits import MultiReader
-    from refl_reuse import Reuse
-    from toolkit import FileDialog
-    from _config import REFL_COLUMN_NAMES
 
 def hdh_path():
     path = (

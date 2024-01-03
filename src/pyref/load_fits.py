@@ -2,25 +2,22 @@
 Im sorry to whoever has to read this code.
 """
 
-from email.mime import image
-import pandas as pd
-from pathlib import Path
-from astropy.io import fits
-from shutil import copy2
-import click
-import os
 import datetime
+import os
 from concurrent.futures import ThreadPoolExecutor
+from email.mime import image
 from multiprocessing import Pool
-import art
-import numpy as np
+from pathlib import Path
+from shutil import copy2
 
-try:
-    from reflutils._config import HEADER_LIST, HEADER_DICT, FLAGS
-    from reflutils.toolkit import FileDialog
-except:
-    from _config import HEADER_LIST, HEADER_DICT, FLAGS
-    from toolkit import FileDialog
+import art
+import click
+import numpy as np
+import pandas as pd
+from astropy.io import fits
+
+from ._config import FLAGS, HEADER_DICT, HEADER_LIST
+from .toolkit import FileDialog
 
 DATA_PATH = (
     Path("Washington State University (email.wsu.edu)")

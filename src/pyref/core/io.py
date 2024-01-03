@@ -80,7 +80,7 @@ class NexafsIO(Path):
         pd.DataFrame
             A dataframe of nexafs data.
         """
-
+        
         df = pd.read_csv(self, dtype="float64[pyarrow]")
         df = df.iloc[1:-2]
 

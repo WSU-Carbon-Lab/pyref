@@ -9,14 +9,9 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.inspection import DecisionBoundaryDisplay
 
-try:
-    from ._config import REFL_COLUMN_NAMES
-    from .image_manager import ImageProcs
-    from .toolkit import XrayDomainTransform
-except ImportError:
-    from _config import REFL_COLUMN_NAMES
-    from image_manager import ImageProcs
-    from toolkit import XrayDomainTransform
+from ._config import REFL_COLUMN_NAMES
+from .image_manager import ImageProcs
+from .toolkit import XrayDomainTransform
 
 
 class ErrorManager:

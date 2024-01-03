@@ -1,12 +1,10 @@
 from pathlib import Path
-import pandas as pd
-import numpy as np
-import fastparquet
 
-try:
-    from ._config import FILE_NAMES
-except ImportError:
-    from _config import FILE_NAMES
+import fastparquet
+import numpy as np
+import pandas as pd
+
+from ._config import FILE_NAMES
 
 
 class Reuse:

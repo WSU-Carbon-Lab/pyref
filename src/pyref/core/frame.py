@@ -34,40 +34,6 @@ def _update_kwargs(kwargs: dict, new_kws: dict)-> dict:
     return kwargs
 
 
-def init_db(path:str | Path) -> None:
-    """
-    Initialize a database for storing data.
-
-    Parameters
-    ----------
-    path : str | Path
-        The path to the database.
-    """
-    path = Path(path) / ".db"
-    # Save the database location to the config file for easy access
-    config = Path(__file__).parent / "config.json"
-    config_json = {"db": str(path)}
-    with open(config, "w") as f:
-        json.dump(config_json, f, indent=4)
-
-    path.mkdir(parents=True, exist_ok=True)
-    (path / ".data").mkdir(parents=True, exist_ok=True)
-    (path / ".ocs").mkdir(parents=True, exist_ok=True)
-    (path / ".struct").mkdir(parents=True, exist_ok=True)
-
-    dbjson = {
-        ".data": {
-            "nexafs": [],
-            "xrr": [],
-        },
-        ".ocs": [],
-        ".struct": [],
-    }
-
-    with open(path / "db.json", "w") as f:
-        json.dump(dbjson, f, indent=4)
-
-
 def kkcalc(energy: np.ndarray, nexafs: np.ndarray, density: float, molecular_name: str, anchor: np.ndarray | None = None, **kwargs):
 
     nexafs = np.column_stack((energy, nexafs))
@@ -406,20 +372,19 @@ class AngleNexafs(pd.DataFrame):
         path : str | Path
             The path to save the database to.
         """
-
         
         with open(self.__db / "db.json", "r") as f:
-            db = json.load(f)
+            data = json.load(f)
 
-            if self.molecular_name in db[".data"]["nexafs"]:
-                warnings.warn("The molecular name already exists in the database. The data will be overwritten.")
-                db[".data"]["nexafs"].remove(f"{self.molecular_name}.parquet")
-                db[".data"]["nexafs"].remove(f"{self.molecular_name}.nexafs")
-                db[".ocs"].remove(f"{self.molecular_name}.oc")
+            if self.molecular_name in data[".data"]["nexafs"]:
+                data[".data"]["nexafs"].remove(f"{self.molecular_name}")
+                data[".ocs"].remove(f"{self.molecular_name}")
             
-            db[".data"]["nexafs"].append(f"{self.molecular_name}.parquet")
-            db[".data"]["nexafs"].append(f"{self.molecular_name}.nexafs")
-            db[".ocs"].append(f"{self.molecular_name}.oc")
+            data[".data"]["nexafs"].append(f"{self.molecular_name}")
+            data[".ocs"].append(f"{self.molecular_name}")
+        
+        with open(self.__db / "db.json", "w") as f:
+            json.dump(data, f, indent=4)
 
 
         parquet = self.__db / ".data"/ "nexafs" / f"{self.molecular_name}.parquet"
@@ -428,7 +393,7 @@ class AngleNexafs(pd.DataFrame):
         
         
         self.to_parquet(parquet)
-        self.to_csv(nexafs)
+        self[self.angles.split(" ")].to_csv(nexafs)
 
         optical_model = {
             "xx": self.xx,

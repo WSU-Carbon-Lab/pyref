@@ -175,7 +175,7 @@ class db:
         with open(self.struct / f"{struct_name}.json", "r+") as f:
             json.dump(struct, f, indent=4)
     
-    def get_refl(self, file_name: str | Path | None, sample:str ,restat = True):
+    def get_refl(self, file_name: str | Path | None, sample:str,restat = True):
         """
         Get the reflectivity data for a molecule.
 
@@ -196,7 +196,7 @@ class db:
         file_name = Path(file_name)
         if file_name.suffix == ".csv":
             refl = pd.read_csv(self.refl / f"{sample}" /f"{file_name}")
-        elif file_name.suffix == ".parquet":
+        elif file_name.suffix == ".parquet" or file_name.suffix == ".gzip":
             refl = pd.read_parquet(self.refl / f"{sample}" /f"{file_name}")
         else:
             raise ValueError(f"File must be a .csv or .parquet file. recieved {file_name.suffix}")

@@ -6,24 +6,25 @@ Updated 06/09/2021 for better scripting
 """
 # Basic import items --
 import os.path
-import sys
-import numpy as np
-
 # For saving MCMC CurveFitters and Objectives
 import pickle
+import sys
+
+import numpy as np
 
 # Import PyPXR through GitHub
 sys.path.append("C:/Users/hduva/CarbonLab/P-RSoXR/src/pypxr") # Exact path for laptop
-from reflectivity import *
-from structure import *
-# Additional support functions
-from mcmc_analysis.utilities import compile_data_hdf5, load_prsoxr_hdf5, build_tensor, LogpExtra_rough
 from mcmc_analysis.export_results import export_mcmc_summary
-
+# Additional support functions
+from mcmc_analysis.utilities import (LogpExtra_rough, build_tensor,
+                                     compile_data_hdf5, load_prsoxr_hdf5)
+from reflectivity import *
+from refnx._lib.emcee.moves.de import *  # Differential Evolution MCMC move - typically used in these fits
+from refnx.analysis import (CurveFitter, GlobalObjective,  # For fitting
+                            Objective, Transform)
 # Required modules from Refnx
-from refnx.dataset import ReflectDataset # Object used to define data
-from refnx.analysis import Transform, CurveFitter, Objective, GlobalObjective # For fitting
-from refnx._lib.emcee.moves.de import * #Differential Evolution MCMC move - typically used in these fits
+from refnx.dataset import ReflectDataset  # Object used to define data
+from structure import *
 
 print('Initialization Complete')
 

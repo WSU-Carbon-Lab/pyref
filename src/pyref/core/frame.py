@@ -44,7 +44,7 @@ def kkcalc(energy: np.ndarray, nexafs: np.ndarray, density: float, molecular_nam
 
     kws = {
         "load_options": None,
-        "input_data_type": "Beta",
+        "input_data_type": "nexafs",
         "merge_points": [xmin, xmax],
         "add_background": False,
         "fix_distortions": False,
@@ -85,6 +85,9 @@ class OpticalConstant:
 
     def __repr__(self) -> str:
         return f"OpticalConstants({self.delta}, {self.beta})"
+
+    def n(self, energy):
+        return self.delta(energy) + 1j * self.beta(energy)
     
     
 

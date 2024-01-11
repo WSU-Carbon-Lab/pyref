@@ -7,11 +7,6 @@ from .paths import *
 
 # init db
 
-def db():
-    with open(Path(__file__).parent / "config.json", "r") as f:
-        path = json.load(f)["db"]
-    return Path(path)
-
 def bt():
     path = (
         Path.home()

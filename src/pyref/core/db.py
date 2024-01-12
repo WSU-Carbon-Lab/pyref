@@ -30,8 +30,11 @@ class db:
                 raise ValueError(f"Invalid path {paths}")
                     
         self.db = Path(path)
-        self.nexafs = self.db / ".data" / "nexafs"
-        self.refl = self.db / ".data" / "refl"
+        
+        self.data = self.db / ".data"
+        self.nexafs = self.data / "nexafs"
+        self.refl = self.data / "refl"
+        self.res = self.data / "res"
         self.ocs = self.db / ".ocs"
         self.struct = self.db / ".struct"
     

@@ -8,8 +8,8 @@ lowest_params = [
     "name",
     "_value",
     "_bounds",
-    "_deps",
     "units",
+    "_stderr",
 ]
 
 
@@ -50,7 +50,7 @@ def serialize(params):
 
 
 
-def save_params(refnx_object, filename):
+def to_json(refnx_object, filename):
     """
     Save the parameters of a refnx object to a file.
 
@@ -65,3 +65,11 @@ def save_params(refnx_object, filename):
     params_dict = serialize(params)
     with open(filename, 'w') as f:
         json.dump(params_dict, f, indent=4)
+
+
+def from_json(filename):
+
+    with open(filename, 'r') as f:
+        params_dict = json.load(f)
+
+    return params_dict

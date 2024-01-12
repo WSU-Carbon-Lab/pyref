@@ -18,7 +18,17 @@ class db:
 
     def __init__(self):
         with open(Path(__file__).parent / "config.json", "r") as f:
-            path = json.load(f)["db"]
+            paths = json.load(f)["db"]
+            if isinstance(paths, str):
+                self.db = Path(paths)
+            elif isinstance(paths, list):
+                for path in paths:
+                    if Path(path).exists():
+                        self.db = Path(path)
+                        break
+            else:
+                raise ValueError(f"Invalid path {paths}")
+                    
         self.db = Path(path)
         self.nexafs = self.db / ".data" / "nexafs"
         self.refl = self.db / ".data" / "refl"

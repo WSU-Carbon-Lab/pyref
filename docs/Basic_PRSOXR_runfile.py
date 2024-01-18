@@ -281,6 +281,8 @@ for i, slab in enumerate(dsa_surface_slabs):
 # dsa_ph Substrate
 for i, slab in enumerate(dsa_substrate_slabs):
     # energy dependent conditions
+    
+
     vary_exp = True if i == 0 else None
     thick_constraint_exp = None if i == 0 else dsa_substrate_slabs[0].thick
     rough_constraint_exp = None if i == 0 else dsa_substrate_slabs[0].rough

@@ -1,7 +1,7 @@
 """
 ReflDataFrame
 -------------
-A subclass of pandas.DataFrame that contains 2d Data, metadata, and 
+A subclass of pandas.DataFrame that contains 2d Data, metadata, and
 associated methods for working with reflectometry data.
 
 @Author: Harlan Heilman
@@ -63,10 +63,10 @@ def kkcalc(energy: np.ndarray, nexafs: np.ndarray, density: float, molecular_nam
     # Scale the scattering factors to optical constants using bare atom absorbtion
     if anchor is None:
         beta = -index_of_refraction(molecular_name, density=density, energy=[xmin*1e-3, xmax*1e-3]).imag
-    
+
     else:
         beta = anchor
-    
+
     lb = beta[0] / fp(xmin)
     ub = beta[-1] / fp(xmax)
     beta = interp1d(extended_energy, (lb + ub) / 2 * scattering_factor[:, 2], kind = 'linear', fill_value='extrapolate') #type: ignore
@@ -74,9 +74,9 @@ def kkcalc(energy: np.ndarray, nexafs: np.ndarray, density: float, molecular_nam
 
     return delta, beta
 
-    
+
 class OpticalConstant:
-    """ 
+    """
     A class to hold the optical constants for a given energy range.
     """
     def __init__(self, delta, beta) -> None:
@@ -88,8 +88,8 @@ class OpticalConstant:
 
     def n(self, energy):
         return self.delta(energy) + 1j * self.beta(energy)
-    
-    
+
+
 
 
 
@@ -126,11 +126,15 @@ class AngleNexafs(pd.DataFrame):
             self.angles = " ".join(angles)
         else:
             self.angles = "55"
-        
+
         self.molecular_name = molecular_name
         self.density = density
         self._name = name
-        self.__db = Path(json.load(open(Path(__file__).parent / "config.json"))["db"])
+        __db = json.load(open(Path(__file__).parent / "config.json"))["db"]
+        for string in __db:
+            if Path(string).exists():
+                self.__db = string
+                break
 
     def __repr__(self):
         rep = super().__repr__()
@@ -143,11 +147,11 @@ class AngleNexafs(pd.DataFrame):
 
     def __str__(self):
         return self.__repr__()
-    
+
     @property
     def name(self):
         return self._name
-    
+
     @name.setter
     def name(self, value):
         if isinstance(value, str):
@@ -240,7 +244,7 @@ class AngleNexafs(pd.DataFrame):
             loc="upper right",
         )
         ax[1].set(ylabel=r"$\beta$ [a.u.]")
-    
+
     def plot_delta_beta(self, en_range: tuple | None = None, energy_highlights: list|np.ndarray|None = None,**kwargs):
         fig, ax = plt.subplots(
             nrows=2,
@@ -259,8 +263,8 @@ class AngleNexafs(pd.DataFrame):
         if en_range is None:
             self.plot(ax=ax[0], y=delta, **kwargs)
             self.plot(ax=ax[1], y=beta, **kwargs)
-        
-        else: 
+
+        else:
             energies = np.linspace(en_range[0], en_range[1], 1000)
             if not diff:
                 ax[0].plot(energies, self.iso.delta(energies), label=r"$\delta_{iso}$")
@@ -296,7 +300,7 @@ class AngleNexafs(pd.DataFrame):
         if len(self.columns) == 1:
             warnings.warn("The NEXAFS data does not contain multiple angles.")
             return None
-        
+
         self["Diff"] = self["55"] - self["20"]
         if plot:
             self.plot_ds()
@@ -358,7 +362,7 @@ class AngleNexafs(pd.DataFrame):
             except:
                 warnings.warn("Normalizing only the isotropic data. NEXAFS is likely only one angle.")
                 self[r"$\beta_{iso}$"] /= (lb + ub) / 2
-    
+
     def get_kk(self, *args, **kwargs):
         """
         Calculate the optical constants using the KK method.
@@ -404,11 +408,11 @@ class AngleNexafs(pd.DataFrame):
         self.get_ooc(plot=False)
         self.normalize()
         self.get_kk()
-    
+
     def to_db(self):
         """
         Save the dataframe to a "database". This creates 3 files:
-        
+
         ---
 
         * .parquet - the entire dataframe is saved as a parquet file.
@@ -421,14 +425,14 @@ class AngleNexafs(pd.DataFrame):
         path : str | Path
             The path to save the database to.
         """
-        
+
         with open(self.__db / "db.json", "r+") as f:
             data = json.load(f)
 
             if self.molecular_name in data["data"]["nexafs"]:
                 data["data"]["nexafs"].remove(f"{self.molecular_name}")
                 data["ocs"].remove(f"{self.molecular_name}")
-            
+
             data["data"]["nexafs"].append(f"{self.molecular_name}")
             data["ocs"].append(f"{self.molecular_name}")
 
@@ -439,8 +443,8 @@ class AngleNexafs(pd.DataFrame):
         parquet = self.__db / ".data"/ "nexafs" / f"{self.molecular_name}.parquet"
         nexafs = self.__db / ".data"/ "nexafs" / f"{self.molecular_name}.nexafs"
         ocs = self.__db / ".ocs" / f"{self.molecular_name}.oc"
-        
-        
+
+
         self.to_parquet(parquet)
         self[self.angles.split(" ")].to_csv(nexafs)
 
@@ -457,7 +461,7 @@ class AngleNexafs(pd.DataFrame):
 
         pickle.dump(optical_model, open(ocs, "wb"))
 
-        
+
 
 class ReflDataFrame(pd.DataFrame):
     """

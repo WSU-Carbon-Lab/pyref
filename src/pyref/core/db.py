@@ -1,4 +1,3 @@
-
 import json
 import pickle
 import warnings
@@ -15,7 +14,6 @@ from .paths import FileDialog
 
 
 class db:
-
     def __init__(self):
         with open(Path(__file__).parent / "config.json", "r") as f:
             paths = json.load(f)["db"]
@@ -28,21 +26,20 @@ class db:
                         break
             else:
                 raise ValueError(f"Invalid path {paths}")
-                    
+
         self.db = Path(path)
-        
+
         self.data = self.db / ".data"
         self.nexafs = self.data / "nexafs"
         self.refl = self.data / "refl"
         self.res = self.data / "res"
         self.ocs = self.db / ".ocs"
         self.struct = self.db / ".struct"
-    
+
     def __repr__(self) -> str:
         return f"pyref.db({self.db})"
 
-
-    def init(self, path:str | Path) -> None:
+    def init(self, path: str | Path) -> None:
         """
         Initialize a database for storing data.
 
@@ -52,10 +49,12 @@ class db:
             The path to the database.
         """
         init_db(path)
-    
-    def add_df(self, df: pd.DataFrame, molecular_name, orientation : Literal["iso", "xx", "zz"]) -> None:
+
+    def add_df(
+        self, df: pd.DataFrame, molecular_name, orientation: Literal["iso", "xx", "zz"]
+    ) -> None:
         """
-        Save a dataframe to the database. The first col should be 
+        Save a dataframe to the database. The first col should be
 
         Parameters
         ----------
@@ -63,7 +62,7 @@ class db:
             Dataframe to save.
         """
         df_to_db(df, molecular_name, orientation)
-    
+
     def query(self, molecular_name):
         """
         Query the database for a molecular name.
@@ -83,13 +82,17 @@ class db:
         if molecular_name in data["data"]["nexafs"]:
             print(f"NEXAFS data located for {molecular_name}. :sparkles:")
         else:
-            print(f"[bold red]NEXAFS data not located for {molecular_name}. [/bold red] :warning:")
+            print(
+                f"[bold red]NEXAFS data not located for {molecular_name}. [/bold red] :warning:"
+            )
 
         if molecular_name in data["ocs"]:
             print(f"Optical constant model located for {molecular_name}. :sparkles:")
         else:
-            print(f"[bold red]Optical constant model not located for {molecular_name}. [/bold red] :warning:")
-        
+            print(
+                f"[bold red]Optical constant model not located for {molecular_name}. [/bold red] :warning:"
+            )
+
         structs = {}
         for struct in data["struct"]:
             if molecular_name in data["struct"][struct]:
@@ -99,7 +102,9 @@ class db:
             print(f"Structures located for {molecular_name}. :sparkles:")
             print(structs)
         else:
-            print(f"[bold red]Structures not located for {molecular_name}. [/bold red] :warning:")
+            print(
+                f"[bold red]Structures not located for {molecular_name}. [/bold red] :warning:"
+            )
 
     def get_oc(self, molecular_name):
         """
@@ -169,10 +174,16 @@ class db:
         assert "layers" in struct, "Structure must have a 'layers' key."
 
         for layer in struct["layers"]:
-            assert "thickness" in struct[layer], f"Layer {layer} must have a 'thickness' key."
-            assert "roughness" in struct[layer], f"Layer {layer} must have a 'roughness' key."
-            assert "density" in struct[layer], f"Layer {layer} must have a 'density' key."
-        
+            assert (
+                "thickness" in struct[layer]
+            ), f"Layer {layer} must have a 'thickness' key."
+            assert (
+                "roughness" in struct[layer]
+            ), f"Layer {layer} must have a 'roughness' key."
+            assert (
+                "density" in struct[layer]
+            ), f"Layer {layer} must have a 'density' key."
+
         struct_path = self.struct / f"{struct_name}.json"
         if struct_path.exists():
             warnings.warn(f"Structure {struct_name} already exists. Overwriting.")
@@ -184,11 +195,11 @@ class db:
             data["struct"][struct_name] = struct
             f.seek(0)
             json.dump(data, f, indent=4)
-        
+
         with open(self.struct / f"{struct_name}.json", "r+") as f:
             json.dump(struct, f, indent=4)
-    
-    def get_refl(self, file_name: str | Path | None, sample:str,restat = True):
+
+    def get_refl(self, file_name: str | Path | None, sample: str, restat=True):
         """
         Get the reflectivity data for a molecule.
 
@@ -204,60 +215,63 @@ class db:
         """
 
         if file_name is None:
-            file_name = FileDialog().getFileName(title="Select reflectivity file", initialdir=self.refl)
+            file_name = FileDialog().getFileName(
+                title="Select reflectivity file", initialdir=self.refl
+            )
 
         file_name = Path(file_name)
         if file_name.suffix == ".csv":
-            refl = pd.read_csv(self.refl / f"{sample}" /f"{file_name}")
+            refl = pd.read_csv(self.refl / f"{sample}" / f"{file_name}")
         elif file_name.suffix == ".parquet" or file_name.suffix == ".gzip":
-            refl = pd.read_parquet(self.refl / f"{sample}" /f"{file_name}")
+            refl = pd.read_parquet(self.refl / f"{sample}" / f"{file_name}")
         else:
-            raise ValueError(f"File must be a .csv or .parquet file. recieved {file_name.suffix}")
-        
+            raise ValueError(
+                f"File must be a .csv or .parquet file. recieved {file_name.suffix}"
+            )
 
         if restat:
-            refl["Err"] = .1 * refl["Refl"]
-        
+            refl["Err"] = 0.1 * refl["Refl"]
+
         return refl
+
 
 def ensure_nromalized(refl):
     refl.Refl /= refl.Refl.iloc[0]
     return refl
 
+
 def smart_mask(refl, pol: Literal["s", "p"] = "s"):
     # refl = ensure_nromalized(refl)
     if pol == "p":
-        # locate the brewster angle ~45 deg cutoff is chosen based on the 
+        # locate the brewster angle ~45 deg cutoff is chosen based on the
         # reflectivity at the brewster angle
         brewster_angles = (44 < refl.Theta) & (refl.Theta < 46)
         ba_int = refl[brewster_angles].Refl.mean()
         ba_cutoff = ba_int + 3 * refl[brewster_angles].Refl.std()
         refl = refl[refl.Refl > ba_cutoff]
-    
+
     # drop points q<0.02
     refl = refl[refl.Q > 0.02]
     return refl
 
-def to_refnx_dataset(refl, pol: Literal["s", "p", "sp"] = "s", second_pol: pd.DataFrame | None = None):
 
+def to_refnx_dataset(
+    refl, pol: Literal["s", "p", "sp"] = "s", second_pol: pd.DataFrame | None = None
+):
     q = refl.Q.to_numpy()
     r = refl.Refl.to_numpy()
     if pol == "sp" and isinstance(second_pol, pd.DataFrame):
         # append the second polarization
         import numpy as np
+
         q = np.append(q, second_pol.Q.to_numpy())
         r = np.append(r, second_pol.Refl.to_numpy())
-        
-    dr = .1*r
-    return ReflectDataset(data = (q, r, dr))
 
-        
+    dr = 0.1 * r
+    return ReflectDataset(data=(q, r, dr))
 
 
-    
-
-
-def init_db(path:str | Path) -> None:
+def init_db(path: str | Path) -> None:
     """
     Initialize a database for storing data.
 
@@ -291,9 +305,11 @@ def init_db(path:str | Path) -> None:
         json.dump(dbjson, f, indent=4)
 
 
-def df_to_db(df: pd.DataFrame, molecular_name, orientation: Literal["iso", "xx", "zz"]) -> None:
+def df_to_db(
+    df: pd.DataFrame, molecular_name, orientation: Literal["iso", "xx", "zz"]
+) -> None:
     """
-    Save a dataframe to the database. The first col should be 
+    Save a dataframe to the database. The first col should be
 
     Parameters
     ----------
@@ -314,7 +330,7 @@ def df_to_db(df: pd.DataFrame, molecular_name, orientation: Literal["iso", "xx",
         f"{orientation}": oc,
     }
 
-    # update the database 
+    # update the database
     config = Path(__file__).parent / "config.json"
     with open(config, "r") as f:
         __db = Path(json.load(f)["db"])
@@ -324,24 +340,19 @@ def df_to_db(df: pd.DataFrame, molecular_name, orientation: Literal["iso", "xx",
         if molecular_name in data["data"]["nexafs"]:
             data["data"]["nexafs"].remove(f"{molecular_name}")
             data["ocs"].remove(f"{molecular_name}")
-        
+
         data["data"]["nexafs"].append(f"{molecular_name}")
         data["ocs"].append(f"{molecular_name}")
 
         f.seek(0)
         json.dump(data, f, indent=4)
 
-    
     # save the data
-    parquet = __db / ".data"/ "nexafs" / f"{molecular_name}.parquet"
-    nexafs = __db / ".data"/ "nexafs" / f"{molecular_name}.nexafs"
+    parquet = __db / ".data" / "nexafs" / f"{molecular_name}.parquet"
+    nexafs = __db / ".data" / "nexafs" / f"{molecular_name}.nexafs"
     ocs = __db / ".ocs" / f"{molecular_name}.oc"
 
     df.to_parquet(parquet)
     df.to_csv(nexafs)
 
     pickle.dump(optical_model, open(ocs, "wb"))
-    
-
-    
-    

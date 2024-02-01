@@ -15,12 +15,6 @@ ytick.major.width : 1
 ytick.minor.size : 3
 ytick.minor.width : 1
 
-# Y tick format
-axes.formatter.use_mathtext : True
-axes.formatter.axis : y
-axes.ticklabel_format.style: sci
-axes.ticklabel_format.scilimits: (0, 0)
-
 # Fontsizes
 xtick.labelsize : 16
 ytick.labelsize : 16

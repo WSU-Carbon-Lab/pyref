@@ -9,19 +9,14 @@ associated methods for working with reflectometry data.
 
 import json
 import pickle
-import re
 import warnings
-from calendar import c
 from pathlib import Path
 from typing import Any, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-from kkcalc import data, kk
-from matplotlib.pylab import f
-from matplotlib.testing import set_reproducibility_for_testing
+from kkcalc import kk
 from periodictable.xsf import index_of_refraction
 from scipy.interpolate import interp1d
 
@@ -30,12 +25,20 @@ from .io import *
 ArrayLike = Union[np.ndarray, list]
 PathLike = Union[Path, str, NexafsIO]
 
-def _update_kwargs(kwargs: dict, new_kws: dict)-> dict:
+
+def _update_kwargs(kwargs: dict, new_kws: dict) -> dict:
     kwargs.update(new_kws)
     return kwargs
 
 
-def kkcalc(energy: np.ndarray, nexafs: np.ndarray, density: float, molecular_name: str, anchor: np.ndarray | None = None, **kwargs):
+def kkcalc(
+    energy: np.ndarray,
+    nexafs: np.ndarray,
+    density: float,
+    molecular_name: str,
+    anchor: np.ndarray | None = None,
+    **kwargs,
+):
 
     nexafs = np.column_stack((energy, nexafs))
 
@@ -57,20 +60,22 @@ def kkcalc(energy: np.ndarray, nexafs: np.ndarray, density: float, molecular_nam
     scattering_factor = kk.kk_calculate_real(nexafs, molecular_name, **kws)
 
     extended_energy = scattering_factor[:, 0]
-    f = interp1d(extended_energy, scattering_factor[:, 1], kind='linear', fill_value='extrapolate') #type: ignore
-    fp = interp1d(extended_energy, scattering_factor[:, 2], kind='linear', fill_value='extrapolate') #type: ignore
+    f = interp1d(extended_energy, scattering_factor[:, 1], kind="linear", fill_value="extrapolate")  # type: ignore
+    fp = interp1d(extended_energy, scattering_factor[:, 2], kind="linear", fill_value="extrapolate")  # type: ignore
 
     # Scale the scattering factors to optical constants using bare atom absorbtion
     if anchor is None:
-        beta = -index_of_refraction(molecular_name, density=density, energy=[xmin*1e-3, xmax*1e-3]).imag
+        beta = -index_of_refraction(
+            molecular_name, density=density, energy=[xmin * 1e-3, xmax * 1e-3]
+        ).imag
 
     else:
         beta = anchor
 
     lb = beta[0] / fp(xmin)
     ub = beta[-1] / fp(xmax)
-    beta = interp1d(extended_energy, (lb + ub) / 2 * scattering_factor[:, 2], kind = 'linear', fill_value='extrapolate') #type: ignore
-    delta = interp1d(extended_energy, (lb + ub) / 2 * scattering_factor[:, 1], kind = 'linear', fill_value='extrapolate') #type: ignore
+    beta = interp1d(extended_energy, (lb + ub) / 2 * scattering_factor[:, 2], kind="linear", fill_value="extrapolate")  # type: ignore
+    delta = interp1d(extended_energy, (lb + ub) / 2 * scattering_factor[:, 1], kind="linear", fill_value="extrapolate")  # type: ignore
 
     return delta, beta
 
@@ -79,9 +84,35 @@ class OpticalConstant:
     """
     A class to hold the optical constants for a given energy range.
     """
-    def __init__(self, delta, beta) -> None:
+
+    def __init__(
+        self, delta: callable, beta: callable, molecular_name: str, density=None
+    ) -> None:
         self.delta = delta
         self.beta = beta
+        self._density = density
+        self.molecular_name = molecular_name
+
+    # ---------------------------------------------------------------------------------
+    # properties
+    # ---------------------------------------------------------------------------------
+
+    @property
+    def density(self):
+        return self._density
+
+    @density.setter
+    def density(self, density: float, scale_location: float = "250"):
+        n = index_of_refraction(
+            self.molecular_name, density=self.density, energy=scale_location * 1e-3
+        )
+
+        self.delta = lambda x: 1 - n.real
+        self.beta = lambda x: -n.imag
+        self._density = density
+
+    def __call__(self, energy):
+        return 1 - self.delta(energy) - 1j * self.beta(energy)
 
     def __repr__(self) -> str:
         return f"OpticalConstants({self.delta}, {self.beta})"
@@ -90,7 +121,81 @@ class OpticalConstant:
         return self.delta(energy) + 1j * self.beta(energy)
 
 
+class OrientedOpticalConstants(OpticalConstant):
+    """
+    A class to hold the optical constants for a given energy range.
+    """
 
+    def __init__(
+        self,
+        value: np.ndarray[OpticalConstant],
+        symmetry,
+        molecular_name: str,
+        density=None,
+    ) -> None:
+        self.symmetry = symmetry
+        self.molecular_name = molecular_name
+        self._density = density
+
+        if symmetry == "iso":
+            assert len(value) == 1
+            self.xx = value[0].delta
+            self.yy = value[0].delta
+            self.zz = value[0].delta
+            self.ixx = value[0].beta
+            self.iyy = value[0].beta
+            self.izz = value[0].beta
+        elif symmetry == "uni":
+            assert len(value) == 2
+            self.xx = value[0].delta
+            self.yy = value[0].delta
+            self.zz = value[1].delta
+            self.ixx = value[0].beta
+            self.iyy = value[0].beta
+            self.izz = value[1].beta
+        elif symmetry == "bi":
+            assert len(value) == 3
+            self.xx = value[0].delta
+            self.yy = value[1].delta
+            self.zz = value[2].delta
+            self.ixx = value[0].beta
+            self.iyy = value[1].beta
+            self.izz = value[2].beta
+
+        else:
+            raise ValueError("Symmetry must be 'iso', 'uni', or 'bi'.")
+        self._value = value
+
+        self.delta = self.xx + self.yy + self.zz
+        self.beta = self.ixx + self.iyy + self.izz
+
+    # ---------------------------------------------------------------------------------
+    # properties
+    # ---------------------------------------------------------------------------------
+
+    @property
+    def density(self):
+        return self._density
+
+    @density.setter
+    def density(self, density: float, scale_location: float = "250"):
+        for oc in self._value:
+            oc.density = (density, scale_location)
+        self._density = density
+
+    def __call__(self, energy: float, density: float):
+        self.density = density
+        n = np.zeros((3, 3), dtype=complex)
+        n[0, 0] = self.xx(energy) + 1j * self.ixx(energy)
+        n[1, 1] = self.yy(energy) + 1j * self.iyy(energy)
+        n[2, 2] = self.zz(energy) + 1j * self.izz(energy)
+        return n, self.delta(energy) + 1j * self.beta(energy)
+
+    def __repr__(self) -> str:
+        return f"OrientedOpticalConstants({self.xx}, {self.yy}, {self.zz}, {self.ixx}, {self.iyy}, {self.izz})"
+
+    def __str__(self) -> str:
+        return super().__str__()
 
 
 class AngleNexafs(pd.DataFrame):
@@ -163,7 +268,7 @@ class AngleNexafs(pd.DataFrame):
     # methods
     def plot_ds(self, **kwargs):
         fig, ax = plt.subplots(
-            nrows=2, sharex=True ,gridspec_kw={"height_ratios": [3, 1], "hspace": 0}
+            nrows=2, sharex=True, gridspec_kw={"height_ratios": [3, 1], "hspace": 0}
         )
         angs_ = self.angles.split(" ")
         angs = [angs_[0], angs_[len(angs_) // 2], angs_[-1]]
@@ -190,7 +295,11 @@ class AngleNexafs(pd.DataFrame):
             gridspec_kw={"hspace": 0},
         )
         super().plot(
-            y=angs, ax=ax, ylabel="Nexafs [a.u]", title=f"{self.molecular_name if self.name is None else self.name} Nexafs", **kwargs,
+            y=angs,
+            ax=ax,
+            ylabel="Nexafs [a.u]",
+            title=f"{self.molecular_name if self.name is None else self.name} Nexafs",
+            **kwargs,
         )
         ax.legend(
             title="Angle [deg]",
@@ -208,16 +317,13 @@ class AngleNexafs(pd.DataFrame):
             mpl_kw = {}
 
         if "Diff" not in self.columns:
-            fig_kws = {
-                "nrows" : 2,
-                "gridspec_kw" : {"hspace": 0}
-            }
+            fig_kws = {"nrows": 2, "gridspec_kw": {"hspace": 0}}
             diff = False
             beta_cols = r"$\beta_{iso}$"
         else:
             fig_kws = {
-                "nrows" : 3,
-                "gridspec_kw" : {"height_ratios": [2, 3, 1], "hspace": 0}
+                "nrows": 3,
+                "gridspec_kw": {"height_ratios": [2, 3, 1], "hspace": 0},
             }
             diff = True
             beta_cols = [r"$\beta_{zz}$", r"$\beta_{iso}$", r"$\beta_{xx}$"]
@@ -237,7 +343,10 @@ class AngleNexafs(pd.DataFrame):
             **kwargs,
         )
 
-        ax[0].set(ylabel="Nexafs [a.u.]", title=f"{self.molecular_name if self.name is None else self.name} Optical Constants")
+        ax[0].set(
+            ylabel="Nexafs [a.u.]",
+            title=f"{self.molecular_name if self.name is None else self.name} Optical Constants",
+        )
         ax[0].legend(
             title="Angle [deg]",
             labels=[rf"${a}^\circ$" for a in angs],
@@ -245,7 +354,12 @@ class AngleNexafs(pd.DataFrame):
         )
         ax[1].set(ylabel=r"$\beta$ [a.u.]")
 
-    def plot_delta_beta(self, en_range: tuple | None = None, energy_highlights: list|np.ndarray|None = None,**kwargs):
+    def plot_delta_beta(
+        self,
+        en_range: tuple | None = None,
+        energy_highlights: list | np.ndarray | None = None,
+        **kwargs,
+    ):
         fig, ax = plt.subplots(
             nrows=2,
             sharex=True,
@@ -281,10 +395,13 @@ class AngleNexafs(pd.DataFrame):
 
         if energy_highlights is not None:
             for energy in energy_highlights:
-                ax[0].axvline(energy, color='magenta', linestyle='--', alpha=0.5)
-                ax[1].axvline(energy, color='magenta', linestyle='--', alpha=0.5)
+                ax[0].axvline(energy, color="magenta", linestyle="--", alpha=0.5)
+                ax[1].axvline(energy, color="magenta", linestyle="--", alpha=0.5)
 
-        ax[0].set(ylabel=r"$\delta$ [a,u,]", title=f"Optical Constants {self.molecular_name if self.name is None else self.name}")
+        ax[0].set(
+            ylabel=r"$\delta$ [a,u,]",
+            title=f"Optical Constants {self.molecular_name if self.name is None else self.name}",
+        )
         ax[1].set(ylabel=r"$\beta$ [a.u.]")
         ax[1].set(xlabel="Energy [eV]")
 
@@ -354,13 +471,19 @@ class AngleNexafs(pd.DataFrame):
         ub = self[r"$\beta_{iso}$"].iloc[-1] / self[r"$\beta_{ba}$"].iloc[-1]
 
         if "Diff" not in self.columns:
-            warnings.warn("Normalizing only the isotropic data. NEXAFS is likely only one angle.")
+            warnings.warn(
+                "Normalizing only the isotropic data. NEXAFS is likely only one angle."
+            )
             self[r"$\beta_{iso}$"] /= (lb + ub) / 2
         else:
             try:
-                self[[r"$\beta_{iso}$", r"$\beta_{xx}$", r"$\beta_{zz}$"]] /= (lb + ub) / 2
+                self[[r"$\beta_{iso}$", r"$\beta_{xx}$", r"$\beta_{zz}$"]] /= (
+                    lb + ub
+                ) / 2
             except:
-                warnings.warn("Normalizing only the isotropic data. NEXAFS is likely only one angle.")
+                warnings.warn(
+                    "Normalizing only the isotropic data. NEXAFS is likely only one angle."
+                )
                 self[r"$\beta_{iso}$"] /= (lb + ub) / 2
 
     def get_kk(self, *args, **kwargs):
@@ -380,20 +503,40 @@ class AngleNexafs(pd.DataFrame):
             _description_
         """
         if r"$\beta_{xx}$" in self.columns:
-            delta_xx, beta_xx = kkcalc(self.index.values, self[r"$\beta_{xx}$"].to_numpy(), self.density, self.molecular_name, *args, **kwargs)
+            delta_xx, beta_xx = kkcalc(
+                self.index.values,
+                self[r"$\beta_{xx}$"].to_numpy(),
+                self.density,
+                self.molecular_name,
+                *args,
+                **kwargs,
+            )
             self.xx = OpticalConstant(delta_xx, beta_xx)
             self[r"$\delta_{xx}$"] = delta_xx(self.index.values)
 
         if r"$\beta_{zz}$" in self.columns:
-            delta_zz, beta_zz = kkcalc(self.index.values, self[r"$\beta_{zz}$"].to_numpy(), self.density, self.molecular_name, *args, **kwargs)
+            delta_zz, beta_zz = kkcalc(
+                self.index.values,
+                self[r"$\beta_{zz}$"].to_numpy(),
+                self.density,
+                self.molecular_name,
+                *args,
+                **kwargs,
+            )
             self.zz = OpticalConstant(delta_zz, beta_zz)
             self[r"$\delta_{zz}$"] = delta_zz(self.index.values)
 
         if r"$\beta_{iso}$" in self.columns:
-            delta_iso, beta_iso = kkcalc(self.index.values, self[r"$\beta_{iso}$"].to_numpy(), self.density, self.molecular_name, *args, **kwargs)
+            delta_iso, beta_iso = kkcalc(
+                self.index.values,
+                self[r"$\beta_{iso}$"].to_numpy(),
+                self.density,
+                self.molecular_name,
+                *args,
+                **kwargs,
+            )
             self.iso = OpticalConstant(delta_iso, beta_iso)
             self[r"$\delta_{iso}$"] = delta_iso(self.index.values)
-
 
     def get_optical_constants(self):
         """
@@ -439,11 +582,9 @@ class AngleNexafs(pd.DataFrame):
             f.seek(0)
             json.dump(data, f, indent=4)
 
-
-        parquet = self.__db / ".data"/ "nexafs" / f"{self.molecular_name}.parquet"
-        nexafs = self.__db / ".data"/ "nexafs" / f"{self.molecular_name}.nexafs"
+        parquet = self.__db / ".data" / "nexafs" / f"{self.molecular_name}.parquet"
+        nexafs = self.__db / ".data" / "nexafs" / f"{self.molecular_name}.nexafs"
         ocs = self.__db / ".ocs" / f"{self.molecular_name}.oc"
-
 
         self.to_parquet(parquet)
         self[self.angles.split(" ")].to_csv(nexafs)
@@ -462,7 +603,6 @@ class AngleNexafs(pd.DataFrame):
         pickle.dump(optical_model, open(ocs, "wb"))
 
 
-
 class ReflDataFrame(pd.DataFrame):
     """
     A subclass of pandas.DataFrame that contains 2d Data, metadata, and
@@ -477,7 +617,9 @@ class ReflDataFrame(pd.DataFrame):
     # --------------------------------------------------------------
     # constructors
 
-    def __init__(self, raw_images: ReflIO | None = None, meta_data=None, *args, **kwargs):
+    def __init__(
+        self, raw_images: ReflIO | None = None, meta_data=None, *args, **kwargs
+    ):
         super().__init__(*args, **kwargs)
 
         if isinstance(raw_images, ArrayLike):

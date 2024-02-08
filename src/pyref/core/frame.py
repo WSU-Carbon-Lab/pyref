@@ -123,7 +123,7 @@ class OpticalConstant:
     @density.setter
     def density(self, density: float, scale_location: float = 250):
         n = index_of_refraction(
-            self.molecular_name, density=self.density, energy=scale_location * 1e-3
+            self.molecular_name, density=density, energy=scale_location * 1e-3
         )
 
         self = self * n.imag / self._beta(scale_location)

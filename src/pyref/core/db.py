@@ -267,7 +267,7 @@ def to_refnx_dataset(
         q = np.append(q, second_pol.Q.to_numpy())
         r = np.append(r, second_pol.Refl.to_numpy())
 
-    dr = 0.01 * r
+    dr = 0.2 * r
     return ReflectDataset(data=(q, r, dr))
 
 

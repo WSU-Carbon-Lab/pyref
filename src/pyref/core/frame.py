@@ -618,6 +618,61 @@ class AngleNexafs(pd.DataFrame):
         self.normalize()
         self.get_kk()
 
+    def to_json(self, path):
+        """
+        Save the dataframe to a .csv file.
+
+        Parameters
+        ----------
+        path : str
+            The path to save the file to.
+        """
+        from datetime import datetime
+
+        # ---------------------------------------------------
+        # Three data parts
+        # 1. Header Data
+        # 2. NEXAFS Data
+        # 3. Optical Constants
+        # ---------------------------------------------------
+
+        en_range = np.linspace(50, 30000, 100000)
+        data = {}
+        data["header"] = {
+            "molecule": self.molecular_name,
+            "commonName": "ZnPc",
+            "density": self.density,
+            "angles": self.angles.split(" "),
+            "synchroton": "Australia",
+            "beamline": "ANSTO",
+            "beamlineID": "XSTO",
+            "scanType": "TEY",
+            "deposition": "PVD",
+            "Vendor": "",
+            "Substrate": "N-type Si",
+            "processTs": datetime.now().isoformat(),
+            "collectionTs": "",
+        }
+        data["nexafs"] = {
+            "energy": self.index.tolist(),
+        }
+        data["nexafs"] |= {
+            f"{angle}": self[angle].tolist() for angle in self.angles.split(" ")
+        }
+        data["oc"] = {
+            "energy": en_range.tolist(),
+            "delta": self.sld.delta(en_range).tolist(),
+            "beta": self.sld.beta(en_range).tolist(),
+            "xx": self.sld.xx(en_range).tolist(),
+            "yy": self.sld.yy(en_range).tolist(),
+            "zz": self.sld.zz(en_range).tolist(),
+            "ixx": self.sld.ixx(en_range).tolist(),
+            "iyy": self.sld.iyy(en_range).tolist(),
+            "izz": self.sld.izz(en_range).tolist(),
+        }
+        with open(path, "w") as f:
+            json.dump(data, f, indent=4)
+
     def to_db(self):
         """
         Save the dataframe to a "database". This creates 3 files:
@@ -651,10 +706,12 @@ class AngleNexafs(pd.DataFrame):
         parquet = self.__db / ".data" / "nexafs" / f"{self.molecular_name}.parquet"
         nexafs = self.__db / ".data" / "nexafs" / f"{self.molecular_name}.nexafs"
         ocs = self.__db / ".ocs" / f"{self.molecular_name}.oc"
+        dat = self.__db / ".data" / f"{self.molecular_name}.json"
 
         self.to_parquet(parquet)
         self[self.angles.split(" ")].to_csv(nexafs)
         pickle.dump(self.sld, open(ocs, "wb"))
+        self.to_json(dat)
 
 
 class ReflDataFrame(pd.DataFrame):

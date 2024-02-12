@@ -636,7 +636,6 @@ class AngleNexafs(pd.DataFrame):
         # 3. Optical Constants
         # ---------------------------------------------------
 
-        en_range = np.linspace(50, 30000, 100000)
         data = {}
         data["header"] = {
             "molecule": self.molecular_name,
@@ -653,25 +652,29 @@ class AngleNexafs(pd.DataFrame):
             "processTs": datetime.now().isoformat(),
             "collectionTs": "",
         }
-        data["nexafs"] = {
-            "energy": self.index.tolist(),
-        }
-        data["nexafs"] |= {
-            f"{angle}": self[angle].tolist() for angle in self.angles.split(" ")
-        }
-        data["oc"] = {
-            "energy": en_range.tolist(),
-            "delta": self.sld.delta(en_range).tolist(),
-            "beta": self.sld.beta(en_range).tolist(),
-            "xx": self.sld.xx(en_range).tolist(),
-            "yy": self.sld.yy(en_range).tolist(),
-            "zz": self.sld.zz(en_range).tolist(),
-            "ixx": self.sld.ixx(en_range).tolist(),
-            "iyy": self.sld.iyy(en_range).tolist(),
-            "izz": self.sld.izz(en_range).tolist(),
-        }
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
+
+    def to_csv(self, path):
+
+        df_nexafs = self[self.angles.split(" ")]
+        oc_ens = np.linspace(50, 30000, 100000)
+        oc_df = pd.DataFrame(
+            {
+                "Energy": oc_ens,
+                "Delta": self.sld.delta(oc_ens),
+                "Beta": self.sld.beta(oc_ens),
+                "xx": self.sld.xx(oc_ens),
+                "yy": self.sld.yy(oc_ens),
+                "zz": self.sld.zz(oc_ens),
+                "ixx": self.sld.ixx(oc_ens),
+                "iyy": self.sld.iyy(oc_ens),
+                "izz": self.sld.izz(oc_ens),
+            }
+        )
+
+        df_nexafs.to_csv(path.with_suffix(".nexafs"), index=False)
+        oc_df.to_csv(path.with_suffix(".oc"), index=False)
 
     def to_db(self):
         """
@@ -712,6 +715,7 @@ class AngleNexafs(pd.DataFrame):
         self[self.angles.split(" ")].to_csv(nexafs)
         pickle.dump(self.sld, open(ocs, "wb"))
         self.to_json(dat)
+        self.to_csv(dat)
 
 
 class ReflDataFrame(pd.DataFrame):

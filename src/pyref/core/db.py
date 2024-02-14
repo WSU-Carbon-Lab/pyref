@@ -256,7 +256,10 @@ def smart_mask(refl, pol: Literal["s", "p"] = "s"):
 
 
 def to_refnx_dataset(
-    refl, pol: Literal["s", "p", "sp"] = "s", second_pol: pd.DataFrame | None = None
+    refl,
+    pol: Literal["s", "p", "sp"] = "s",
+    second_pol: pd.DataFrame | None = None,
+    error=0.2,
 ):
     q = refl.Q.to_numpy()
     r = refl.Refl.to_numpy()
@@ -267,7 +270,7 @@ def to_refnx_dataset(
         q = np.append(q, second_pol.Q.to_numpy())
         r = np.append(r, second_pol.Refl.to_numpy())
 
-    dr = 0.2 * r
+    dr = error * r
     return ReflectDataset(data=(q, r, dr))
 
 

@@ -496,6 +496,8 @@ class AngleNexafs(pd.DataFrame):
             diff_intensity = self["Diff"].max()
             self[r"$\beta_{zz}$"] = self["55"]
             self[r"$\beta_{xx}$"] = self["55"]
+            # βzz(π*) = 3*βiso
+            # βxx(π*) = 3/2βiso
             zsf = 2 * iso_intensity / diff_intensity
             xsf = (iso_intensity - self["55"].iloc[0]) / diff_intensity
             self[r"$\beta_{zz}$"] += zsf * self["Diff"]

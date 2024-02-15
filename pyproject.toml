@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "pyref"
+version = "0.1.0"
+description = "Python reflectivity tools built on the PyPXR and refnx skeleton"
+authors = ["HarlanHeilman <Harlan.Heilman@wsu.edu>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+matplotlib = "^3.8.3"
+pandas = "^2.2.0"
+jupyter = "^1.0.0"
+numpy = "^1.26.4"
+plotly = "^5.18.0"
+typer = "^0.9.0"
+click = "^8.1.7"
+scipy = "^1.12.0"
+scikit-learn = "^1.4.0"
+astropy = "^6.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

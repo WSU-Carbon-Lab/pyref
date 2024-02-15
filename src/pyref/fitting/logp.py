@@ -38,8 +38,6 @@ class LogpExtra(object):
             self.thick_rough_constraint()
         if "birefringence" in self.constraints:
             self.birefringence_constraint()
-        if "delta" in self.constraints:
-            self.delta_constraint()
 
         return 0
 

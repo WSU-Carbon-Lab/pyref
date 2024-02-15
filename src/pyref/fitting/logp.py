@@ -75,15 +75,6 @@ class LogpExtra(object):
                 ):
                     return -inf
 
-    def delta_constraint(self):
-        delta_val = self.sorted_pars["diso"]
-        zz_val = self.sorted_pars["_zz"]
-        # Remove the surface values
-        for i in range(len(delta_val)):
-            if delta_val[i].vary and "surf" not in delta_val[i].name:
-                if delta_val[i].value < zz_val.value:
-                    return -inf
-
 
 class LogpExtra_rough(object):
     def __init__(self, objective):

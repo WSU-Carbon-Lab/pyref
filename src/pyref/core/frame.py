@@ -10,6 +10,7 @@ associated methods for working with reflectometry data.
 import json
 import pickle
 import warnings
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Union
 
@@ -233,21 +234,14 @@ class OrientedOpticalConstants(OpticalConstant):
     def __call__(self, energy: float | list[float], density: float):
         if density != self.density:
             self.density = density
-        if isinstance(energy, (int, float)):
-            n = self.xx(energy) + 1j * self.ixx(energy)
-            return n
-        n = np.zeros((len(energy), 2), dtype=complex)
-        if isinstance(energy, (int, float)):
-            n[0, 0] = self.xx(energy) + 1j * self.ixx(energy)
-            n[0, 1] = self.zz(energy) + 1j * self.izz(energy)
-            return n
-        elif isinstance(energy, list):
+
+        if isinstance(energy, Iterable):
+            n = np.zeros(len(energy), dtype=complex)
             for i, e in enumerate(energy):
-                n[i, 0] = self.xx(e) + 1j * self.ixx(e)
-                n[i, 1] = self.zz(e) + 1j * self.izz(e)
+                n[i] = np.ndarray([self.xx(e), self.zz(e)])
             return n
         else:
-            raise TypeError("Energy must be a float or a list of floats.")
+            return np.asarray([self.xx(energy), self.zz(energy)], dtype=complex)
 
     def __repr__(self) -> str:
         return f"OrientedOpticalConstants({self.xx}, {self.yy}, {self.zz}, {self.ixx}, {self.iyy}, {self.izz})"

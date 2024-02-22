@@ -231,17 +231,21 @@ class OrientedOpticalConstants(OpticalConstant):
     def dichroism(self):
         return lambda x: (self.ixx(x) - self.izz(x))
 
-    def __call__(self, energy: float | list[float], density: float):
-        if density != self.density:
+    def __call__(self, energy: float | list[float], density: float | None = None):
+        if density != self.density and density is not None:
             self.density = density
 
         if isinstance(energy, Iterable):
-            n = np.zeros(len(energy), dtype=complex)
-            for i, e in enumerate(energy):
-                n[i] = np.ndarray([self.xx(e), self.zz(e)])
+            n = []
+            for e in energy:
+                xx = self.xx(e) + 1j * self.ixx(e)
+                zz = self.zz(e) + 1j * self.izz(e)
+                n.append(np.asanyarray([xx, zz], dtype=complex))
             return n
         else:
-            return np.asarray([self.xx(energy), self.zz(energy)], dtype=complex)
+            xx = self.xx(energy) + 1j * self.ixx(energy)
+            zz = self.zz(energy) + 1j * self.izz(energy)
+            return np.asarray([xx, zz], dtype=complex)
 
     def __repr__(self) -> str:
         return f"OrientedOpticalConstants({self.xx}, {self.yy}, {self.zz}, {self.ixx}, {self.iyy}, {self.izz})"
@@ -652,7 +656,6 @@ class AngleNexafs(pd.DataFrame):
             json.dump(data, f, indent=4)
 
     def to_csv(self, path):
-
         df_nexafs = self[self.angles.split(" ")]
         oc_ens = np.linspace(50, 30000, 100000)
         oc_df = pd.DataFrame(

@@ -1,5 +1,6 @@
 import json
 import pickle
+import re
 import warnings
 from pathlib import Path
 from typing import Any, Literal
@@ -255,22 +256,30 @@ def smart_mask(refl, pol: Literal["s", "p"] = "s"):
     return refl
 
 
+type percent = float
+
+
 def to_refnx_dataset(
     refl,
     pol: Literal["s", "p", "sp"] = "s",
     second_pol: pd.DataFrame | None = None,
-    error=0.2,
+    error: percent | None = None,
 ):
     q = refl.Q.to_numpy()
     r = refl.Refl.to_numpy()
+    _dr = refl.Err.to_numpy()
     if pol == "sp" and isinstance(second_pol, pd.DataFrame):
         # append the second polarization
         import numpy as np
 
         q = np.append(q, second_pol.Q.to_numpy())
         r = np.append(r, second_pol.Refl.to_numpy())
-
-    dr = error * r
+        _dr = np.append(_dr, second_pol.Err.to_numpy())
+    if error is None:
+        dr = _dr
+    else:
+        del _dr
+        dr = error * r
     return ReflectDataset(data=(q, r, dr))
 
 

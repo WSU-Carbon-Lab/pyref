@@ -61,14 +61,15 @@ class LogpExtra(object):
     def birefringence_constraint(self):
         bire_pars = self.sorted_pars["bire"]
         delta_val = self.sorted_pars["diso"]
+        self.delta_val = delta_val
         for bire in bire_pars:
-            if bire.vary and delta_val[0] > 0:
+            if delta_val[0] > 0:
                 if (
                     float(bire - 3 * delta_val[0]) > 0
                     or float(bire + 3 * delta_val[0] / 2) < 0
                 ):
                     return -inf
-            if bire.vary and delta_val[0] < 0:
+            if delta_val[0] < 0:
                 if (
                     float(bire - 3 * delta_val[0]) < 0
                     or float(bire + 3 * delta_val[0] / 2) > 0

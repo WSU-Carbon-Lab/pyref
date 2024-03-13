@@ -8,23 +8,9 @@ in python.
 __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
 __version__ = "0.1.0"
-from pathlib import Path
-from sys import modules
-
-from matplotlib.pyplot import style
 
 from .core import *
 from .xrr import *
-
-style_path = Path(__file__).parent / "themes.mplstyle"
-
-style.use(style_path.as_posix())
-
-del style_path
-del modules["matplotlib.pyplot"]
-del modules["pathlib"]
-del style
-del Path
 
 
 # matplotlib.rcParams["mathtext.fontset"] = "stix"

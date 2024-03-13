@@ -1,0 +1,49 @@
+# Matplotlib Style For Jupyter Notebook
+
+# Set default figure size
+figure.figsize : 10, 5
+
+# Set x axis
+xtick.major.size : 6
+xtick.major.width : 1
+xtick.minor.size : 3
+xtick.minor.width : 1
+
+# Set y axis
+ytick.major.size : 6
+ytick.major.width : 1
+ytick.minor.size : 3
+ytick.minor.width : 1
+
+# Fontsizes
+xtick.labelsize : 16
+ytick.labelsize : 16
+legend.fontsize : 16
+legend.title_fontsize : 16
+axes.titlesize : 16
+axes.labelsize : 16
+
+# Set line widths
+axes.linewidth : 1
+grid.linewidth : .5
+lines.linewidth : 2.2
+
+# Use sans-serif fonts
+font.family : STIXGeneral
+mathtext.fontset : stix
+
+# Grid
+text.color: 0.9
+axes.labelcolor: 0.9
+xtick.color: 0.9
+ytick.color: 0.9
+grid.color: fefeff
+grid.linestyle: --
+grid.alpha: 0.5
+
+# Custom
+axes.prop_cycle: cycler('color', ['18c0c4', 'f62196', 'A267F5', 'f3907e', 'ffe46b', 'fefeff'])
+image.cmap: RdPu
+figure.facecolor: 1f2227
+axes.facecolor: 1f2227
+savefig.facecolor: 1f2227

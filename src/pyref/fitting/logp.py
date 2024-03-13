@@ -75,6 +75,8 @@ class LogpExtra(object):
                     or float(bire + 3 * delta_val[0] / 2) > 0
                 ):
                     return -inf
+            if bire_pars[0].value > 0:
+                return -inf
 
 
 class LogpExtra_rough(object):

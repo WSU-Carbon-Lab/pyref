@@ -1,29 +1,25 @@
-[project]
-name = "reflutils"
-version = "1.2.0"
-description = "A simple package for processing reflectivity data collected in the FITS file format"
-authors = [
-    { name = "Harlan Heilman", email = "Harlan.Heilman@wsu.edu"},
-]
-license = {file = "LICENSE"}
+[tool.poetry]
+name = "pyref"
+version = "0.1.0"
+description = "Python reflectivity tools built on the PyPXR and refnx skeleton"
+authors = ["HarlanHeilman <Harlan.Heilman@wsu.edu>"]
+license = "MIT"
 readme = "README.md"
-classifiers = [
-    "Programming Language :: Python :: 3.11",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
-requires-python = ">=3.11"
-dynamic = ["dependencies"]
 
-[project.urls]
-"Homepage" = "https://github.com/WSU-Carbon-Lab/Refl-Utils"
+[tool.poetry.dependencies]
+python = "^3.12"
+matplotlib = "^3.8.3"
+pandas = "^2.2.0"
+jupyter = "^1.0.0"
+numpy = "^1.26.4"
+plotly = "^5.18.0"
+typer = "^0.9.0"
+click = "^8.1.7"
+scipy = "^1.12.0"
+scikit-learn = "^1.4.0"
+astropy = "^6.0.0"
 
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
 
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
-[tools.setuptools.packages.find]
-where = ["src"]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

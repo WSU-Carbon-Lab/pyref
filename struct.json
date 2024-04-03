@@ -1,0 +1,116 @@
+{
+    "Vac": {
+        "Vac_thick": {
+            "name": "Vac_thick",
+            "_value": 0.0,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        },
+        "rho": {
+            "name": "rho",
+            "_value": 0.0,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        },
+        "Vac_rough": {
+            "name": "Vac_rough",
+            "_value": 1.5,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        }
+    },
+    "SiO2": {
+        "SiO2_thick": {
+            "name": "SiO2_thick",
+            "_value": 0.0,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        },
+        "rho": {
+            "name": "rho",
+            "_value": 3.47,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        },
+        "SiO2_rough": {
+            "name": "SiO2_rough",
+            "_value": 1.5,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        }
+    },
+    "Si": {
+        "Si_thick": {
+            "name": "Si_thick",
+            "_value": 0.0,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        },
+        "rho": {
+            "name": "rho",
+            "_value": 2.07,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        },
+        "Si_rough": {
+            "name": "Si_rough",
+            "_value": 1.5,
+            "_bounds": [
+                [
+                    "-inf",
+                    "inf"
+                ]
+            ],
+            "_deps": [],
+            "units": null
+        }
+    }
+}

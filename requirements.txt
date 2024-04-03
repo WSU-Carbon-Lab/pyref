@@ -1,4 +1,4 @@
-astropy==5.3.2
+astropy==5.3.3
 fastparquet==2023.7.0
 matplotlib==3.7.2
 numpy==1.25.2

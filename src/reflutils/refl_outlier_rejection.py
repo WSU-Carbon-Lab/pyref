@@ -1,8 +1,0 @@
-#
-#
-#
-
-
-class OutlierRejection:
-    def findRejects():
-        ...

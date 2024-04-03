@@ -1,7 +1,7 @@
 """Main module."""
+
 from abc import ABC, abstractclassmethod
 from pathlib import Path
-from tkinter import font
 from typing import Final, Literal
 from warnings import warn
 
@@ -9,42 +9,27 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import seaborn as sns
-from matplotlib import axes
 from refnx.dataset import ReflectDataset
 
-sns.set_style("whitegrid")
-sns.set_palette("colorblind")
+from pyref._config import REFL_COLUMN_NAMES
+from pyref.load_fits import MultiReader
+from pyref.refl_manager import ReflFactory, StitchManager
+from pyref.refl_reuse import Reuse
+from pyref.toolkit import FileDialog
 
-from ._config import REFL_COLUMN_NAMES
-from .load_fits import MultiReader
-from .refl_manager import OutlierDetection, ReflFactory, StitchManager
-from .refl_reuse import Reuse
-from .toolkit import FileDialog
-
-
-def hdh_path():
-    path = (
-        Path.home()
-        / "Washington State University (email.wsu.edu)"
-        / "Carbon Lab Research Group - Documents"
-    )
-    hdh_path = path / next(path.glob("*Harlan Heilman*"))
-    csv = hdh_path / ".refl" / ".csv"
-    return csv
 
 class Refl:
     """
-    Main Reflectivity Interface
-    ----------------------------------------------------------------------------
-    ## Properties
-    ----------------------------------------------------------------------------
+    Main Reflectivity Interface.
+
+    Parameters
+    ----------
     refl: DataFrame
         This is a DataFrame with the following columns
         >>> Beamline Energy
         >>> Sample Theta
         >>> Beam Current
-        >>> Higher Order Suppressor
+        >>> Higher Order Suppre.ssor
         >>> EPU Polarization
         >>> Direct Beam Intensity
         >>> Background Intensity
@@ -72,12 +57,14 @@ class Refl:
     polarizations: float | list[float]
         depending on the backend, gives the polarization represented in the Refl object
 
-    At it's base, this is really just a wrapper for a pandas DataFrame, but for more advanced backends this structure becomes more rich to contain all the needed data.
+    At it's base, this is really just a wrapper for a pandas DataFrame, but for more
+    advanced backends this structure becomes more rich to contain all the needed data.
     ----------------------------------------------------------------------------
     ## Methods
     ----------------------------------------------------------------------------
     mask: np.ndarray
-        Property with setter and getter methods. This sets and gets masked attribute from the backend and re-initializes the object.
+        Property with setter and getter methods. This sets and gets masked attribute
+        from the backend and re-initializes the object.
 
     saveData, plot, display, debug
         Inherited from the backend
@@ -412,8 +399,7 @@ class MultiRefl(DataBackend):
         obj.refl = refl
         obj.images = images
 
-    def saveData(self, obj: Refl):
-        ...
+    def saveData(self, obj: Refl): ...
 
     def plot(self, obj: Refl, kind: Literal["en", "pol"], *args, **kwargs):
         if kind == "en":
@@ -451,11 +437,9 @@ class MultiRefl(DataBackend):
         else:
             raise ValueError("Invalid plot kind - choose 'en' or 'pol'")
 
-    def display(self, obj: Refl):
-        ...
+    def display(self, obj: Refl): ...
 
-    def debug(self, obj: Refl):
-        ...
+    def debug(self, obj: Refl): ...
 
 
 BACKEND: Final[dict] = {

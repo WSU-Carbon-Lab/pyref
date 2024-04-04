@@ -372,7 +372,7 @@ class MultiRefl(DataBackend):
                 if not energyDir.exists():
                     error_message = (
                         f"Invalid data directory - path structure should be sample/{energy}. "
-                        f"Invalid path: {str(energyDir)}"
+                        f"Invalid path: {energyDir!s}"
                     )
                     raise ValueError(error_message)
                 pols = [pol.name for pol in energyDir.iterdir() if pol.is_dir()]
@@ -427,7 +427,8 @@ class MultiRefl(DataBackend):
                 EN_imageList.append(pd.concat(POL_imageList, axis=1, keys=pols))
                 obj.polarization.append(tuple(pols))
         else:
-            raise ValueError("Invalid Data Source - choose 'csv' or 'fits'")
+            error_message = "Invalid Data Source - choose 'csv' or 'fits'"
+            raise ValueError(error_message)
 
         refl = pd.concat(EN_reflList, axis=1, keys=obj.energies)
         images = pd.concat(EN_imageList, axis=1, keys=obj.energies)
@@ -442,7 +443,6 @@ class MultiRefl(DataBackend):
 
     def saveData(self, obj: Refl):
         """Save data for multiple reflectance."""
-        pass
 
     def plot(self, obj: Refl, kind: Literal["en", "pol"], *args, **kwargs):
         """Plot the data for multiple reflectance."""
@@ -451,7 +451,7 @@ class MultiRefl(DataBackend):
             fig, axes = plt.subplots(ncols=ncols, figsize=(10, 7.5))
             axes = np.atleast_1d(axes)  # Ensure axes is an array
 
-            for ax, pol in zip(axes, obj.polarization[0]):
+            for ax, pol in zip(axes, obj.polarization[0], strict=True):
                 ax.set_xlabel(REFL_COLUMN_NAMES["Q"] + r"$[\AA^{-1}]$")
                 ax.set_ylabel(REFL_COLUMN_NAMES["R"])
                 ax.set_title(f"P{int(float(pol))}")
@@ -479,15 +479,14 @@ class MultiRefl(DataBackend):
         elif kind == "pol":
             ...
         else:
-            raise ValueError("Invalid plot kind - choose 'en' or 'pol'")
+            error_message = "Invalid plot kind - choose 'en' or 'pol'"
+            raise ValueError(error_message)
 
     def display(self, obj: Refl):
         """Display the data for multiple reflectance."""
-        pass
 
     def debug(self, obj: Refl):
         """Debug the data for multiple reflectance."""
-        pass
 
 
 BACKEND: Final[dict] = {

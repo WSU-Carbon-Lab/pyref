@@ -91,30 +91,66 @@ class Refl:
         self.backendProcessor.getData(self)
 
     def __str__(self) -> str:
+        """Return a string representation of the Refl object."""
         return self.refl.__str__()
 
     def to_parquet(self, savePath=None):
+        """
+        Save the Refl object as a parquet file.
+
+        Parameters
+        ----------
+        savePath : str, optional
+            The path to save the parquet file.
+        """
         self.backendProcessor.saveData(self, savePath, kind="parquet")
 
     def to_csv(self, savePath=None):
+        """
+        Save the Refl object as a CSV file.
+
+        Parameters
+        ----------
+        savePath : str, optional
+            The path to save the CSV file.
+        """
         self.backendProcessor.saveData(self, savePath, kind="csv")
 
     def plot(self, *pltArgs, **pltKWArgs):
+        """
+        Plot the Refl object.
+
+        Parameters
+        ----------
+        *pltArgs : tuple
+            Positional arguments to be passed to the plot function.
+        **pltKWArgs : dict
+            Keyword arguments to be passed to the plot function.
+        """
         self.backendProcessor.plot(self, *pltArgs, **pltKWArgs)
 
     def display(self, *dispArgs, **dispKWArgs):
+        """
+        Display the Refl object.
+
+        Parameters
+        ----------
+        *dispArgs : tuple
+            Positional arguments to be passed to the display function.
+        **dispKWArgs : dict
+            Keyword arguments to be passed to the display function.
+        """
         self.backendProcessor.display(self, *dispArgs, **dispKWArgs)
 
-    def debug(self, *dispArgs, **dispKWArgs):
-        self.backendProcessor.debug(self, *dispArgs, **dispKWArgs)
-
     def reflectDataSet(self):
+        """Return the reflect dataset."""
         return self.backendProcessor.toReflectDataSet(self)
 
 
 class DataBackend(ABC):
     """
-    Abstract class method for data backends. Each backend has the following methods
+    Abstract class method for data backends. Each backend has the following methods.
+
     ----------------------------------------------------------------------------
 
     getData:
@@ -130,7 +166,9 @@ class DataBackend(ABC):
 
 
     saveData:
-        This method will save the backend data in a specified format. The Refl DataFrame will be saved as a csv with no index. Every image dataset will instead be saved as a .npz file. As an outline,
+        This method will save the backend data in a specified format. The Refl
+        DataFrame will be saved as a csv with no index. Every image dataset will
+        instead be saved as a .npz file. As an outline,
 
         >>> saveData(self, obj, dataPath):
         >>>     savePath = str(dataPath.parent)
@@ -138,13 +176,17 @@ class DataBackend(ABC):
         >>>     np.savez(savePath + '.npz')
 
     plot:
-        This method will plot the xrr data. The xrr data needs to be plotted as Q vs Refl with the Refl axis as a log scale.
+        This method will plot the xrr data. The xrr data needs to be plotted as Q
+        vs Refl with the Refl axis as a log scale.
 
     display:
-        This method is the general workforce display method. Ideally, this should use a HoloViz to display data point information and the CCD images that are used to construct the reflectivity point.
+        This method is the general workforce display method. Ideally, this should
+        use a HoloViz to display data point information and the CCD images that are
+        used to construct the reflectivity point.
 
     debug:
-        This method uses the display method, but displays different information than the classic display method. In particular,
+        This method uses the display method, but displays different information than
+        the classic display method. In particular,
 
         >>> Beam Intensity vs Q                                  (Raw Intensity)
         >>> Dark Intensity vs Q                               (Background Noise)
@@ -154,30 +196,32 @@ class DataBackend(ABC):
 
     @abstractclassmethod
     def getData(self):
-        pass
+        """Get data from the backend."""
 
     @abstractclassmethod
     def saveData(self):
-        pass
+        """Save data to the backend."""
 
     @abstractclassmethod
     def plot(self):
-        pass
+        """Plot the data."""
 
     @abstractclassmethod
     def display(self):
-        pass
+        """Display the data."""
 
     @abstractclassmethod
     def debug(self):
-        pass
+        """Debug the data."""
 
     @abstractclassmethod
     def toReflectDataSet(self):
-        pass
+        """Convert the data to a ReflectDataSet."""
 
 
 class SingleRefl(DataBackend):
+    """SingleRefl class for handling single reflectance data."""
+
     def getData(
         self,
         obj: Refl,
@@ -185,6 +229,7 @@ class SingleRefl(DataBackend):
         source: Literal["fits", "csv"] = "fits",
         **dataKWArgs,
     ):
+        """Get data for single reflectance."""
         if isinstance(obj.path, type(None)):
             obj.path = FileDialog.getDirectory(
                 title="Choose Single Polarization Directory"
@@ -208,7 +253,8 @@ class SingleRefl(DataBackend):
             Reuse.openForReuse(obj)
 
         else:
-            raise ValueError("Invalid Data Source - choose 'csv' or 'fits'")
+            error_message = "Invalid Data Source - choose 'csv' or 'fits'"
+            raise ValueError(error_message)
 
     def saveData(
         self,
@@ -216,31 +262,20 @@ class SingleRefl(DataBackend):
         savePath: Path | None = None,
         kind: Literal["parquet", "csv"] = "parquet",
     ):
-        if isinstance(savePath, type(None)):
-            pol = obj.path.name
-            en = obj.path.parent.name
-            scan_number = obj.path.parent.parent.stem
-            sample = obj.path.parent.parent.parent.stem
-            sample_path = obj.path.parent.parent.parent
-            file_name = f"{sample}_{en}_{pol}_refl ({scan_number})"
-            if kind == "parquet":
-                savePath = sample_path / f"{file_name}.parquet"
-            elif kind == "csv":
-                csv_loc = hdh_path()
-                savePath = csv_loc / f"{file_name}.csv"
+        """Save data for single reflectance."""
         if kind == "csv":
             obj.refl.to_csv(savePath, index=False)
         elif kind == "parquet":
             obj.refl.to_parquet(savePath)
 
     def plot(self, obj: Refl, *args, **kwargs):
-        if "ax" in kwargs.keys() and isinstance(kwargs["ax"], plt.Axes):
+        """Plot the data for single reflectance."""
+        if "ax" in kwargs and isinstance(kwargs["ax"], plt.Axes):
             axes = obj.refl.plot(
                 x=REFL_COLUMN_NAMES["Q"],
                 y=REFL_COLUMN_NAMES["R"],
                 yerr=REFL_COLUMN_NAMES["R Err"],
                 logy=True,
-                *args,
                 **kwargs,
             )
             return axes
@@ -250,33 +285,32 @@ class SingleRefl(DataBackend):
                 y=REFL_COLUMN_NAMES["R"],
                 yerr=REFL_COLUMN_NAMES["R Err"],
                 logy=True,
-                *args,
                 **kwargs,
             )
 
     def display(self, obj: Refl):
+        """Display the data for single reflectance."""
         fig = px.scatter(
             obj.refl,
             x=REFL_COLUMN_NAMES["Q"],
             y=REFL_COLUMN_NAMES["R"],
             error_y=REFL_COLUMN_NAMES["R Err"],
             log_y=True,
-            hover_data=list(
-                [
-                    "Energy",
-                    "Theta",
-                    "Current",
-                    "HOS",
-                    "POL",
-                    "Intensity",
-                    "Background",
-                    "RawRefl",
-                ]
-            ),
+            hover_data=[
+                "Energy",
+                "Theta",
+                "Current",
+                "HOS",
+                "POL",
+                "Intensity",
+                "Background",
+                "RawRefl",
+            ],
         )
         fig.show()
 
     def debug(self, obj: Refl):
+        """Debug the data for single reflectance."""
         fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(12, 8))
         obj.refl.plot(
             ax=axes[0, 0],
@@ -305,6 +339,7 @@ class SingleRefl(DataBackend):
         plt.show()
 
     def toReflectDataSet(self, obj: Refl):
+        """Convert the data to a ReflectDataSet."""
         return ReflectDataset(
             obj.refl[REFL_COLUMN_NAMES["Q"]],
             obj.refl[REFL_COLUMN_NAMES["R"]],
@@ -313,6 +348,8 @@ class SingleRefl(DataBackend):
 
 
 class MultiRefl(DataBackend):
+    """MultiRefl class for handling multiple reflectance data."""
+
     def getData(
         self,
         obj: Refl,
@@ -320,6 +357,7 @@ class MultiRefl(DataBackend):
         source: Literal["fits", "csv"] = "fits",
         **dataKWArgs,
     ):
+        """Get data for multiple reflectance."""
         if isinstance(obj.path, type(None)):
             obj.path = FileDialog.getDirectory(title="Choose Single Sample Directory")
 
@@ -332,9 +370,11 @@ class MultiRefl(DataBackend):
             for energy in obj.energies:
                 energyDir = obj.path / energy
                 if not energyDir.exists():
-                    raise ValueError(
-                        f"Invalid data directory - path structure should be sample/{energy}. Invalid path: {str(energyDir)}"
+                    error_message = (
+                        f"Invalid data directory - path structure should be sample/{energy}. "
+                        f"Invalid path: {str(energyDir)}"
                     )
+                    raise ValueError(error_message)
                 pols = [pol.name for pol in energyDir.iterdir() if pol.is_dir()]
                 POL_reflList = []
                 POL_imageList = []
@@ -342,7 +382,8 @@ class MultiRefl(DataBackend):
                     dataDir = energyDir / pol
                     if not energyDir.exists():
                         warn(
-                            f"No experimental data found for polarization: {pol} at {energy}"
+                            f"No experimental data found for polarization: {pol} at {energy}",
+                            stacklevel=2,
                         )
 
                     if dataDir.exists():
@@ -399,9 +440,12 @@ class MultiRefl(DataBackend):
         obj.refl = refl
         obj.images = images
 
-    def saveData(self, obj: Refl): ...
+    def saveData(self, obj: Refl):
+        """Save data for multiple reflectance."""
+        pass
 
     def plot(self, obj: Refl, kind: Literal["en", "pol"], *args, **kwargs):
+        """Plot the data for multiple reflectance."""
         if kind == "en":
             ncols = len(obj.polarization[0])
             fig, axes = plt.subplots(ncols=ncols, figsize=(10, 7.5))
@@ -437,9 +481,13 @@ class MultiRefl(DataBackend):
         else:
             raise ValueError("Invalid plot kind - choose 'en' or 'pol'")
 
-    def display(self, obj: Refl): ...
+    def display(self, obj: Refl):
+        """Display the data for multiple reflectance."""
+        pass
 
-    def debug(self, obj: Refl): ...
+    def debug(self, obj: Refl):
+        """Debug the data for multiple reflectance."""
+        pass
 
 
 BACKEND: Final[dict] = {

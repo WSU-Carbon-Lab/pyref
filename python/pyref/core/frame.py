@@ -4,7 +4,6 @@ import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
-from warnings import deprecated
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +11,7 @@ import pandas as pd
 from kkcalc import kk
 from periodictable.xsf import index_of_refraction
 from scipy.interpolate import interp1d
+from typing_extensions import deprecated
 
 from pyref.core.io import NexafsIO, ReflIO
 
@@ -755,7 +755,6 @@ class AngleNexafs(pd.DataFrame):
         self.to_csv(dat)
 
 
-@deprecated
 class ReflDataFrame(pd.DataFrame):
     """
     A subclass of pandas.DataFrame that contains 2d Data, metadata.

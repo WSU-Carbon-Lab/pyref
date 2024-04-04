@@ -1,9 +1,0 @@
-{
-        "name": "Python: Current File (Integrated Terminal)",
-        "type": "python",
-        "request": "launch",
-        "program": "${file}",
-        "cwd": "${workspaceRoot}",
-        "env": {"PYTHONPATH": "${workspaceRoot}"},
-        "console": "integratedTerminal"
-}

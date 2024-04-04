@@ -1,11 +1,6 @@
-""" 
-Im sorry to whoever has to read this code.
-"""
-
 import datetime
 import os
 from concurrent.futures import ThreadPoolExecutor
-from email.mime import image
 from multiprocessing import Pool
 from pathlib import Path
 from shutil import copy2
@@ -16,8 +11,7 @@ import numpy as np
 import pandas as pd
 from astropy.io import fits
 
-from ._config import FLAGS, HEADER_DICT, HEADER_LIST
-from .toolkit import FileDialog
+from pyref._config import FLAGS, HEADER_DICT, HEADER_LIST
 
 DATA_PATH = (
     Path("Washington State University (email.wsu.edu)")
@@ -414,7 +408,9 @@ class DatabaseInterface:
                 scan = self.scans[int(file_num)]
                 scan_num = scan.name.split(" ")[-1]
                 self.rename_fits(scan, new_sample_name, scan_num)
-                self.day_information["Sample Name"].iloc[int(file_num)] = new_sample_name  # type: ignore
+                self.day_information["Sample Name"].iloc[int(file_num)] = (
+                    new_sample_name  # type: ignore
+                )
             elif apply_to_all == "":
                 self.ensure_names()
             else:

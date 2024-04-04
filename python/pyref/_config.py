@@ -1,5 +1,4 @@
-from typing import Final, Literal
-
+from typing import Final
 
 FLAGS: Final[dict] = {
     "-en": "Beamline Energy",

@@ -1,18 +1,10 @@
-"""
-ReflDataFrame
--------------
-A subclass of pandas.DataFrame that contains 2d Data, metadata, and
-associated methods for working with reflectometry data.
-
-@Author: Harlan Heilman
-"""
-
 import json
 import pickle
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
+from warnings import deprecated
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,10 +13,11 @@ from kkcalc import kk
 from periodictable.xsf import index_of_refraction
 from scipy.interpolate import interp1d
 
-from .io import NexafsIO, ReflIO
+from pyref.core.io import NexafsIO, ReflIO
 
-ArrayLike = Union[np.ndarray, list]
-PathLike = Union[Path, str, NexafsIO]
+ArrayLike = np.ndarray | list
+
+PathLike = Path | str | NexafsIO
 
 
 def _update_kwargs(kwargs: dict, new_kws: dict) -> dict:
@@ -40,6 +33,29 @@ def kkcalc(
     anchor: np.ndarray | None = None,
     **kwargs,
 ):
+    """
+    Summary.
+
+    Parameters
+    ----------
+    energy : np.ndarray
+        _description_
+    nexafs : np.ndarray
+        _description_
+    density : float
+        _description_
+    molecular_name : str
+        _description_
+    anchor : np.ndarray | None, optional
+        _description_, by default None
+    **kwargs : dict
+        Additional keyword arguments.
+
+    Returns
+    -------
+    _type_
+        _description_
+    """
     nexafs = np.column_stack((energy, nexafs))
 
     xmin = energy[0]
@@ -60,12 +76,6 @@ def kkcalc(
     scattering_factor = kk.kk_calculate_real(nexafs, molecular_name, **kws)
 
     extended_energy = scattering_factor[:, 0]
-    f = interp1d(
-        extended_energy,
-        scattering_factor[:, 1],
-        kind="linear",
-        fill_value="extrapolate",
-    )  # type: ignore
     fp = interp1d(
         extended_energy,
         scattering_factor[:, 2],
@@ -101,17 +111,7 @@ def kkcalc(
 
 
 class OpticalConstant:
-    """
-    A class to hold the optical constants for a given energy range.
-    """
-
-    def __init__(
-        self, delta: callable, beta: callable, molecular_name: str, density=None
-    ) -> None:
-        self.delta = delta
-        self.beta = beta
-        self._density = density
-        self.molecular_name = molecular_name
+    """A class to hold the optical constants for a given energy range."""
 
     # ---------------------------------------------------------------------------------
     # properties
@@ -119,6 +119,7 @@ class OpticalConstant:
 
     @property
     def density(self):
+        """Get the density of the OpticalConstant object."""
         return self._density
 
     @density.setter
@@ -129,7 +130,19 @@ class OpticalConstant:
 
         self = self * n.imag / self._beta(scale_location)
 
-    def __call__(self, energy):
+    def __call__(self, energy: float | list[float]):
+        """
+        Calculate the complex refractive index for a given energy.
+
+        Parameters
+        ----------
+        energy : float | list[float]
+            The energy value or a list of energy values.
+
+        Returns
+        -------
+        complex: The complex refractive index.
+        """
         return 1 - self.delta(energy) - 1j * self.beta(energy)
 
     def __repr__(self) -> str:
@@ -152,13 +165,12 @@ class OpticalConstant:
         return lambda x: self.delta(x) / other.real + 1j * self.beta(x) / other.imag
 
     def n(self, energy):
+        """Calculate the index of refraction."""
         return self.delta(energy) + 1j * self.beta(energy)
 
 
 class OrientedOpticalConstants(OpticalConstant):
-    """
-    A class to hold the optical constants for a given energy range.
-    """
+    """A class to hold the optical constants for a given energy range."""
 
     def __init__(
         self,
@@ -197,7 +209,8 @@ class OrientedOpticalConstants(OpticalConstant):
             self.izz = value[2].beta
 
         else:
-            raise ValueError("Symmetry must be 'iso', 'uni', or 'bi'.")
+            e = "Symmetry must be 'iso', 'uni', or 'bi'."
+            raise ValueError(e)
         self._value = value
 
     # ---------------------------------------------------------------------------------
@@ -206,6 +219,7 @@ class OrientedOpticalConstants(OpticalConstant):
 
     @property
     def density(self):
+        """Get the density of the OrientedOpticalConstants object."""
         return self._density
 
     @density.setter
@@ -217,21 +231,26 @@ class OrientedOpticalConstants(OpticalConstant):
 
     @property
     def delta(self):
+        """Calculate the average of the delta values."""
         return lambda x: (self.xx(x) + self.yy(x) + self.zz(x)) / 3
 
     @property
     def beta(self):
+        """Calculate the average of the beta values."""
         return lambda x: (self.ixx(x) + self.iyy(x) + self.izz(x)) / 3
 
     @property
     def birefringence(self):
+        """Calculate the birefringence."""
         return lambda x: (self.xx(x) - self.zz(x))
 
     @property
     def dichroism(self):
+        """Calculate the dichroism."""
         return lambda x: (self.ixx(x) - self.izz(x))
 
     def __call__(self, energy: float | list[float], density: float | None = None):
+        """Return the optical constants for a given energy."""
         if density != self.density and density is not None:
             self.density = density
 
@@ -256,13 +275,13 @@ class OrientedOpticalConstants(OpticalConstant):
 
 class AngleNexafs(pd.DataFrame):
     """
-    A subclass of pandas.DataFrame that allows for visualization of
-    angle dependent NEXAFS data. All methods are in place.
+    A subclass of pandas.DataFrame.
 
     Returns
     -------
     pd : _type_
         _description_
+
     """
 
     # ----------------------------------------------------------------
@@ -273,10 +292,11 @@ class AngleNexafs(pd.DataFrame):
         nexafs: Path,
         molecular_name: str,
         density: float,
-        angles: list | None = ["20", "40", "55", "70", "90"],
+        angles: list[str] = ["20", "40", "55", "70", "90"],  # noqa: B006
         name: str | None = None,
         read_kwargs: dict | None = None,
     ):
+        """A class to hold the optical constants for a given energy range."""
         io = NexafsIO(nexafs)
         df = io.get_nexafs(angles=angles, **(read_kwargs or {}))
         self.__dict__.update(df.__dict__)
@@ -291,13 +311,14 @@ class AngleNexafs(pd.DataFrame):
         self.molecular_name = molecular_name
         self.density = density
         self._name = name
-        __db = json.load(open(Path(__file__).parent / "config.json"))["db"]
+        __db = json.load((Path(__file__).parent / "config.json").open())["db"]
         for string in __db:
             if Path(string).exists():
                 self.__db = Path(string)
                 break
 
     def __repr__(self):
+        """Return a string representation of the object."""
         rep = super().__repr__()
         rep += "\n"
         rep += f"\nMolecular Name: {self.molecular_name}"
@@ -307,22 +328,27 @@ class AngleNexafs(pd.DataFrame):
         return rep
 
     def __str__(self):
+        """Return a string representation of the object."""
         return self.__repr__()
 
     @property
     def name(self):
+        """Get the name property."""
         return self._name
 
     @name.setter
     def name(self, value):
+        """Set the name property."""
         if isinstance(value, str):
             self._name = value
         else:
-            raise TypeError("The name must be a string.")
+            error_message = "The name must be a string."
+            raise TypeError(error_message)
 
     # ----------------------------------------------------------------
     # methods
     def plot_ds(self, **kwargs):
+        """Plot the ds."""
         fig, ax = plt.subplots(
             nrows=2, sharex=True, gridspec_kw={"height_ratios": [3, 1], "hspace": 0}
         )
@@ -343,6 +369,7 @@ class AngleNexafs(pd.DataFrame):
         ax[1].set(ylabel=r"$\beta_{max} - \beta_{min}$", xlabel="Energy [eV]")
 
     def plot_ar(self, **kwargs):
+        """Plot the ar."""
         angs = self.angles.split(" ")
 
         fig, ax = plt.subplots(
@@ -364,6 +391,7 @@ class AngleNexafs(pd.DataFrame):
         )
 
     def plot_beta(self, mpl_kw: dict[str, Any] | None = None, **kwargs):
+        """Plot the beta."""
         angs_ = self.angles.split(" ")
         if len(angs_) == 1:
             angs = angs_
@@ -416,6 +444,7 @@ class AngleNexafs(pd.DataFrame):
         energy_highlights: list | np.ndarray | None = None,
         **kwargs,
     ):
+        """Plot the delta beta."""
         fig, ax = plt.subplots(
             nrows=2,
             sharex=True,
@@ -471,7 +500,9 @@ class AngleNexafs(pd.DataFrame):
             The difference spectrum.
         """
         if len(self.columns) == 1:
-            warnings.warn("The NEXAFS data does not contain multiple angles.")
+            warnings.warn(
+                "The NEXAFS data does not contain multiple angles.", stacklevel=2
+            )
             return None
 
         self["Diff"] = self["55"] - self["20"]
@@ -507,10 +538,7 @@ class AngleNexafs(pd.DataFrame):
             self.plot_beta()
 
     def get_bare_atom(self):
-        """
-        Calculate the bare atom scattering factors and add them to the
-        dataframe.
-        """
+        """Calculate the bare atom scattering factors."""
         n = index_of_refraction(
             self.molecular_name, density=self.density, energy=self.index.values * 1e-3
         )
@@ -519,9 +547,7 @@ class AngleNexafs(pd.DataFrame):
         self[r"$\beta_{ba}$"] = -n.imag
 
     def normalize(self):
-        """
-        Uses the bare atom index of refraction to normalize the beta columns.
-        """
+        """Uses the bare atom index of refraction to normalize the beta columns."""
         if r"$\beta_{ba}$" not in self.columns:
             self.get_bare_atom()
 
@@ -530,7 +556,11 @@ class AngleNexafs(pd.DataFrame):
 
         if "Diff" not in self.columns:
             warnings.warn(
-                "Normalizing only the isotropic data. NEXAFS is likely only one angle."
+                "The NEXAFS data does not contain multiple angles.", stacklevel=2
+            )
+        if len(self.columns) == 1:
+            warnings.warn(
+                "The NEXAFS data does not contain multiple angles.", stacklevel=2
             )
             self[r"$\beta_{iso}$"] /= (lb + ub) / 2
         else:
@@ -540,7 +570,8 @@ class AngleNexafs(pd.DataFrame):
                 ) / 2
             except Exception as e:
                 warnings.warn(
-                    f"{e}\n Normalizing only the isotropic data. NEXAFS is likely only one angle"
+                    f"{e}\n Normalizing only the isotropic data. NEXAFS is likely only one angle",
+                    stacklevel=2,
                 )
                 self[r"$\beta_{iso}$"] /= (lb + ub) / 2
 
@@ -652,10 +683,18 @@ class AngleNexafs(pd.DataFrame):
             "processTs": datetime.now().isoformat(),
             "collectionTs": "",
         }
-        with open(path, "w") as f:
+        with path.open("w") as f:
             json.dump(data, f, indent=4)
 
     def to_csv(self, path):
+        """
+        Save the dataframe to a CSV file.
+
+        Parameters
+        ----------
+        path : str | Path
+            The path to save the CSV file to.
+        """
         df_nexafs = self[self.angles.split(" ")]
         oc_ens = np.linspace(50, 30000, 100000)
         oc_df = pd.DataFrame(
@@ -677,22 +716,20 @@ class AngleNexafs(pd.DataFrame):
 
     def to_db(self):
         """
-        Save the dataframe to a "database". This creates 3 files:
+        Save the dataframe to a "database".
 
         ---
 
         * .parquet - the entire dataframe is saved as a parquet file.
         * .nexafs - the nexafs data is saved as a csv file with the nexafs data.
-        * .oc - the delta, beta, interpolated functions are pickled and saved as a .oc file.
-
+        * .oc - the delta, beta, interpolated functions are pickled and saved as a .oc
 
         Parameters
         ----------
         path : str | Path
             The path to save the database to.
         """
-
-        with open(self.__db / "db.json", "r+") as f:
+        with (self.__db / "db.json").open("r+") as f:
             data = json.load(f)
 
             if self.molecular_name in data["data"]["nexafs"]:
@@ -712,15 +749,16 @@ class AngleNexafs(pd.DataFrame):
 
         self.to_parquet(parquet)
         self[self.angles.split(" ")].to_csv(nexafs)
-        pickle.dump(self.sld, open(ocs, "wb"))
+        with ocs.open("wb") as f:
+            pickle.dump(self.sld, f)
         self.to_json(dat)
         self.to_csv(dat)
 
 
+@deprecated
 class ReflDataFrame(pd.DataFrame):
     """
-    A subclass of pandas.DataFrame that contains 2d Data, metadata, and
-    associated methods for working with reflectometry data.
+    A subclass of pandas.DataFrame that contains 2d Data, metadata.
 
     Parameters
     ----------
@@ -749,8 +787,8 @@ class ReflDataFrame(pd.DataFrame):
                 raw_images = ReflIO(raw_images)
                 self.raw_images = raw_images.get_image()
                 self.meta_data = raw_images.get_header()
-            except:
-                warnings.warn("The path provided is not a valid path.")
+            except Exception:
+                warnings.warn("The path provided is not a valid path.", stacklevel=2)
 
     def __repr__(self):
         return super().__repr__() + "\n" + self.meta_data.__repr__()
@@ -760,6 +798,7 @@ class ReflDataFrame(pd.DataFrame):
 
     @property
     def raw_images(self):
+        """Get the raw_images property."""
         return self._raw_images
 
     @raw_images.setter
@@ -768,6 +807,7 @@ class ReflDataFrame(pd.DataFrame):
 
     @property
     def meta_data(self):
+        """Get the meta_data property."""
         return self._meta_data
 
     @meta_data.setter
@@ -808,10 +848,12 @@ class ReflDataFrame(pd.DataFrame):
         refnx.DataSet
             The refnx.DataSet object.
         """
-
         try:
             refl = (self["Q"], self["R"], self["dR"])
-            return refl
         except KeyError:
-            warnings.warn("The dataframe does not contain the required columns.")
-            return None
+            warnings.warn(
+                "The dataframe does not contain the required columns.", stacklevel=2
+            )
+            refl = None
+        else:
+            return refl

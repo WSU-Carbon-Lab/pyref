@@ -1,18 +1,6 @@
-""" 
-FitsIO
-------
-An object for handling the input and output of fits files.
-
-ReflIO
-------
-An object for handling the input and output of reflectometry data.
-
-@Author: Harlan Heilman
-"""
-
 import re
 from pathlib import Path
-from typing import Final, Union
+from typing import Final
 
 import numpy as np
 import pandas as pd
@@ -42,8 +30,7 @@ ANGLES: Final[list[str]] = ["90", "70", "55", "40", "20"]
 
 class NexafsIO(Path):
     """
-    A subclass of pathlib.Path that incorporates methods for working with
-    nexafs data stored in a .csv file.
+    A subclass of pathlib.Path to extract nexafs data stored in a .csv file.
 
     Parameters
     ----------
@@ -66,7 +53,9 @@ class NexafsIO(Path):
     # --------------------------------------------------------------
     def get_nexafs(self, angles: list[str] | None = ANGLES, **kwargs) -> pd.DataFrame:
         """
-        Method for extracting nexafs data from a csv file. If the csv file
+        Method for extracting nexafs data from a csv file.
+
+        If the csv file
         comes from a dft calculation, the first and last two rows are dropped.
         each energy collumn should start with "Energy" or "energy".
 
@@ -75,6 +64,8 @@ class NexafsIO(Path):
         angles : list[str], optional
             A list of angles to be used as column names, by default
             [20, 40, 55, 70, 90]
+        **kwargs : dict
+            Additional keyword arguments to be passed to the `pd.read_csv` function.
 
         Returns
         -------
@@ -91,7 +82,7 @@ class NexafsIO(Path):
         # use regex to find energy columns
         # Energy columns should have "energy", "en", "e", "w", "E", "X", or "x"
         # in the column name
-        pattern = re.compile(r'Energy|En|energy|x|X')
+        pattern = re.compile(r"Energy|En|energy|x|X")
         en_df = df.filter(regex=pattern)
 
         df["Energy [eV]"] = en_df.mean(axis=1)
@@ -110,8 +101,7 @@ class NexafsIO(Path):
 
 class FitsIO(Path):
     """
-    A subclass of pathlib.Path that incorporates methods for working with
-    fits files.
+    A subclass of pathlib.Path for working with fits files.
 
     Parameters
     ----------
@@ -127,7 +117,7 @@ class FitsIO(Path):
     # Methods
     # --------------------------------------------------------------
     def get_header(
-        self, header_values: list[str] = HEADER_LIST, file_name: bool = False
+        self, header_values: list[str] = HEADER_LIST, *, file_name: bool = False
     ) -> dict:
         """
         Method for extracting header values from a fits file.
@@ -142,7 +132,7 @@ class FitsIO(Path):
 
         return {
             HEADER_DICT[key]: round(meta[key], 4)
-            if isinstance(meta[key], (int, float))
+            if isinstance(meta[key], int | float)
             else meta[key]
             for key in header_values
             if key in meta
@@ -163,7 +153,7 @@ class FitsIO(Path):
         return image
 
     def get_data(
-        self, header_values: list[str] = HEADER_LIST, file_name: bool = False
+        self, header_values: list[str] = HEADER_LIST, *, file_name: bool
     ) -> tuple[pd.DataFrame, np.ndarray]:
         """
         Method for extracting header values and image data from a fits file.
@@ -189,7 +179,7 @@ class FitsIO(Path):
         header = pd.DataFrame(
             {
                 HEADER_DICT[key]: round(meta[key], 4)
-                if isinstance(meta[key], (int, float))
+                if isinstance(meta[key], int | float)
                 else meta[key]
                 for key in header_values
                 if key in meta
@@ -201,9 +191,7 @@ class FitsIO(Path):
 
 class ReflIO(Path):
     """
-    A subclass of pathlib.Path that incorporates methods for working with
-    reflectometry data stored in many fits files. This overloads the prior
-    ReflIO class.
+    A subclass of pathlib.Path for working with reflectometry data.
 
     Parameters
     ----------
@@ -215,33 +203,69 @@ class ReflIO(Path):
         super().__init__(path)
 
     def get_fits(self):
-        """
-
-
-        Returns
-        -------
-        _type_
-            _description_
-        """
+        """Get a list of fits files in the directory."""
         return list(self.glob("*.fits"))
 
     def get_header(
-        self, header_values: list[str] = HEADER_LIST, file_name: bool = False
+        self, header_values: list[str] = HEADER_LIST, *, file_name: bool = False
     ) -> pd.DataFrame:
+        """
+        Method for extracting header values from multiple fits files.
+
+        Parameters
+        ----------
+        header_values : list[str], optional
+            List of header data that is needed to be extracted,
+            by default HEADER_LIST
+        file_name : bool, optional
+            Indicator for if the file names should be saved in the array,
+            by default False
+
+        Returns
+        -------
+        pd.DataFrame
+            A pandas DataFrame containing the extracted header values.
+        """
         meta = []
         for file in self.get_fits():
             meta.append(FitsIO(file).get_header(header_values, file_name))
         return pd.concat(meta)
 
     def get_image(self) -> np.ndarray:
+        """
+        Method for extracting image data from multiple fits files.
+
+        Returns
+        -------
+        np.ndarray
+            A numpy array of image data.
+        """
         image = []
         for file in self.get_fits():
             image.append(FitsIO(file).get_image())
         return np.array(image)
 
     def get_data(
-        self, header_values: list[str] = HEADER_LIST, file_name: bool = False
+        self, header_values: list[str] = HEADER_LIST, *, file_name: bool = False
     ) -> tuple[pd.DataFrame, np.ndarray]:
+        """
+        Method for extracting header values and image data from multiple fits files.
+
+        Parameters
+        ----------
+        header_values : list[str], optional
+            List of header data that is needed to be extracted,
+            by default HEADER_LIST
+        file_name : bool, optional
+            Indicator for if the file names should be saved in the array,
+            by default False
+
+        Returns
+        -------
+        tuple[pd.DataFrame, np.ndarray]
+            A tuple containing the extracted header values as a pandas DataFrame and
+            image data as a numpy array.
+        """
         meta = []
         image = []
         for file in self.get_fits():

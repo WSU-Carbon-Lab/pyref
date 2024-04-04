@@ -10,11 +10,13 @@ from refnx.dataset import ReflectDataset
 from rich import print
 from scipy.interpolate import interp1d
 
-from .frame import OpticalConstant
-from .paths import FileDialog
+from pyref.core.frame import OpticalConstant
+from pyref.core.paths import FileDialog
 
 
 class db:
+    """A class representing a database for storing data."""
+
     def __init__(self):
         with open(Path(__file__).parent / "config.json", "r") as f:
             paths = json.load(f)["db"]

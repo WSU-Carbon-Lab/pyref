@@ -92,6 +92,7 @@ ignore = [
   # Lints below are turned off because of conflicts with the ruff formatter
   "D206",
   "W191",
+  "F401",
 ]
 
 [tool.ruff.lint.per-file-ignores]

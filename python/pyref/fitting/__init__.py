@@ -6,4 +6,3 @@ from .logp import *
 from .save_params import *
 
 move = [(DEMove(sigma=1e-7), 0.95), (DEMove(sigma=1e-7), 0.05)]
-

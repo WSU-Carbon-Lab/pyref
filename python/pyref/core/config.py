@@ -38,7 +38,8 @@ class AppConfig:
     """
     Map environment variables to class attributes
      * If the environment variable is not set, the default value is used from above
-     * If the environment variable is set, the value is converted to the type of the default value
+     * If the environment variable is set, the value is converted to the type of the
+     default value
     """
 
     def __init__(self) -> None:

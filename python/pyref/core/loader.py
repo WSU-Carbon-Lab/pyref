@@ -5,6 +5,7 @@ import numpy as np
 import polars as pd
 from astropy.io import fits
 
+from pyref.core.config import AppConfig as config
 from pyref.core.types import DataDirectory, Value
 from python.pyref.core.exceptions import FitsReadError, ScanError
 
@@ -22,7 +23,7 @@ class Fits(pd.Series):
     def __repr__(self) -> str:
         title = f"FITS file: {self.file_name}\n"
         image = f"Image shape: {self.images.shape}\n"
-        header = f"Header:\n"
+        header = "Header:\n"
         return title + image + header + super().__repr__()
 
     def _read_fits(self, fits_file: str | Path) -> tuple[dict[str, Any], np.ndarray]:

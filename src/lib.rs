@@ -1,8 +1,15 @@
-use pyo3::prelude::*;
+// Rust module to load all fits files in a directory into memory and construct a
+// polars dataframe from them.
 
-/// Formats the sum of two numbers as string.
+use polars::prelude::*;
+use pyo3::{prelude::*, types::PyDict};
+extern crate fitrs;
+use fitrs::{Fits, FitsData, FitsDataArray};
+
+
+
 #[pyfunction]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
+fn read_fits(f: str) -> PyResult<PyDict> {
     Ok((a + b).to_string())
 }
 

@@ -17,18 +17,7 @@ class db:
     """A class representing a database for storing data."""
 
     def __init__(self):
-        with Path(__file__).parent.joinpath("config.json").open() as f:
-            paths = json.load(f)["db"]
-            if isinstance(paths, str):
-                self.db = Path(paths)
-            elif isinstance(paths, list):
-                for path in paths:
-                    if Path(path).exists():
-                        self.db = Path(path)
-                        break
-            else:
-                e = f"Invalid path {paths}"
-                raise TypeError(e)
+        self.db = "C:/Users/hduva/Washington State University (email.wsu.edu)/Carbon Lab Research Group - Documents/Harlan Heilman/.refl/.db"
 
         self.data = self.db / ".data"
         self.nexafs = self.data / "nexafs"

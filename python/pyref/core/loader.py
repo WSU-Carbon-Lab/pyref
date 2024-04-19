@@ -2,12 +2,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import polars as pd
+import pandas as pd
 from astropy.io import fits
 
 from pyref.core.config import AppConfig as config
-from pyref.core.types import DataDirectory, Value
-from python.pyref.core.exceptions import FitsReadError, ScanError
+from pyref.core.exceptions import FitsReadError
 
 
 class Fits(pd.Series):
@@ -76,3 +75,8 @@ class Fits(pd.Series):
 
     def __getitem__(self, name) -> Any:
         return super().__getitem__(name)
+
+
+if __name__ == "__main__":
+    data_dir = config.DATA_DIR
+    print(Fits(data_dir))

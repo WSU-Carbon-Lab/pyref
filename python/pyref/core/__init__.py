@@ -13,7 +13,6 @@ from pyref.core.io import (
     ReflIO,
 )
 from pyref.core.paths import FileDialog
-from pyref.core.types import DataDirectory
 
 
 def bt():

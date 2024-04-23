@@ -248,10 +248,10 @@ class AppConfig:
     SAVE_BACKEND: str = "parquet"
 
     # TEST values
-    DATA_DIR: ClassVar[str] = "./tests/"
     DB: ClassVar[Path] = Path(
-        "C:/Users/hduva/Washington State University (email.wsu.edu)/Carbon Lab Research Group - Documents/Harlan Heilman/.refl/.db"
+        "C:/Users/hduva/Washington State University (email.wsu.edu)/Carbon Lab Research Group - Documents/Harlan Heilman/.refl/.db/"
     )
+    DATA_DIR: ClassVar[Path] = DB / "test"
 
     """
     Map environment variables to class attributes

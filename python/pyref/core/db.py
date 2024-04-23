@@ -10,7 +10,8 @@ from rich import print
 from scipy.interpolate import interp1d
 
 from pyref.core.config import AppConfig as config
-from pyref.core.frame import OpticalConstant
+
+# from pyref.core.frame import OpticalConstant
 from pyref.core.paths import FileDialog
 
 

@@ -1,17 +1,4 @@
 from pyref.core.db import db
-from pyref.core.frame import (
-    AngleNexafs,
-    OpticalConstant,
-    OrientedOpticalConstants,
-    ReflDataFrame,
-)
-from pyref.core.io import (
-    ANGLES,
-    HEADER_DICT,
-    HEADER_LIST,
-    NexafsIO,
-    ReflIO,
-)
 from pyref.core.paths import FileDialog
 
 

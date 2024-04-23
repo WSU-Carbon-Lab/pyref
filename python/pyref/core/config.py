@@ -4,6 +4,7 @@ from typing import ClassVar
 from warnings import warn
 
 import numpy as np
+import polars as pl
 
 from pyref.core.exceptions import AppConfigError
 
@@ -227,6 +228,19 @@ class AppConfig:
         "EPU Polarization": "POL",
         "EXPOSURE": "EXPOSURE",
         "Horizontal Exit Slit Size": "HES",
+        "Date": "DATE",
+    }
+    FITS_HEADER_TYPES: ClassVar[dict[str, type]] = {
+        "ENERGY": pl.Float32,
+        "CURRENT": pl.Float32,
+        "THETA": pl.Float32,
+        "HOS": pl.Float32,
+        "POL": pl.UInt8,
+        "EXPOSURE": pl.Float32,
+        "HES": pl.Float32,
+        "DATE": pl.Datetime,
+        "SHAPE": pl.List,
+        "DATA": pl.List,
     }
     VARIABLE_MOTORS: ClassVar[list[str]] = ["HOS", "HES", "EXPOSURE"]
 
@@ -234,7 +248,7 @@ class AppConfig:
     SAVE_BACKEND: str = "parquet"
 
     # TEST values
-    DATA_DIR: ClassVar[str] = "./tests/ZnPc82862-00001.fits"
+    DATA_DIR: ClassVar[str] = "./tests/"
     DB: ClassVar[Path] = Path(
         "C:/Users/hduva/Washington State University (email.wsu.edu)/Carbon Lab Research Group - Documents/Harlan Heilman/.refl/.db"
     )

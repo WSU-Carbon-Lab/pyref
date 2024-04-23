@@ -1,4 +1,5 @@
 from os import environ as env
+from pathlib import Path
 from typing import ClassVar
 from warnings import warn
 
@@ -234,6 +235,9 @@ class AppConfig:
 
     # TEST values
     DATA_DIR: ClassVar[str] = "./tests/ZnPc82862-00001.fits"
+    DB: ClassVar[Path] = Path(
+        "C:/Users/hduva/Washington State University (email.wsu.edu)/Carbon Lab Research Group - Documents/Harlan Heilman/.refl/.db"
+    )
 
     """
     Map environment variables to class attributes

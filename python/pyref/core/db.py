@@ -9,6 +9,7 @@ from refnx.dataset import ReflectDataset
 from rich import print
 from scipy.interpolate import interp1d
 
+from pyref.core.config import AppConfig as config
 from pyref.core.frame import OpticalConstant
 from pyref.core.paths import FileDialog
 
@@ -17,8 +18,7 @@ class db:
     """A class representing a database for storing data."""
 
     def __init__(self):
-        self.db = "C:/Users/hduva/Washington State University (email.wsu.edu)/Carbon Lab Research Group - Documents/Harlan Heilman/.refl/.db"
-
+        self.db = config.DB
         self.data = self.db / ".data"
         self.nexafs = self.data / "nexafs"
         self.refl = self.data / "refl"

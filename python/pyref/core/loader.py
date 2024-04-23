@@ -76,6 +76,7 @@ class Fits(pd.Series):
     def __getitem__(self, name) -> Any:
         return super().__getitem__(name)
 
+class
 
 if __name__ == "__main__":
     data_dir = config.DATA_DIR

@@ -29,7 +29,7 @@ class Value[T]:
         self.unit = unit
 
     def __repr__(self):
-        return f"{self.value} ± {self.std} {self.unit}"
+        return f"{self.value} ± {self.std} [{self.unit}]"
 
     def __str__(self):
         return self.__repr__()
@@ -230,17 +230,23 @@ class AppConfig:
         "Horizontal Exit Slit Size": "HES",
         "Date": "DATE",
     }
-    FITS_HEADER_TYPES: ClassVar[dict[str, type]] = {
-        "ENERGY": pl.Float32,
-        "CURRENT": pl.Float32,
-        "THETA": pl.Float32,
-        "HOS": pl.Float32,
-        "POL": pl.UInt8,
-        "EXPOSURE": pl.Float32,
-        "HES": pl.Float32,
+    FITS_SCHEMA: ClassVar[dict[str, type]] = {
+        "ENERGY": pl.Float64,
+        "CURRENT": pl.Float64,
+        "THETA": pl.Float64,
+        "HOS": pl.Float64,
+        "POL": pl.Categorical,
+        "EXPOSURE": pl.Float64,
+        "HES": pl.Float64,
         "DATE": pl.Datetime,
-        "SHAPE": pl.List,
-        "DATA": pl.List,
+        "SAMPLE": pl.String,
+        "SCAN_ID": pl.UInt16,
+        "STITCH": pl.UInt8,
+    }
+    DATA_SHCHEMA: ClassVar[dict[str, type]] = {
+        "SAMPLE": pl.String,
+        "SCAN_ID": pl.UInt16,
+        "STITCH": pl.UInt8,
     }
     VARIABLE_MOTORS: ClassVar[list[str]] = ["HOS", "HES", "EXPOSURE"]
 

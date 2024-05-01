@@ -9,6 +9,7 @@ name = "pyref"
 crate-type = ["cdylib"]
 
 [dependencies]
-fitrs = "0.5.0"
+astrors = "0.1.8"
 notify = "6.1.1"
+polars = "0.39.2"
 pyo3 = "0.20.0"

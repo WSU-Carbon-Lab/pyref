@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
 from pathlib import Path
 from shutil import copy2
+from typing import Final
 
 import art
 import click
@@ -11,7 +12,30 @@ import numpy as np
 import pandas as pd
 from astropy.io import fits
 
-from pyref._config import FLAGS, HEADER_DICT, HEADER_LIST
+FLAGS: Final[dict] = {
+    "-en": "Beamline Energy",
+    "-pol": "EPU Polarization",
+    "-n": "File Path",
+}
+
+HEADER_DICT: Final[dict[str, str]] = {
+    "Beamline Energy": "Energy",
+    "Sample Theta": "Theta",
+    "Beam Current": "Current",
+    "Higher Order Suppressor": "HOS",
+    "EPU Polarization": "POL",
+    "EXPOSURE": "Exposure",
+    "DATE": "Date",
+}
+HEADER_LIST: Final[list] = [
+    "Beamline Energy",
+    "Sample Theta",
+    "Beam Current",
+    "Higher Order Suppressor",
+    "EPU Polarization",
+    "EXPOSURE",
+]
+
 
 DATA_PATH = (
     Path("Washington State University (email.wsu.edu)")

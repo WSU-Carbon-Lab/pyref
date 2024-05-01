@@ -4,13 +4,6 @@ contents in a dataframe.
 */
 
 use polars::prelude::*;
-use fitrs::{Fits, FitsData, FitsDataArray};
-use notify::{Watcher, RecursiveMode, watcher};
-
-
-// Wrapper structures for sub trees of the system file tree for better exp syntax
-pub struct BeamTime {
-    pub name: String,
-    pub path: String,
-    pub date: String,
-}
+use dirs;
+use astrors::io;
+use std::fs::File;

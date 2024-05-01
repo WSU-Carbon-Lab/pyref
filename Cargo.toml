@@ -1,0 +1,15 @@
+[package]
+name = "pyref"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "pyref"
+crate-type = ["cdylib"]
+
+[dependencies]
+astrors = "0.1.8"
+notify = "6.1.1"
+polars = "0.39.2"
+pyo3 = "0.20.0"

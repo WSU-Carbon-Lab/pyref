@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Literal
 
+from numpy import float64
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from numpy import float64
 
 import polars as pl
 from periodictable import formula
@@ -123,19 +123,21 @@ class NEXAFSFileType(Enum):
     PARQUET = "parquet"
 
 
-class NEXAFSData(Enum):
-    """Class for working with NEXAFS data."""
-
-    SINGLE_ANGLE = SingleAngle
-    MULTI_ANGLE = MultiAngle
-
-
 class ExperimentType(Enum):
     """Enumeration of NEXAFS experiment types."""
 
     TEY = TEYData
     PEY = PEYData
     BL = BLData
+
+
+class NEXAFSData(Enum):
+    """Class for working with NEXAFS data."""
+
+    SINGLE_ANGLE = SingleAngle
+    MULTI_ANGLE = MultiAngle
+    FILE = NEXAFSFileType
+    EXPERIMENT = ExperimentType
 
 
 # --------------------------------------------------------

@@ -79,17 +79,12 @@ ignore = [
   "SIM108", # Use ternary operator
   # ruff
   "RUF005", # unpack-instead-of-concatenating-to-collection-literal
-  # pycodestyle
-  # Ordered from most common to least common errors.
   "D105", # Missing docstring in magic method
   "D100", # Missing docstring in public module
   "D104", # Missing docstring in public package
-  # flake8-todos
   "TD002", # Missing author in TODO
   "TD003", # Missing issue link on the line following this TODO
-  # tryceratops
   "TRY003", # Avoid specifying long messages outside the exception class
-  # Lints below are turned off because of conflicts with the ruff formatter
   "D206",
   "W191",
   "F401",

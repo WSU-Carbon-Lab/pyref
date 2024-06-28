@@ -7,5 +7,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: chartboost/ruff-action@v1
         with:
-          src: './python'
-          args: 'format --check --diff'
+          src: './python/**/*.py'
+          args: "format $($(git diff --name-only $CI_MERGE_REQUEST_DIFF_BASE_SHA -- '*.py')) --check --diff"

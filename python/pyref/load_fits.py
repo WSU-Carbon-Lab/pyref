@@ -70,7 +70,7 @@ class FitsReader:
 
         return {
             HEADER_DICT[key]: round(headerData[key], 4)
-            if isinstance(headerData[key], (int, float))
+            if isinstance(headerData[key], int | float)
             else headerData[key]
             for key in headerValues
             if key in headerData
@@ -131,8 +131,9 @@ class MultiReader:
         headerValues: list[str] = HEADER_LIST,
         fileName: bool = False,
     ) -> tuple[pd.DataFrame, list]:
-        if dataFilePath == None:
-            raise ValueError("Restart operation and choose a file path")
+        if dataFilePath is None:
+            msg = "Restart operation and choose a file path"
+            raise ValueError(msg)
         imageList = []
         headerDFList = []
         for i, file in enumerate(dataFilePath.glob("*.fits")):
@@ -152,8 +153,9 @@ class MultiReader:
         headerValues: list[str] = HEADER_LIST,
         fileName: bool = False,
     ) -> tuple[list[pd.DataFrame], list[list]]:
-        if dataFilePath == None:
-            raise ValueError("Restart operation and choose a file path")
+        if dataFilePath is None:
+            msg = "Restart operation and choose a file path"
+            raise ValueError(msg)
         pol = dataFilePath.name
         en = dataFilePath.parent.name
         scan_number = dataFilePath.parent.parent.stem
@@ -163,7 +165,7 @@ class MultiReader:
         file_name = f"{sample}_{en}_{pol} ({scan_number})"
         if (sample_path / f"{file_name}.npz").exists():
             loaded_images = np.load(sample_path / f"{file_name}.npz")
-            images = [loaded_images[key] for key in loaded_images.keys()]
+            images = [loaded_images[key] for key in loaded_images]
             meta_data = pd.read_parquet(sample_path / f"{file_name}.parquet")
         else:
             meta_data, images = MultiReader.readFile(
@@ -248,7 +250,7 @@ def copyFile(row, sortedPath: Path, flags: list) -> None:
 
 
 def _getSampleName(string: str) -> str:
-    """General File Structure "Sample-ScanID.fits" this parses sample"""
+    """General File Structure "Sample-ScanID.fits" this parses sample."""
     fileName = Path(string).name.split(".")
     return fileName[0].split("-")[0]
 
@@ -314,7 +316,7 @@ class DatabaseInterface:
         print("-" * os.get_terminal_size().columns)
 
     def select_day_to_sort(self):
-        __selection = input(f"Select a directory to sort or enter to restart:")
+        __selection = input("Select a directory to sort or enter to restart:")
         if __selection == "":
             self.__init__(self.experiment_directory)
 
@@ -362,7 +364,7 @@ class DatabaseInterface:
                     series = pd.Series()
                     series["Scan"] = i
                     series["Scan Number"] = scan_name
-                    header = HEADER_LIST.append("DATE")
+                    HEADER_LIST.append("DATE")
                     meta_data, image_data = MultiReader.readFile(
                         scan / "CCD", fileName=True
                     )
@@ -415,7 +417,7 @@ class DatabaseInterface:
             file_num = input("Enter the scan number to change: ")
             old_sample_name = self.day_information["Sample Name"].iloc[int(file_num)]  # type: ignore
             print(f"Current Sample Name: {old_sample_name}")
-            print(f"The following scans share this name:")
+            print("The following scans share this name:")
             similar_scans = self.day_information[  # type: ignore
                 self.day_information["Sample Name"] == old_sample_name  # type: ignore
             ]
@@ -464,7 +466,7 @@ class DatabaseInterface:
                 file.rename(file.parent / new_name)
 
     def show_scans(self, series, n_fits, index=None):
-        if index != None:
+        if index is not None:
             if np.any(n_fits < 12):
                 print(
                     f"{bcolors.FAIL} {index:<4}{series['Scan Number']:<20}{series['Sample Name']:<15}{series['Elapsed Time']:<20}{series['Pol']:<12}{series['Energies']:<10}{bcolors.ENDC}"  # type: ignore
@@ -493,14 +495,14 @@ class DatabaseInterface:
             enumerate(energies),
             label=f"Sorting Scan {bcolors.WARNING}{scan_name}{bcolors.ENDC}:",
         ) as bar:
-            for i, energy in bar:
+            for _i, energy in bar:
                 mask = (
                     scan_info["Meta Data"]["Energy"].round(1) == float(energy)
                 ).to_numpy(dtype=bool)
                 df = scan_info["Meta Data"][mask]
                 images = np.asarray(scan_info["Image Data"])[mask]
                 en = energy.replace(" ", "")
-                for j, file in df.iterrows():
+                for _j, file in df.iterrows():
                     file_path = ccd_path / file["File Path"]
                     target_path = target_dir / en / pol
                     if not target_path.exists():
@@ -522,7 +524,7 @@ class DatabaseInterface:
         # TODO: Set this up so the folders are initialized before the sorting begins
         print("Sorting Scans...")
         rows = []
-        for i, row in self.day_information.iterrows():
+        for _i, row in self.day_information.iterrows():
             sample_directory = self.processed_directory / row["Sample Name"]
             if not sample_directory.exists():
                 sample_directory.mkdir()
@@ -551,7 +553,7 @@ def cli(
 ):
     os.system("cls")
     experiment_directory = Path.home() / DATA_PATH / beam_time / "XRR"
-    interface = DatabaseInterface(experiment_directory)
+    DatabaseInterface(experiment_directory)
 
 
 if __name__ == "__main__":

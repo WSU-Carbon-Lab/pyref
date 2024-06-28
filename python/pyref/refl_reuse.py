@@ -4,7 +4,7 @@ import fastparquet
 import numpy as np
 import pandas as pd
 
-from ._config import FILE_NAMES
+from pyref._config import FILE_NAMES
 
 
 class Reuse:

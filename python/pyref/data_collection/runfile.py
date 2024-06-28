@@ -188,7 +188,7 @@ def generate_runfile(macro_folder=str | Path) -> None:
     # Generate a new name if the file allready exists
 
     df = []
-    for i, en in enumerate(df_stitches.columns):
+    for _i, en in enumerate(df_stitches.columns):
         energy_df = process_energy(df_stitches[en][0], config, float(en))
         y = pl.Series("y", [config["geometry"]["y"]] * len(energy_df))
         energy_df = energy_df.hstack([y])

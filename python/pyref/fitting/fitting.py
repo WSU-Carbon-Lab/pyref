@@ -10,7 +10,7 @@ tensor_index = ["xx", "yy", "zz"]
 
 class PXR_NexafsSLD(PXR_Scatterer):
     """
-    Object representing freely varying complex tensor index of refraction of a material
+    Object representing freely varying complex tensor index of refraction of a material.
 
     Index of refraction is caclulated using the nexafs data.
 
@@ -69,7 +69,7 @@ class PXR_NexafsSLD(PXR_Scatterer):
         name=None,
         en_offset=0.0,
     ):
-        super(PXR_NexafsSLD, self).__init__(name=name)
+        super().__init__(name=name)
         self.imag = Parameter(0, name="%s_isld" % name)
         self._tensor = None
         self.density = possibly_create_parameter(density, name="%s_rho" % name)
@@ -80,22 +80,22 @@ class PXR_NexafsSLD(PXR_Scatterer):
         self.beta = Parameter(optical_constant.beta(energy), name="%s_beta" % name)
 
         self.xx = Parameter(
-            optical_constant.xx(energy), name="%s_%s" % (name, tensor_index[0])
+            optical_constant.xx(energy), name=f"{name}_{tensor_index[0]}"
         )
         self.ixx = Parameter(
-            optical_constant.ixx(energy), name="%s_i%s" % (name, tensor_index[0])
+            optical_constant.ixx(energy), name=f"{name}_i{tensor_index[0]}"
         )
         self.yy = Parameter(
-            optical_constant.yy(energy), name="%s_%s" % (name, tensor_index[1])
+            optical_constant.yy(energy), name=f"{name}_{tensor_index[1]}"
         )
         self.iyy = Parameter(
-            optical_constant.iyy(energy), name="%s_i%s" % (name, tensor_index[1])
+            optical_constant.iyy(energy), name=f"{name}_i{tensor_index[1]}"
         )
         self.zz = Parameter(
-            optical_constant.zz(energy), name="%s_%s" % (name, tensor_index[2])
+            optical_constant.zz(energy), name=f"{name}_{tensor_index[2]}"
         )
         self.izz = Parameter(
-            optical_constant.izz(energy), name="%s_i%s" % (name, tensor_index[2])
+            optical_constant.izz(energy), name=f"{name}_i{tensor_index[2]}"
         )
 
         self.birefringence = Parameter(
@@ -128,9 +128,7 @@ class PXR_NexafsSLD(PXR_Scatterer):
 
     @property
     def symmetry(self):
-        """
-        Specify `symmetry` to automatically constrain the components. Default is 'uni'
-        """
+        """Specify `symmetry` to automatically constrain the components. Default is 'uni'."""
         return self._symmetry
 
     @symmetry.setter

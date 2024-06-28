@@ -31,23 +31,22 @@ def serialize(params):
         params_dict = {}
         for param in lowest_params:
             if param == "_bounds":
-                params_dict[param] = (str(params.bounds.lb), str(params.bounds.ub)),
+                params_dict[param] = ((str(params.bounds.lb), str(params.bounds.ub)),)
             else:
                 params_dict[param] = getattr(params, param)
         return params_dict
-    
+
     elif isinstance(params, Parameters):
         params_dict = {}
         for param in params:
             params_dict[param.name] = serialize(param)
         return params_dict
-    
+
     elif isinstance(params, dict):
         params_dict = {}
         for key, value in params.items():
             params_dict[key] = value
         return params_dict
-
 
 
 def to_json(refnx_object, filename):
@@ -63,13 +62,12 @@ def to_json(refnx_object, filename):
     """
     params = refnx_object.parameters
     params_dict = serialize(params)
-    with open(filename, 'w') as f:
+    with open(filename, "w") as f:
         json.dump(params_dict, f, indent=4)
 
 
 def from_json(filename):
-
-    with open(filename, 'r') as f:
+    with open(filename) as f:
         params_dict = json.load(f)
 
     return params_dict

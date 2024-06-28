@@ -9,9 +9,9 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.inspection import DecisionBoundaryDisplay
 
-from ._config import REFL_COLUMN_NAMES
-from .image_manager import ImageProcs
-from .toolkit import XrayDomainTransform
+from pyref._config import REFL_COLUMN_NAMES
+from pyref.image_manager import ImageProcs
+from pyref.toolkit import XrayDomainTransform
 
 
 class ErrorManager:
@@ -20,10 +20,7 @@ class ErrorManager:
         nominal: pd.Series | pd.DataFrame | np.ndarray,
         variance: pd.Series | pd.DataFrame | np.ndarray,
     ):
-        """
-        Computes the weighted average of a series of nominal points and their variance
-        """
-
+        """Computes the weighted average of a series of nominal points and their variance."""
         weight = 1 / variance
         variance = 1 / weight.sum()
         average = (nominal * weight).sum() * variance
@@ -38,9 +35,7 @@ class ErrorManager:
         k: str = "k",
         inPlace: bool = True,
     ):
-        """
-        Computes the ADU to photon conversion factor
-        """
+        """Computes the ADU to photon conversion factor."""
         rawIntensityArray = df[raw][:updatePoints]
         df[k] = rawIntensityArray.var() / rawIntensityArray.mean()  # type: ignore
         if not inPlace:
@@ -74,15 +69,14 @@ class ErrorManager:
         var=REFL_COLUMN_NAMES["R Err"],
         inplace=True,
     ):
-        """
-        Replace all meanIndexes points with the average across them
-        """
+        """Replace all meanIndexes points with the average across them."""
         if refl in df.columns:
             weightedAverage, weightedVariance = ErrorManager.weightedAverage(
                 df[refl][:meanCutoff], df[var][:meanCutoff]
             )
         else:
-            raise ValueError(f"{refl} not in dataframe")
+            msg = f"{refl} not in dataframe"
+            raise ValueError(msg)
 
         cols = df.drop(columns=[refl, var]).columns
         mean = df.copy()[cols].loc[:meanCutoff].mean().round(4)
@@ -118,7 +112,11 @@ class ErrorManager:
             )
             scaleFactors = np.array([scale for scale in scaleFactors if scale > 1])
             scaleVars = np.array(
-                [var for scale, var in zip(scaleFactors, scaleVars) if scale > 1]
+                [
+                    var
+                    for scale, var in zip(scaleFactors, scaleVars, strict=False)
+                    if scale > 1
+                ]
             )
 
             scaleFactor, scaleVar = ErrorManager.weightedAverage(
@@ -144,7 +142,7 @@ class ReflFactory:
             trimmedImages = list(
                 executor.map(lambda image: ImageProcs.removeEdge(image), imageList)
             )
-            if mask != None:
+            if mask is not None:
                 maskedImages = list(
                     executor.map(
                         lambda image: ImageProcs.applyMask(image, mask), trimmedImages
@@ -197,7 +195,7 @@ class ReflFactory:
                     lambda args: ImageProcs.roiReduction(
                         args[0], args[1], height=height, width=width
                     ),
-                    zip(maskedImages, beamSpots),
+                    zip(maskedImages, beamSpots, strict=False),
                 )
             )
             backgroundNoise = list(
@@ -205,7 +203,7 @@ class ReflFactory:
                     lambda args: ImageProcs.roiReduction(
                         args[0], args[1], height=height, width=width
                     ),
-                    zip(maskedImages, darkSpots),
+                    zip(maskedImages, darkSpots, strict=False),
                 )
             )
         imageDF[REFL_COLUMN_NAMES["Beam Image"]] = directBeam
@@ -238,9 +236,7 @@ class ReflFactory:
 
     @staticmethod
     def getDf(metaData: pd.DataFrame, imageDF) -> pd.DataFrame:
-        """
-        Main process for generating the initial reflectivity DataFrame. This initialized important columns such as the error, spot intensities and other values. This appends to the metaData information collected from the imageDF
-        """
+        """Main process for generating the initial reflectivity DataFrame. This initialized important columns such as the error, spot intensities and other values. This appends to the metaData information collected from the imageDF."""
         reflDF = ReflFactory.getRefl(imageDF)
         metaData.reset_index(drop=True, inplace=True)
 
@@ -273,9 +269,7 @@ class ReflFactory:
         height: int = 20,
         width: int = 20,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        This is the main process for constructing the reflectivity DataFrame. This takes a list of images, metaData and a mask and returns a DataFrame with the reflectivity information as well as the images used to calculate the reflectivity.
-        """
+        """This is the main process for constructing the reflectivity DataFrame. This takes a list of images, metaData and a mask and returns a DataFrame with the reflectivity information as well as the images used to calculate the reflectivity."""
         imageDF, beamSpots, darkSpots = ReflFactory.getBeamSpots(imageList, mask=mask)
         imageDF = ReflFactory.getSubImages(
             imageDF, beamSpots, darkSpots, height=height, width=width
@@ -295,7 +289,7 @@ class ReflFactory:
         for (
             i,
             (imageDF, metaDF),
-        ) in enumerate(zip(imageLists, metaDataFrames)):
+        ) in enumerate(zip(imageLists, metaDataFrames, strict=False)):
             df, imageDF = ReflFactory.__main(
                 imageDF, metaDF, mask=mask, height=height, width=width
             )
@@ -309,7 +303,7 @@ class OverlapFactory:
     @staticmethod
     def DEPRECIATED_getOverlaps(col: pd.Series) -> tuple:
         """
-        overlap indices list constructor. This returns three items
+        overlap indices list constructor. This returns three items.
 
         stichZero: list
             izero like list of indices corresponding to the first stich point.
@@ -349,9 +343,7 @@ class OverlapFactory:
 
     @staticmethod
     def DEPRECIATED_getPrefixArray(pattern):
-        """
-        Helper function for the KMP
-        """
+        """Helper function for the KMP."""
         m = len(pattern)
         prefix = [0] * m
         j = 0
@@ -367,17 +359,17 @@ class OverlapFactory:
 
     @staticmethod
     def DEPRECIATED_getPeriodicity(list):
-        """
-        Implementation of the KPM periodicity finding algorithm This is used to reduce the number of instructions needed for stitching.
-        """
+        """Implementation of the KPM periodicity finding algorithm This is used to reduce the number of instructions needed for stitching."""
         n = len(list)
         prefix = OverlapFactory.getPrefixArray(list)
 
         period = n - prefix[-1]
         if n % period != 0:
-            raise ValueError(f"Invalid overlap list - {list} is not periodic")
+            msg = f"Invalid overlap list - {list} is not periodic"
+            raise ValueError(msg)
         if period == n:
-            raise ValueError(f"Invalid overlap list - {list} is not periodic")
+            msg = f"Invalid overlap list - {list} is not periodic"
+            raise ValueError(msg)
 
         return period
 
@@ -406,9 +398,7 @@ class OverlapFactory:
 
 
 class OutlierDetection:
-    """
-    Wrapper class for removing outliers from the dataset.
-    """
+    """Wrapper class for removing outliers from the dataset."""
 
     @staticmethod
     def visualizeDataPoints(beamSpots, imageSize, *args, **kwargs):
@@ -512,7 +502,7 @@ class StitchManager:
                 StitchManager.getNormal(df, izeroCount)
             else:
                 if i == len(reflDataFrames) - 1:
-                    test = 0
+                    pass
                 StitchManager.getScaled(
                     df, reflDataFrames[i - 1], initialOverlapCount, overlaps
                 )

@@ -34,18 +34,18 @@ class PXR_NexafsSLD(PXR_Scatterer):
     Components correspond to individual tensor components defined as ('xx', 'yy', 'zz').
     In a uniaxial approximation the following inputs are equivalent.
 
-    >>> n_xx = complex(-0.0035, 0.0004) # [unitless] #Ordinary Axis
-    >>> n_zz = complex(-0.0045, 0.0009) # [unitless] #Extraordinary Axis
-    >>> molecule = PXR_SLD(np.array([n_xx, n_zz]), name='molecule')
+    >>> n_xx = complex(-0.0035, 0.0004)  # [unitless] #Ordinary Axis
+    >>> n_zz = complex(-0.0045, 0.0009)  # [unitless] #Extraordinary Axis
+    >>> molecule = PXR_SLD(np.array([n_xx, n_zz]), name="molecule")
     >>> molecule = PXR_SLD(np.array([n_xx, n_xx, n_zz], name='molecule')
     >>> molecule = PXR_SLD(np.array([n_xx, n_xx, n_zz])*np.eye(3), name='molecule)
 
     An PXR_SLD object can be used to create a PXR_Slab:
 
-    >>> n_xx = complex(-0.0035, 0.0004) # [unitless] #Ordinary Axis
-    >>> n_zz = complex(-0.0045, 0.0009) # [unitless] #Extraordinary Axis
-    >>> molecule = PXR_SLD(np.array([n_xx, n_zz]), name='material') #molecule
-    >>> #Crete a slab with 10 A in thickness and 3 A roughness
+    >>> n_xx = complex(-0.0035, 0.0004)  # [unitless] #Ordinary Axis
+    >>> n_zz = complex(-0.0045, 0.0009)  # [unitless] #Extraordinary Axis
+    >>> molecule = PXR_SLD(np.array([n_xx, n_zz]), name="material")  # molecule
+    >>> # Crete a slab with 10 A in thickness and 3 A roughness
     >>> slab = molecule(10, 3)
 
     Tensor symmetry can be applied using `symmetry`.

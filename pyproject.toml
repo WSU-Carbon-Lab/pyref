@@ -40,6 +40,13 @@ module-name = "pyref"
 [tool.ruff]
 line-length = 88
 fix = true
+exclude = [
+  ".github",
+  ".git",
+  ".vscode",
+  "docs",
+  "src",
+]
 
 [tool.ruff.lint]
 select = [
@@ -89,6 +96,8 @@ ignore = [
   "W191",
   "F401",
 ]
+ignore-init-module-imports = false
+
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D100", "D102", "D103", "B018", "FBT001"]

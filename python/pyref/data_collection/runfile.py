@@ -1,8 +1,4 @@
-"""
-# XRR Runfile Generator.
-
-This module is used to generate a runfile for the XRR experiment at the ALS beamline
-"""
+"""Module containing logic for runfile macro generation."""
 
 import datetime
 from pathlib import Path
@@ -11,7 +7,6 @@ import ipywidgets as widgets
 import numpy as np
 import pandas as pd
 import polars as pl
-import tabulate
 import yaml
 
 DATA_PATH = (

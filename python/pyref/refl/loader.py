@@ -1,201 +1,139 @@
+import re
+import tkinter
+import tkinter.dialog
+import tkinter.filedialog
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from typing import Self
 
+import cv2 as cv
 import numpy as np
 import pandas as pd
 import polars as pl
 from astropy.io import fits
-from pyref.core.config import AppConfig as config
-from pyref.core.config import Value
-from pyref.core.exceptions import FitsReadError
 
 # --------------------------------------------------------
-# Polars dataframe constructors for fits file data sources
+# Custom Enums and Structs
 # --------------------------------------------------------
 
 
-def read_file(fits_file: str | Path, **kwargs) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Read a single fits file and returns a polars DataFrame."""
-    with fits.open(fits_file) as hdul:
-        _header = getattr(hdul[0], "header", None)
-        image = getattr(hdul[2], "data", None)
+class Motor(Enum):
+    """Enum for motor values."""
 
-    # ensure the fits files are not empty
-    if _header is None:
-        error = f"Could not read header from {fits_file}"
-        raise FitsReadError(error)
-    if image is None:
-        error = f"Could not read image from {fits_file}"
-        raise FitsReadError(error)
-
-    # convert the header and image data to the correct types
-    meta = {config.FITS_HEADER[key]: _header[key] for key in config.FITS_HEADER}
-    meta["POL"] = "s" if meta["POL"] == 100 else "p"
-    meta["ENERGY"] = round(meta["ENERGY"], 1)
-    meta["HOS"] = round(meta["HOS"], 2)
-    meta["DATE"] = pd.to_datetime(meta["DATE"])
-
-    index = {
-        "SAMPLE": fits_file.stem.split("-")[0],
-        "SCAN_ID": int(fits_file.stem.split("-")[1].split(".")[0].lstrip("0")),
-        "STITCH": 0,
-    }
-    meta |= index
-    data = pl.DataFrame(index, schema_overrides=config.DATA_SHCHEMA)
-    df_i = data.with_columns(
-        SHAPE=pl.lit(image.shape), DATA=pl.lit(image.flatten().tolist())
-    )
-
-    df_m = pl.DataFrame(meta, schema_overrides=config.FITS_SCHEMA)
-    return df_i, df_m
-
-
-def read_scan(ccd_dir: str | Path, **kwargs) -> tuple[pl.LazyFrame, pl.LazyFrame]:
-    """Read a directory of fits files and returns a polars DataFrame."""
-    fits_files = list(Path(ccd_dir).rglob("*.fits"))
-    if not fits_files:
-        error = f"No fits files found in {ccd_dir}"
-        raise FitsReadError(error)
-
-    df_m = []
-    df_i = []
-    stitch = 0
-    for i, fits_file in enumerate(fits_files):
-        data, meta = read_file(fits_file)
-        # Check if the STICH needs to be updated
-        if data.item(0, "THETA") == 0:
-            stitch = 0
-
-        elif (dfs[i - 1].item(0, "THETA") == 0) and (meta.item(0, "THETA") != 0):  # noqa
-            stitch += 1
-        elif (dfs[i - 1].item(0, "THETA") > meta.item(0, "THETA")) and (
-            meta.item(0, "THETA") != 0
-        ):
-            stitch += 1
-        data[0, "STITCH"] = stitch
-        meta[0, "STITCH"] = stitch
-        df_i.append(data)
-        df_m.append(meta)
-    df_i = pl.concat(df_i)
-    df_m = pl.concat(df_m)
-    return df_i.lazy(), df_m.lazy()
-
-
-def scan_scan(ccd_dir: str | Path, **kwargs) -> pl.DataFrame:
-    """Lazy implementation of read_scan including file watching."""
-    err = "Not implemented yet."
-    raise NotImplementedError(err)
-
-
-# --------------------------------------------------------
-# Classes for processing fits file data sources
-# --------------------------------------------------------
+    Energy = ("Beamline Energy",)
+    Theta = ("Sample Theta",)
+    Current = ("Beam Current",)
+    Hos = ("Higher Order Suppressor",)
+    Pol = ("EPU Polarization",)
+    Exposure = ("EXPOSURE",)
 
 
 @dataclass
-class ExperimentLoader:
-    """Class to load and process experiment data."""
+class ImageData:
+    """Dataclass for image data."""
 
-    ccd_dir: str | Path
+    image: np.ndarray = None
+    processed: np.ndarray = None
+    direct_beam: tuple[int, int] = None
 
-    shutter_offset = Value(0.0, "s")
-    sample_location = Value(0, "deg")
-    angle_offset = Value(0, "deg")
-    energy_offset = Value(0, "eV")
-    snr_cutoff = Value(1.01)  # Motors that were varied during data collection
-    _process_height = Value(25, "pix")
-    _process_width = Value(25, "pix")
+    def read_file(self, hdu: fits.HDUList) -> Self:
+        """Read the image data from a FITS file."""
+        self.image = hdu[2].data
+        self._process_image()
+        return self
 
-    # Image stats
-    edge_trim = Value(5, "pix")
+    def _process_image(self):
+        """Process the image using OpenCV."""
+        # Convert the image to grayscale
+        self.processed = cv.normalize(self.image, None, 0, 255, cv.NORM_MINMAX).astype(
+            np.uint8
+        )
+        # Apply a Gaussian blur to reduce noise
+        blurred_image = cv.GaussianBlur(self.processed, (5, 5), 0)
 
-    # Dezinger options
-    diz_threshold = Value(10, "std")
-    diz_size = Value(3, "pix")
+        # Threshold the image to create a binary image
+        _, threshold_image = cv.threshold(
+            blurred_image, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU
+        )
+
+        # Find contours in the binary image
+        contours, _, _ = cv.findContours(
+            threshold_image, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE
+        )
+
+        # Iterate through the contours and find the largest contour
+        largest_contour = None
+        largest_contour_area = 0
+        for contour in contours:
+            contour_area = cv.contourArea(contour)
+            if contour_area > largest_contour_area:
+                largest_contour = contour
+                largest_contour_area = contour_area
+
+        # Find the centroid of the largest contour
+        if largest_contour is not None:
+            moments = cv.moments(largest_contour)
+            centroid_x = int(moments["m10"] / moments["m00"])
+            centroid_y = int(moments["m01"] / moments["m00"])
+            self.direct_beam = (centroid_x, centroid_y)
+
+        # Create a mask of the largest contour
+        mask = np.zeros_like(self.image)
+        cv.drawContours(mask, [largest_contour], 0, 255, -1)
+
+        # Apply the mask to the original image
+        self.processed = cv.bitwise_and(self.image, self.image, mask=mask)
+        return self
+
+
+@dataclass
+class HeaderData:
+    """Dataclass for header data."""
+
+    energy: Motor.Energy = None
+    theta: Motor.Theta = None
+    current: Motor.Current = None
+    hos: Motor.Hos = None
+    pol: Motor.Pol = None
+    exposure: Motor.Exposure = None
+    image: ImageData = None
 
     def __post_init__(self):
-        self.ccd_dir = Path(self.ccd_dir)
-        self.df_i, self.df_m = read_scan(self.ccd_dir)
+        self.image = ImageData()
 
-    def __repr__(self) -> str:
-        # String set to be
-        term_size = 45
-        s = f"{'─'*term_size}\n"
-        s += "Experiment Loader\n"
-        s += f"CCD Directory:      ┆{' '*4} {self.ccd_dir.stem}\n"
-        s += f"{'═'*term_size}\n"
-        s += f"Shutter Offset:     ┆{' '*4} {self.shutter_offset}\n"
-        s += f"Sample Location:    ┆{' '*4} {self.sample_location}\n"
-        s += f"Angle Offset:       ┆{' '*4} {self.angle_offset}\n"
-        s += f"Energy Offset:      ┆{' '*4} {self.energy_offset}\n"
-        s += f"SNR Cutoff:         ┆{' '*4} {self.snr_cutoff}\n"
-        s += f"Process Height:     ┆{' '*4} {self._process_height}\n"
-        s += f"Process Width:      ┆{' '*4} {self._process_width}\n"
-        s += f"Edge Trim:          ┆{' '*4} {self.edge_trim}\n"
-        s += f"Dezinger Threshold: ┆{' '*4} {self.diz_threshold}\n"
-        s += f"Dezinger Size:      ┆{' '*4} {self.diz_size}\n"
-        s += f"{'─'*term_size}\n"
-        return s
+    def read_file(self, hdu: fits.HDUList) -> Self:
+        """Read the header data from a FITS file."""
+        self.energy = hdu[0].header["Beamline Energy"]
+        self.theta = hdu[0].header["Sample Theta"]
+        self.current = hdu[0].header["Beam Current"]
+        self.hos = hdu[0].header["Higher Order Suppressor"]
+        self.pol = hdu[0].header["EPU Polarization"]
+        self.exposure = hdu[0].header["EXPOSURE"]
 
-    def __str__(self) -> str:
-        return self.__repr__()
+        self.image.read_file(hdu)
 
-    def anomaly_detection(self):
-        """Detect anomalies in the experiment data."""
-        self.check_stitch_dimension()
+        return self
 
-    def check_stitch_dimension(self):
-        """
-        Anomoly Detection for Stitches.
 
-        Iterates though the data for the scan and ensures the dimension of the stitches
-        are >=6. If the dimension is less than 2, the data is flagged in a new
-        collumn called 'ANOMALY'.
+# --------------------------------------------------------
+# Loaders
+# --------------------------------------------------------
 
-        Returns
-        -------
-        None
-        """
-        grouped = self.df.group_by(["ENERGY", "STITCH"])
-        # where the grouped.len()<4 flag it for anomaly
-        flagged = grouped.agg(pl.len().alias("ANOMALY")).filter(pl.col("ANOMALY") < 2)
-        self.df_m = self.df_m.join(flagged, on=["ENERGY", "STITCH"], how="left")
 
-    def reload(self):
-        """Reload the experiment data."""
-        self.__post_init__()
-
-    def preview(self, energy, n):
-        """Preview the nth scan at a specific energy."""
-        import matplotlib as mpl
-        import matplotlib.pyplot as plt
-        import mplcatppuccin
-        import scienceplots
-
-        mpl.style.use(["frappe", "science", "no-latex"])
-
-        self.anomaly_detection()
-        print(self)
-        df = self.df.filter(pl.col("ENERGY") == energy).collect()
-        shape = df.item(n, "SHAPE").to_numpy()
-        image = df.item(n, "DATA").to_numpy()
-        image = np.array(image).reshape(shape)
-        plt.imshow(image)
-        plt.show()
-
-    def save(self):
-        """Save the experiment data."""
-        self.df.collect().write_parquet(self.ccd_dir / "data.parquet")
-
-    def process(self):
-        """Process the experiment data."""
-
-    def extract_images(self):
-        """Create a new image dataframe from the."""
+def from_single_energy(path: str) -> HeaderData:
+    """Load data from an energy scan."""
+    with fits.open(path) as hdul:
+        header_data = HeaderData().read_file(hdul)
+    return header_data
 
 
 if __name__ == "__main__":
-    data_dir = config.DATA_DIR
-    loader = ExperimentLoader(data_dir)
-    loader.preview(283.7, 0)
-    loader.save()
+    import matplotlib.pyplot as plt
+
+    path = "C:/Users/hduva/Washington State University (email.wsu.edu)/Carbon Lab Research Group - Documents/Synchrotron Logistics and Data/ALS - Berkeley/Data/BL1101/2023Nov/XRR/Processed/ZnPc/CCD Scan 82261/286.7/190.0/ZnPc82261-00348.fits"
+    header_data = from_single_energy(path)
+    print(header_data)
+
+    cv.imshow("Image", header_data.image.processed)
+    cv.waitKey(0)

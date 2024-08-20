@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from astropy.io import fits
-
 from pyref.core.config import AppConfig as config
 from pyref.core.config import Value
 from pyref.core.exceptions import FitsReadError

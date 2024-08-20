@@ -9,6 +9,20 @@ authors = [{ name = "Harlan Heilman", email = "Harlan.Heilman@wsu.edu" }]
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.12"
+dependencies = [
+  "numpy",
+  "pandas",
+  "polars",
+  "matplotlib",
+  "jupyter",
+  "plotly",
+  "typer",
+  "click",
+  "scipy",
+  "scikit-learn",
+  "astropy",
+  "pip>=24.2",
+]
 
 keywords = ["X-ray", "reflectivity", "data", "analysis"]
 classifiers = [
@@ -17,19 +31,6 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
   "Topic :: Scientific",
 ]
-
-[project.optional-dependencies]
-matplotlib = ["matplotlib >= 3.8.3"]
-pandas = ["pandas >= 2.2.0"]
-jupyter = ["jupyter >= 1.0.0"]
-numpy = ["numpy >= 1.26.4"]
-plotly = ["plotly >= 5.18.0"]
-typer = ["typer >= 0.9.0"]
-click = ["click >= 8.1.7"]
-scipy = ["scipy >= 1.12.0"]
-scikit-learn = ["scikit-learn >= 1.4.0"]
-astropy = ["astropy >= 6.0.0"]
-
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
@@ -116,3 +117,6 @@ strict = true
 
 [tool.ruff.format]
 docstring-code-format = true
+
+[tool.uv.pip]
+index-url = "https://test.pypi.org/simple"

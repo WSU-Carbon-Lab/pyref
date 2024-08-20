@@ -1297,6 +1297,7 @@ source = { editable = "." }
 dependencies = [
     { name = "astropy" },
     { name = "click" },
+    { name = "ipywidgets" },
     { name = "jupyter" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -1314,6 +1315,7 @@ dependencies = [
 requires-dist = [
     { name = "astropy" },
     { name = "click" },
+    { name = "ipywidgets" },
     { name = "jupyter" },
     { name = "matplotlib" },
     { name = "numpy" },

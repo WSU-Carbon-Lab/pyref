@@ -2,6 +2,7 @@
 name = "pyref_rs"
 version = "0.1.0"
 edition = "2021"
+authors = ["Harlan Heilman"]
 
 [dependencies]
 astrors = "0.1.8"

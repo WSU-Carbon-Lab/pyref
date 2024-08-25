@@ -1,9 +1,9 @@
 [package]
-name = "pyref_rs"
+name = "pyref_ccd"
 version = "0.1.0"
 edition = "2021"
 authors = ["Harlan Heilman"]
-description = "Rust tooling library constructed using astrors for efficient data manipulation."
+description = "Rust library to analyze fits files from the CCD camera for the PyRef project"
 license = "GPL-2.0"
 
 [dependencies]

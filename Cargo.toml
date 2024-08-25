@@ -1,0 +1,12 @@
+[package]
+name = "pyref_rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+astrors = "0.1.8"
+ndarray = "0.15.6"
+polars = "0.38.3"
+
+[lib]
+crate-type = ["cdylib"]

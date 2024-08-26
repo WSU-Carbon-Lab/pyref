@@ -1,1 +1,1 @@
-# Basic Rust Backend for Loading Fits Files in Rust
+# Rust Backend processing basic FITS files for CCD data collected at 11.0.1.2

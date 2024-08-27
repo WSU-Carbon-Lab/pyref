@@ -58,6 +58,9 @@ exclude = [
   "docs",
   "src",
 ]
+extend-include = [
+  "*.ipynb",
+]
 
 [tool.ruff.lint]
 select = [
@@ -85,34 +88,6 @@ select = [
   "FBT001", # flake8-boolean-trap
 ]
 
-ignore = [
-  # Line length regulated by formatter
-  "E501",
-  # pydocstyle: http://www.pydocstyle.org/en/stable/error_codes.html
-  "D401", # Relax NumPy docstring convention: First line should be in imperative mood
-  # flake8-pytest-style:
-  "PT011", # pytest.raises({exception}) is too broad, set the match parameter or use a more specific exception
-  # flake8-simplify
-  "SIM102", # Use a single `if` statement instead of nested `if` statements
-  "SIM108", # Use ternary operator
-  # ruff
-  "RUF005", # unpack-instead-of-concatenating-to-collection-literal
-  "D105", # Missing docstring in magic method
-  "D100", # Missing docstring in public module
-  "D104", # Missing docstring in public package
-  "TD002", # Missing author in TODO
-  "TD003", # Missing issue link on the line following this TODO
-  "TRY003", # Avoid specifying long messages outside the exception class
-  "D206",
-  "W191",
-  "F401",
-]
-ignore-init-module-imports = false
-
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["D100", "D102", "D103", "B018", "FBT001"]
-
 [tool.ruff.lint.pycodestyle]
 max-doc-length = 88
 
@@ -127,6 +102,3 @@ strict = true
 
 [tool.ruff.format]
 docstring-code-format = true
-
-[tool.uv.pip]
-index-url = "https://test.pypi.org/simple"

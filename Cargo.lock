@@ -1674,10 +1674,22 @@ dependencies = [
 [[package]]
 name = "pyref_ccd"
 version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c3a6329ac97661af5f8c7068529451dca4cb9f92c801f38baf8133a98069247"
 dependencies = [
  "astrors",
  "ndarray",
  "polars 0.42.0",
+]
+
+[[package]]
+name = "pyref_ccd"
+version = "0.2.2"
+dependencies = [
+ "astrors",
+ "ndarray",
+ "polars 0.42.0",
+ "pyref_ccd 0.2.1",
 ]
 
 [[package]]

@@ -11,7 +11,6 @@ documentation = "https://docs.rs/pyref-ccd/"
 [dependencies]
 astrors = "0.1.8"
 ndarray = "0.15.6"
-pyref_ccd = "0.2.1"
 
 
 [dependencies.polars]

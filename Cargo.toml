@@ -1,6 +1,6 @@
 [package]
 name = "pyref_ccd"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
 description = "Rust library to analyze fits files from the CCD camera for the PyRef project"

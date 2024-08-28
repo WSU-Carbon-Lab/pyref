@@ -1673,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "pyref_ccd"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "astrors",
  "ndarray",

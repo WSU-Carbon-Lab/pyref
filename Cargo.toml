@@ -18,8 +18,10 @@ default-features = false
 features = ["docs", "zip_with", "csv", "temporal", "fmt", "dtype-full"]
 
 
-# [lib]
-# crate-type = ["cdylib"]
+[lib]
+name = "ccd"
+path="src/ccd/lib.rs"
+crate-type = ["cdylib"]
 
 [http]
 check-revoke = false

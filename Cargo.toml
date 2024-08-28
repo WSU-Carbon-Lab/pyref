@@ -8,11 +8,18 @@ license = "GPL-2.0"
 
 [dependencies]
 astrors = "0.1.8"
+byteorder = "1.5.0"
 ndarray = "0.15.6"
-polars = "0.42.0"
+ndarray-stats = "0.6.0"
 
-[lib]
-crate-type = ["cdylib"]
+[dependencies.polars]
+version = "0.42.0"
+default-features = false
+features = ["docs", "zip_with", "csv", "temporal", "fmt", "dtype-full"]
+
+
+# [lib]
+# crate-type = ["cdylib"]
 
 [http]
 check-revoke = false

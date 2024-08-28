@@ -2,13 +2,16 @@
 name = "pyref_ccd"
 version = "0.2.1"
 edition = "2021"
-authors = ["Harlan Heilman"]
+authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
 description = "Rust library to analyze fits files from the CCD camera for the PyRef project"
 license = "GPL-2.0"
+repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
+documentation = "https://docs.rs/pyref-ccd/"
 
 [dependencies]
 astrors = "0.1.8"
 ndarray = "0.15.6"
+
 
 [dependencies.polars]
 version = "0.42.0"
@@ -20,6 +23,9 @@ features = ["docs", "zip_with", "csv", "temporal", "fmt", "dtype-full"]
 name = "ccd"
 path="src/ccd/lib.rs"
 crate-type = ["cdylib"]
+
+[docs]
+all-features = true
 
 # [http]
 # check-revoke = false

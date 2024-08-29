@@ -6,7 +6,7 @@ authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
 description = "Core of the pyref project"
 license = "GPL-2.0"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
-documentation = "https://docs.rs/pyref-core/"
+documentation = "https://docs.rs/pyref_ccd/latest/ccd/"
 
 [lib]
 name = "pyref_core"

@@ -1,3 +1,3 @@
-extern crate pyref_ccd;
+extern crate core;
 
 pub mod ccd;

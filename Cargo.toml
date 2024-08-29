@@ -8,6 +8,10 @@ license = "GPL-2.0"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
 documentation = "https://docs.rs/pyref-ccd/"
 
+[lib]
+name = "pyref_core"
+path = "src/lib.rs"
+
 [dependencies]
 astrors = "0.1.8"
 ndarray = "0.15.6"
@@ -21,5 +25,6 @@ features = ["docs", "zip_with", "csv", "temporal", "fmt", "dtype-full"]
 [docs]
 all-features = true
 
-# [http]
-# check-revoke = false
+[package.metadata.docs.rs]
+features = ["docs-selection"]
+rustdoc-args = ["--cfg", "docsrs"]

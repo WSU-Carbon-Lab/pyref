@@ -24,7 +24,3 @@ features = ["docs", "zip_with", "csv", "temporal", "fmt", "dtype-full"]
 
 [docs]
 all-features = true
-
-[package.metadata.docs.rs]
-features = ["docs-selection"]
-rustdoc-args = ["--cfg", "docsrs"]

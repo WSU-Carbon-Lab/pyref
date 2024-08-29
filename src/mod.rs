@@ -1,3 +1,3 @@
-use ccd;
+use pyref_ccd;
 
-pub mod ccd;
+pub mod pyref_ccd;

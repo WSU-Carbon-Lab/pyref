@@ -20,8 +20,8 @@ features = ["docs", "zip_with", "csv", "temporal", "fmt", "dtype-full"]
 
 
 [lib]
-name = "ccd"
-path="src/ccd/lib.rs"
+name = "pyref_ccd"
+path="src/pyref_ccd/lib.rs"
 crate-type = ["cdylib"]
 
 [docs]

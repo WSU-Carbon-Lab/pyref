@@ -60,7 +60,7 @@ pub struct FitsLoader {
 /// let fits_loader = FitsLoader::new("/path/to/file.fits").unwrap();
 ///
 /// // Get a specific card value
-/// let card_value = fits_loader.get_card("CARD_NAME");
+/// let card_value = fits_loader.get_value("CARD_NAME");
 ///
 /// // Get all card values
 /// let all_cards = fits_loader.get_all_cards();
@@ -80,8 +80,15 @@ impl FitsLoader {
             hdul,
         })
     }
+    pub fn get_card(&self, card_name: &str) -> Option<card::Card> {
+        match &self.hdul.hdus[0] {
+            io::hdulist::HDU::Primary(hdu) => hdu.header.get_card(card_name).cloned(),
+            _ => None,
+        }
+    }
+
     // Get single card values
-    pub fn get_card(&self, card_name: &str) -> Option<card::CardValue> {
+    pub fn get_value(&self, card_name: &str) -> Option<card::CardValue> {
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => {
                 hdu.header.get_card(card_name).map(|c| c.value.clone())
@@ -145,7 +152,7 @@ impl FitsLoader {
             // Use specified keys
             keys.iter()
                 .filter_map(|key| {
-                    self.get_card(key)
+                    self.get_value(key)
                         .map(|card| Series::new(key, vec![card.as_float().unwrap_or(0.0)]))
                 })
                 .collect::<Vec<_>>()

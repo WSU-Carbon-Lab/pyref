@@ -1,6 +1,6 @@
 [package]
 name = "pyref-core"
-version = "0.2.21"
+version = "0.2.22"
 edition = "2021"
 authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
 description = "Core of the pyref project"

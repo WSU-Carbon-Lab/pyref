@@ -45,6 +45,35 @@ pub struct FitsLoader {
     pub hdul: HDUList,
 }
 
+/// FitsLoader struct for loading and accessing FITS file data.
+///
+/// The `FitsLoader` struct provides methods for loading and accessing data from a FITS file.
+/// It supports retrieving individual card values, all card values, image data, and converting
+/// the data to a Polars DataFrame.
+///
+/// # Example
+///
+/// ```
+/// use pyref_ccd::loader::FitsLoader;
+///
+/// let fits_loader = FitsLoader::new("/path/to/file.fits").unwrap();
+///
+/// // Get a specific card value
+/// let card_value = fits_loader.get_card("CARD_NAME");
+///
+/// // Get all card values
+/// let all_cards = fits_loader.get_all_cards();
+///
+/// // Get image data
+/// let image_data = fits_loader.get_image();
+///
+/// // Convert data to Polars DataFrame
+/// let keys = ["KEY1", "KEY2"];
+/// let polars_df = fits_loader.to_polars(&keys);
+/// ```
+pub struct FitsLoader {
+    // ...
+}
 impl FitsLoader {
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let hdul = fits::fromfile(path)?;

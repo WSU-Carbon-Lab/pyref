@@ -40,15 +40,15 @@ impl ExperimentType {
 }
 
 // Struct representing a CCD FITS file.
-pub struct CcdFits {
+pub struct FitsLoader {
     pub path: String,
     pub hdul: HDUList,
 }
 
-impl CcdFits {
+impl FitsLoader {
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let hdul = fits::fromfile(path)?;
-        Ok(CcdFits {
+        Ok(FitsLoader {
             path: path.to_string(),
             hdul,
         })
@@ -159,7 +159,7 @@ pub fn image_series(name: &str, array: Array2<u32>) -> Series {
 // Structure representing an experiment.
 pub struct ExperimentLoader {
     pub dir: String,
-    pub ccd_files: Vec<CcdFits>,
+    pub ccd_files: Vec<FitsLoader>,
     pub experiment_type: ExperimentType,
 }
 
@@ -172,7 +172,7 @@ impl ExperimentLoader {
         let ccd_files = fs::read_dir(dir)?
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("fits"))
-            .map(|entry| CcdFits::new(entry.path().to_str().unwrap()))
+            .map(|entry| FitsLoader::new(entry.path().to_str().unwrap()))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(ExperimentLoader {
@@ -201,7 +201,7 @@ impl ExperimentLoader {
 
 // workhorse functions for loading and processing CCD data.
 pub fn read_fits(file_path: &str) -> Result<DataFrame, Box<dyn std::error::Error>> {
-    let df = CcdFits::new(file_path)?.to_polars(&[])?;
+    let df = FitsLoader::new(file_path)?.to_polars(&[])?;
     Ok(df)
 }
 

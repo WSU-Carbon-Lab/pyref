@@ -122,7 +122,7 @@ impl FitsLoader {
             .unwrap_or_else(|_| panic!("Expected 2D data but got different dimensions"))
     }
 
-    /// Retrieves the image data from the FITS file as an Array2<u32>.
+    /// Retrieves the image data from the FITS file as an `Array2<u32>`.
     pub fn get_image(&self) -> Result<Array2<u32>, Box<dyn std::error::Error>> {
         match &self.hdul.hdus[2] {
             io::hdulist::HDU::Image(i_hdu) => self.get_data(&i_hdu.data),

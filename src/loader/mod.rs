@@ -14,6 +14,15 @@ pub enum ExperimentType {
 }
 
 impl ExperimentType {
+    pub fn from_str(exp_type: &str) -> Result<Self, &str> {
+        match exp_type {
+            "Xrr" => Ok(ExperimentType::Xrr),
+            "Xrs" => Ok(ExperimentType::Xrs),
+            "Other" => Ok(ExperimentType::Other),
+            _ => Err("Invalid experiment type"),
+        }
+    }
+
     pub fn get_keys(&self) -> Vec<&str> {
         match self {
             ExperimentType::Xrr => vec![
@@ -196,10 +205,8 @@ pub fn read_fits(file_path: &str) -> Result<DataFrame, Box<dyn std::error::Error
     Ok(df)
 }
 
-pub fn read_experiment(
-    dir: &str,
-    experiment_type: ExperimentType,
-) -> Result<DataFrame, Box<dyn std::error::Error>> {
-    let df = ExperimentLoader::new(dir, experiment_type)?.to_polars()?;
+pub fn read_experiment(dir: &str, exp_type: &str) -> Result<DataFrame, Box<dyn std::error::Error>> {
+    let exp = ExperimentType::from_str(exp_type)?;
+    let df = ExperimentLoader::new(dir, exp)?.to_polars()?;
     Ok(df)
 }

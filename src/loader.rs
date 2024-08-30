@@ -54,7 +54,8 @@ pub struct FitsLoader {
 /// # Example
 ///
 /// ```
-/// use pyref_ccd::loader::FitsLoader;
+/// extern crate pyref_core;
+/// use pyref_core::loader::FitsLoader;
 ///
 /// let fits_loader = FitsLoader::new("/path/to/file.fits").unwrap();
 ///
@@ -71,9 +72,6 @@ pub struct FitsLoader {
 /// let keys = ["KEY1", "KEY2"];
 /// let polars_df = fits_loader.to_polars(&keys);
 /// ```
-pub struct FitsLoader {
-    // ...
-}
 impl FitsLoader {
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let hdul = fits::fromfile(path)?;
@@ -185,12 +183,30 @@ pub fn image_series(name: &str, array: Array2<u32>) -> Series {
     s
 }
 
-// Structure representing an experiment.
 pub struct ExperimentLoader {
     pub dir: String,
     pub ccd_files: Vec<FitsLoader>,
     pub experiment_type: ExperimentType,
 }
+
+/// FitsLoader struct for loading and accessing FITS file data.
+///
+/// The `FitsLoader` struct provides methods for loading and accessing data from a FITS file.
+/// It supports retrieving individual card values, all card values, image data, and converting
+/// the data to a Polars DataFrame.
+///
+/// # Example
+///
+/// ```
+/// extern crate pyref_core;
+/// use pyref_core::loader::{ExperimentLoader, ExperimentType};
+///
+/// let exp = ExperimentType::from_str(exp_type)?;
+/// let fits_loader = ExperimentLoader::new("/path/to/file.fits", exp).unwrap();
+///
+/// // Mostly this is used to convert the data to a Polars DataFrame
+/// let df = fits_loader.to_polars()?;
+/// ```
 
 impl ExperimentLoader {
     // Create a new ExperimentLoader instance and load all Fits file in the directory.

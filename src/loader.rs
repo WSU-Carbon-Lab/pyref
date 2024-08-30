@@ -88,11 +88,12 @@ impl FitsLoader {
     }
 
     // Get single card values
-    pub fn get_value(&self, card_name: &str) -> Option<card::CardValue> {
+    pub fn get_value(&self, card_name: &str) -> Option<f64> {
         match &self.hdul.hdus[0] {
-            io::hdulist::HDU::Primary(hdu) => {
-                hdu.header.get_card(card_name).map(|c| c.value.clone())
-            }
+            io::hdulist::HDU::Primary(hdu) => hdu
+                .header
+                .get_card(card_name)
+                .map(|c| c.value.as_float().unwrap()),
             _ => None,
         }
     }
@@ -153,7 +154,7 @@ impl FitsLoader {
             keys.iter()
                 .filter_map(|key| {
                     self.get_value(key)
-                        .map(|card| Series::new(key, vec![card.as_float().unwrap_or(0.0)]))
+                        .map(|value| Series::new(key, vec![value]))
                 })
                 .collect::<Vec<_>>()
         };

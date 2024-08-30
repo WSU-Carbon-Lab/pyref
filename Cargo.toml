@@ -1,6 +1,6 @@
 [package]
 name = "pyref-core"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
 description = "Core of the pyref project"
@@ -16,11 +16,17 @@ path = "src/lib.rs"
 astrors = "0.1.8"
 ndarray = "0.15.6"
 
-
 [dependencies.polars]
 version = "0.42.0"
 default-features = false
-features = ["docs", "zip_with", "csv", "temporal", "fmt", "dtype-full"]
+features = [
+    "docs",
+    "zip_with",
+    "csv",
+    "temporal",
+    "fmt",
+    "dtype-full",
+]
 
 [docs]
 all-features = true

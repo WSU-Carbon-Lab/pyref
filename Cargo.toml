@@ -6,7 +6,7 @@ edition = "2021"
 license = "GPL-2.0"
 name = "pyref-core"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
-version = "0.2.25"
+version = "0.2.26"
 
 [lib]
 name = "pyref_core"
@@ -17,7 +17,6 @@ astrors = "0.1.8"
 ndarray = "0.15.6"
 
 [dependencies.polars]
-version = "0.42.0"
 default-features = false
 features = [
     "docs",
@@ -27,6 +26,7 @@ features = [
     "fmt",
     "dtype-full",
 ]
+version = "0.35.4"
 
 [docs]
 all-features = true

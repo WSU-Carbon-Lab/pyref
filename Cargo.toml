@@ -1,12 +1,12 @@
 [package]
-name = "pyref-core"
-version = "0.2.23"
-edition = "2021"
 authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
 description = "Core of the pyref project"
-license = "GPL-2.0"
-repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
 documentation = "https://docs.rs/pyref-core/latest/pyref_core/"
+edition = "2021"
+license = "GPL-2.0"
+name = "pyref-core"
+repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
+version = "0.2.24"
 
 [lib]
 name = "pyref_core"

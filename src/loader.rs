@@ -1,3 +1,21 @@
+/// This module provides functionality for working with FITS files using the `astrors::fits` crate.
+///
+/// # Examples
+///
+/// ```
+/// use astrors::fits;
+///
+/// // Load a FITS file
+/// let fits_file = fits::load("path/to/file.fits");
+///
+/// // Access the header information
+/// let header = fits_file.header();
+///
+/// // Access the data
+/// let data = fits_file.data();
+/// ```
+///
+/// For more information, see the [README](README.md).
 use astrors::fits;
 use astrors::io;
 use astrors::io::hdulist::*;
@@ -72,7 +90,18 @@ pub struct FitsLoader {
 /// let keys = ["KEY1", "KEY2"];
 /// let polars_df = fits_loader.to_polars(&keys);
 /// ```
+/// A struct representing a FITS loader.
+
 impl FitsLoader {
+    /// Creates a new `FitsLoader` instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the FITS file.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `FitsLoader` instance if successful, or a boxed `dyn std::error::Error` if an error occurred.
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let hdul = fits::fromfile(path)?;
         Ok(FitsLoader {
@@ -80,6 +109,16 @@ impl FitsLoader {
             hdul,
         })
     }
+
+    /// Retrieves a specific card from the FITS file.
+    ///
+    /// # Arguments
+    ///
+    /// * `card_name` - The name of the card to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing the requested `card::Card` if found, or `None` if not found.
     pub fn get_card(&self, card_name: &str) -> Option<card::Card> {
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => hdu.header.get_card(card_name).cloned(),
@@ -87,7 +126,15 @@ impl FitsLoader {
         }
     }
 
-    // Get single card values
+    /// Retrieves the value of a specific card from the FITS file.
+    ///
+    /// # Arguments
+    ///
+    /// * `card_name` - The name of the card to retrieve the value from.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => hdu
@@ -97,7 +144,12 @@ impl FitsLoader {
             _ => None,
         }
     }
-    // Get all card values
+
+    /// Retrieves all cards from the FITS file.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec` containing all the cards as `card::Card` instances.
     pub fn get_all_cards(&self) -> Vec<card::Card> {
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => {
@@ -106,7 +158,16 @@ impl FitsLoader {
             _ => vec![],
         }
     }
-    // Get image data
+
+    /// Retrieves the image data from the FITS file.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The image data to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the image data as a `Array2<u32>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     fn get_data(
         &self,
         data: &io::hdus::image::ImageData,
@@ -122,6 +183,18 @@ impl FitsLoader {
     }
 
     /// Ensures the data is two-dimensional.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data to ensure is two-dimensional.
+    ///
+    /// # Returns
+    ///
+    /// The data as a `Array2<T>`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the data is not two-dimensional.
     fn ensure_2d<T>(&self, data: ArrayD<T>) -> Array2<T>
     where
         T: Clone + Default,
@@ -131,6 +204,10 @@ impl FitsLoader {
     }
 
     /// Retrieves the image data from the FITS file as an `Array2<u32>`.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the image data as a `Array2<u32>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     pub fn get_image(&self) -> Result<Array2<u32>, Box<dyn std::error::Error>> {
         match &self.hdul.hdus[2] {
             io::hdulist::HDU::Image(i_hdu) => self.get_data(&i_hdu.data),
@@ -138,6 +215,15 @@ impl FitsLoader {
         }
     }
 
+    /// Converts the FITS file data to a `polars::prelude::DataFrame`.
+    ///
+    /// # Arguments
+    ///
+    /// * `keys` - The keys of the cards to include in the DataFrame. If empty, all cards will be included.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the converted `DataFrame` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     pub fn to_polars(&self, keys: &[&str]) -> Result<DataFrame, Box<dyn std::error::Error>> {
         let mut s_vec = if keys.is_empty() {
             // When keys are empty, use all cards.

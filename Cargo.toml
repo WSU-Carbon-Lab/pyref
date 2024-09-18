@@ -15,16 +15,18 @@ path = "src/lib.rs"
 [dependencies]
 astrors = "0.1.8"
 ndarray = "0.15.6"
+polars-arrow = "0.43.1"
+polars-core = {version = "0.43.1", features = ["dtype-array"]}
 
 [dependencies.polars]
 default-features = false
 features = [
-    "docs",
-    "zip_with",
-    "csv",
-    "temporal",
-    "fmt",
-    "dtype-full",
+  "docs",
+  "zip_with",
+  "csv",
+  "temporal",
+  "fmt",
+  "dtype-full",
 ]
 version = "0.35.4"
 

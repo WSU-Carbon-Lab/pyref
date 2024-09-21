@@ -46,6 +46,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "argminmax"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -638,12 +647,24 @@ version = "0.15.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb12d4e967ec485a5f71c6311fe28158e9d6f4bc4a447b474184d0f91a8fa32"
 dependencies = [
+ "approx",
  "matrixmultiply",
  "num-complex",
  "num-integer",
  "num-traits",
  "rawpointer",
  "rayon",
+]
+
+[[package]]
+name = "ndarray-ndimage"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e25f143f76f451ed1c8171c9fb87f0edf4942984d5782b0fb2657bff9fd2fe8"
+dependencies = [
+ "ndarray",
+ "ndarray-stats",
+ "num-traits",
 ]
 
 [[package]]
@@ -1617,9 +1638,10 @@ version = "0.2.26"
 dependencies = [
  "astrors",
  "ndarray",
+ "ndarray-ndimage",
  "polars 0.35.4",
- "polars-arrow 0.43.1",
  "polars-core 0.43.1",
+ "rand",
 ]
 
 [[package]]

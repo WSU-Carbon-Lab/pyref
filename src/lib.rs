@@ -1,6 +1,5 @@
 extern crate core;
 pub mod loader;
-pub mod refl;
 
 /// # Rust Backend for accessing CCD data in FITS files
 ///

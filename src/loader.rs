@@ -1,4 +1,3 @@
-use crate::refl::{detect_beam, spec_refl};
 /// This module provides functionality for working with FITS files using the `astrors::fits` crate.
 ///
 /// # Examples
@@ -258,15 +257,8 @@ impl FitsLoader {
         };
         // Add the image data
         let image = self.get_image()?;
-        let (x, y) = detect_beam(&image, 5).unwrap();
-        let (refl, refl_err, beamspot) = spec_refl(&image, x, y, 5);
         s_vec.push(image_series("Image", image));
-        s_vec.push(image_series("Beamspot", beamspot));
-        // Calculate ! from the
         s_vec.push(Series::new("Q", vec![self.get_value("Q").unwrap()]));
-        s_vec.push(Series::new("R", vec![refl]));
-        s_vec.push(Series::new("R Err", vec![refl_err]));
-
         DataFrame::new(s_vec).map_err(From::from)
     }
 }

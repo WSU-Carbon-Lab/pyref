@@ -1,3 +1,4 @@
+use crate::refl::{detect_beam, spec_refl};
 /// This module provides functionality for working with FITS files using the `astrors::fits` crate.
 ///
 /// # Examples
@@ -21,6 +22,7 @@ use astrors::io;
 use astrors::io::hdulist::*;
 use astrors::io::header::*;
 use ndarray::{Array2, ArrayD, Axis, Ix2};
+use physical_constants;
 use polars::prelude::*;
 use std::fs;
 
@@ -136,6 +138,16 @@ impl FitsLoader {
     ///
     /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
+        if card_name == "Q" {
+            let theta = self.get_value("Sample Theta");
+            let en = self.get_value("Beamline Energy");
+            // calculate the q value from the sample theta and beamline energy
+            let lambda = 1e10
+                * physical_constants::MOLAR_PLANCK_CONSTANT
+                * physical_constants::SPEED_OF_LIGHT_IN_VACUUM
+                / en.unwrap();
+            return Some(4.0 * std::f64::consts::PI * (theta.unwrap().to_radians().sin() / lambda));
+        }
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => hdu
                 .header
@@ -246,7 +258,14 @@ impl FitsLoader {
         };
         // Add the image data
         let image = self.get_image()?;
+        let (x, y) = detect_beam(&image, 5).unwrap();
+        let (refl, refl_err, beamspot) = spec_refl(&image, x, y, 5);
         s_vec.push(image_series("Image", image));
+        s_vec.push(image_series("Beamspot", beamspot));
+        // Calculate ! from the
+        s_vec.push(Series::new("Q", vec![self.get_value("Q").unwrap()]));
+        s_vec.push(Series::new("R", vec![refl]));
+        s_vec.push(Series::new("R Err", vec![refl_err]));
 
         DataFrame::new(s_vec).map_err(From::from)
     }

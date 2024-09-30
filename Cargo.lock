@@ -836,6 +836,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "physical_constants"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3aad4556f19b1f2430b7d8492f251a8d152636595bcbf3224d099eead0e4c73"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1639,6 +1648,7 @@ dependencies = [
  "astrors",
  "ndarray",
  "ndarray-ndimage",
+ "physical_constants",
  "polars 0.35.4",
  "polars-core 0.43.1",
  "rand",

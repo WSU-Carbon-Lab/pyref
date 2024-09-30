@@ -34,10 +34,10 @@ pub enum ExperimentType {
 
 impl ExperimentType {
     pub fn from_str(exp_type: &str) -> Result<Self, &str> {
-        match exp_type {
-            "Xrr" => Ok(ExperimentType::Xrr),
-            "Xrs" => Ok(ExperimentType::Xrs),
-            "Other" => Ok(ExperimentType::Other),
+        match exp_type.to_lowercase().as_str() {
+            "xrr" => Ok(ExperimentType::Xrr),
+            "xrs" => Ok(ExperimentType::Xrs),
+            "other" => Ok(ExperimentType::Other),
             _ => Err("Invalid experiment type"),
         }
     }

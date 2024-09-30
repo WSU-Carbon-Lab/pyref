@@ -349,3 +349,38 @@ pub fn read_experiment(dir: &str, exp_type: &str) -> Result<DataFrame, Box<dyn s
     let df = ExperimentLoader::new(dir, exp)?.to_polars()?;
     Ok(df)
 }
+
+pub fn img_to_series(name: &str, array: Array2<u32>) -> Series {
+    let mut s = Series::new_empty(name, &DataType::List(Box::new(DataType::UInt32)));
+    let flat = array.iter().copied().collect::<Vec<_>>();
+    let mut chunked_builder = ListPrimitiveChunkedBuilder::<UInt32Type>::new(
+        "",
+        array.shape().iter().product::<usize>(),
+        array.shape().iter().product::<usize>(),
+        DataType::UInt32,
+    );
+    chunked_builder.append_slice(flat.as_slice());
+    let new_series = chunked_builder.finish().into_series();
+    let _ = s.extend(&new_series);
+    s
+}
+
+pub fn get_image(df: &DataFrame, i: &usize, img: &str, shape: usize) -> Array2<u32> {
+    let data = match df[img].get(*i).unwrap_or(AnyValue::Null) {
+        AnyValue::List(s) => s,
+        _ => panic!("Expected list type"),
+    };
+    to_array(data, shape)
+}
+
+fn to_array(data: Series, shape: usize) -> Array2<u32> {
+    let dim = (shape, shape);
+    let listed = data
+        .iter()
+        .map(|x| match x {
+            AnyValue::UInt32(x) => x,
+            _ => panic!("Expected u32 type"),
+        })
+        .collect::<Vec<_>>();
+    Array2::from_shape_vec(dim, listed).unwrap_or(Array2::zeros((0, 0)))
+}

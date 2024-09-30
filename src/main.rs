@@ -1,7 +1,7 @@
-use ndarray::{Array, Array2};
+use ndarray::{s, Array, Array2};
 use ndarray_ndimage::*;
 use polars::prelude::*;
-use rand::Rng;
+pub mod loader;
 
 pub fn img_to_series(name: &str, array: Array2<u32>) -> Series {
     let mut s = Series::new_empty(name, &DataType::List(Box::new(DataType::UInt32)));
@@ -23,6 +23,10 @@ pub fn get_image(df: &DataFrame, i: &usize, img: &str, shape: usize) -> Array2<u
         AnyValue::List(s) => s,
         _ => panic!("Expected list type"),
     };
+    to_array(data, shape)
+}
+
+fn to_array(data: Series, shape: usize) -> Array2<u32> {
     let dim = (shape, shape);
     let listed = data
         .iter()
@@ -32,14 +36,6 @@ pub fn get_image(df: &DataFrame, i: &usize, img: &str, shape: usize) -> Array2<u
         })
         .collect::<Vec<_>>();
     Array::from_shape_vec(dim, listed).unwrap_or(Array2::zeros((0, 0)))
-}
-
-// Poostprocess steps
-pub fn beam_spot(array: &Array2<f64>) -> Array2<f64> {
-    // apply gaussian filter
-    let mode = BorderMode::Nearest;
-    let mut blurred = gaussian_filter(array, 5.0, 0, mode, 4);
-    let idx = max_idx(&blurred);
 }
 
 pub fn max_idx(array: &Array2<f64>) -> Result<(usize, usize), &str> {
@@ -53,17 +49,34 @@ pub fn max_idx(array: &Array2<f64>) -> Result<(usize, usize), &str> {
     }
     // if the index is at the border, panic
     if idx.0 == 0 || idx.0 == array.shape()[0] - 1 || idx.1 == 0 || idx.1 == array.shape()[1] - 1 {
-        panic!("Max index is at the border");
+        return Err("Max value is at the border, beam intensity less than max value");
     }
     Ok(idx)
 }
 
+pub fn detect_beam(
+    img: Array2<u32>,
+    box_size: usize,
+) -> (Array2<u32>, Result<(usize, usize), String>) {
+    let imf = img.mapv(|x| x as f64);
+    let imf_gf = gaussian_filter(&imf, 5.0, 0, BorderMode::Nearest, 5);
+    let (x, y) = match max_idx(&imf_gf) {
+        Ok(idx) => idx,
+        Err(_) => sobel_detect(&imf).unwrap(),
+    };
+    let beam = img
+        .slice(s![x - box_size..=x + box_size, y - box_size..=y + box_size])
+        .to_owned();
+    (beam, Ok((x, y)))
+}
+
+pub fn sobel_detect(imf: &Array2<f64>) -> Result<(usize, usize), String> {
+    let imf_sobel = sobel(&imf, ndarray::Axis(0), BorderMode::Nearest);
+    max_idx(&imf_sobel).map_err(|e| e.to_string())
+}
+
 fn main() {
-    let mut rng = rand::thread_rng();
-    let array: Array2<u32> = Array2::from_shape_fn((500, 500), |_| rng.gen());
-    let series = img_to_series("image", array);
-    let df = DataFrame::new(vec![series]).unwrap();
+    let test_path = "C:/Users/hduva/.projects/pyref/pyref_ccd/test/test.fits";
+    let df = loader::read_fits(test_path).unwrap();
     println!("{:?}", df);
-    let data = get_image(&df, &0, "image", 500);
-    println!("{:?}", data);
 }

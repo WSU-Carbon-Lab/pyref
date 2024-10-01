@@ -361,8 +361,13 @@ pub fn simple_update(df: &mut DataFrame, dir: &str) -> Result<(), Box<dyn std::e
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("fits"))
         .collect();
-    let not_loaded = ccd_files.len() - df.height() as usize;
-    let ccd_files = ccd_files[..not_loaded]
+    let not_loaded = ccd_files.len() as isize - df.height() as isize;
+    if not_loaded == 0 {
+        return Ok(());
+    } else if not_loaded < 0 {
+        return Err("Files out of sync with loaded data, Restart".into());
+    }
+    let ccd_files = ccd_files[..not_loaded as usize]
         .par_iter() // Parallel iterator using Rayon
         .map(|entry| FitsLoader::new(entry.path().to_str().unwrap()))
         .collect::<Result<Vec<_>, Box<dyn std::error::Error + Send + Sync>>>();

@@ -20,9 +20,10 @@ use astrors::fits;
 use astrors::io;
 use astrors::io::hdulist::*;
 use astrors::io::header::*;
-use ndarray::{Array2, ArrayD, Axis, Ix2};
+use numpy::ndarray::{aview1, Array2};
 use physical_constants;
 use polars::prelude::*;
+use rayon::prelude::*;
 use std::fs;
 
 // Enum representing different types of experiments.
@@ -103,7 +104,7 @@ impl FitsLoader {
     /// # Returns
     ///
     /// A `Result` containing the `FitsLoader` instance if successful, or a boxed `dyn std::error::Error` if an error occurred.
-    pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let hdul = fits::fromfile(path)?;
         Ok(FitsLoader {
             path: path.to_string(),
@@ -182,36 +183,16 @@ impl FitsLoader {
     fn get_data(
         &self,
         data: &io::hdus::image::ImageData,
-    ) -> Result<Array2<u32>, Box<dyn std::error::Error>> {
-        let array_data = match data {
-            io::hdus::image::ImageData::I16(image) => ArrayD::from_shape_vec(
-                image.raw_dim(),
-                image.iter().map(|&x| u32::from(x as u16)).collect(),
-            )?,
+    ) -> Result<(Vec<u32>, Vec<u32>), Box<dyn std::error::Error + Send + Sync>> {
+        let (flat_data, shape) = match data {
+            io::hdus::image::ImageData::I16(image) => {
+                let flat_data = image.iter().map(|&x| u32::from(x as u16)).collect();
+                let shape = image.dim();
+                (flat_data, shape)
+            }
             _ => return Err("Unsupported image data type".into()),
         };
-        Ok(self.ensure_2d(array_data))
-    }
-
-    /// Ensures the data is two-dimensional.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The data to ensure is two-dimensional.
-    ///
-    /// # Returns
-    ///
-    /// The data as a `Array2<T>`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the data is not two-dimensional.
-    fn ensure_2d<T>(&self, data: ArrayD<T>) -> Array2<T>
-    where
-        T: Clone + Default,
-    {
-        data.into_dimensionality::<Ix2>()
-            .unwrap_or_else(|_| panic!("Expected 2D data but got different dimensions"))
+        Ok((flat_data, vec![shape[0] as u32, shape[1] as u32]))
     }
 
     /// Retrieves the image data from the FITS file as an `Array2<u32>`.
@@ -219,7 +200,9 @@ impl FitsLoader {
     /// # Returns
     ///
     /// A `Result` containing the image data as a `Array2<u32>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
-    pub fn get_image(&self) -> Result<Array2<u32>, Box<dyn std::error::Error>> {
+    pub fn get_image(
+        &self,
+    ) -> Result<(Vec<u32>, Vec<u32>), Box<dyn std::error::Error + Send + Sync>> {
         match &self.hdul.hdus[2] {
             io::hdulist::HDU::Image(i_hdu) => self.get_data(&i_hdu.data),
             _ => Err("Image HDU not found".into()),
@@ -235,7 +218,10 @@ impl FitsLoader {
     /// # Returns
     ///
     /// A `Result` containing the converted `DataFrame` if successful, or a boxed `dyn std::error::Error` if an error occurred.
-    pub fn to_polars(&self, keys: &[&str]) -> Result<DataFrame, Box<dyn std::error::Error>> {
+    pub fn to_polars(
+        &self,
+        keys: &[&str],
+    ) -> Result<DataFrame, Box<dyn std::error::Error + Send + Sync>> {
         let mut s_vec = if keys.is_empty() {
             // When keys are empty, use all cards.
             self.get_all_cards()
@@ -256,36 +242,20 @@ impl FitsLoader {
                 .collect::<Vec<_>>()
         };
         // Add the image data
-        let image = self.get_image()?;
-        s_vec.push(image_series("Image", image));
+        let (image, size) = match self.get_image() {
+            Ok(data) => data,
+            Err(e) => return Err(e),
+        };
+        s_vec.push(vec_series("Raw", image));
+        s_vec.push(vec_series("Raw Shape", size));
         s_vec.push(Series::new("Q", vec![self.get_value("Q").unwrap()]));
         DataFrame::new(s_vec).map_err(From::from)
     }
 }
 // Function facilitate storing the image data as a single element in a Polars DataFrame.
-pub fn image_series(name: &str, array: Array2<u32>) -> Series {
-    let mut s = Series::new_empty(
-        name,
-        &DataType::List(Box::new(DataType::List(Box::new(DataType::UInt32)))),
-    );
-
-    let mut chunked_builder = ListPrimitiveChunkedBuilder::<UInt32Type>::new(
-        "",
-        array.len_of(Axis(0)),
-        array.len_of(Axis(1)) * array.len_of(Axis(0)),
-        DataType::UInt32,
-    );
-    for row in array.axis_iter(Axis(0)) {
-        chunked_builder.append_slice(row.as_slice().unwrap_or(&row.to_vec()));
-    }
-    let new_series = chunked_builder
-        .finish()
-        .into_series()
-        .implode()
-        .unwrap()
-        .into_series();
-    let _ = s.extend(&new_series);
-    s
+pub fn vec_series(name: &str, img: Vec<u32>) -> Series {
+    let new_series = [img.iter().collect::<Series>()];
+    Series::new(name, new_series)
 }
 
 pub struct ExperimentLoader {
@@ -319,11 +289,19 @@ impl ExperimentLoader {
         dir: &str,
         experiment_type: ExperimentType,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let ccd_files = fs::read_dir(dir)?
+        let ccd_files: Vec<_> = fs::read_dir(dir)?
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("fits"))
+            .collect();
+
+        let ccd_files = ccd_files
+            .par_iter() // Parallel iterator using Rayon
             .map(|entry| FitsLoader::new(entry.path().to_str().unwrap()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error + Send + Sync>>>();
+        let ccd_files = match ccd_files {
+            Ok(ccd_files) => ccd_files,
+            Err(e) => return Err(e),
+        };
 
         Ok(ExperimentLoader {
             dir: dir.to_string(),
@@ -335,12 +313,15 @@ impl ExperimentLoader {
     pub fn to_polars(&self) -> Result<DataFrame, Box<dyn std::error::Error>> {
         let keys = self.experiment_type.get_keys();
 
-        let mut dfs = self
+        let dfs = self
             .ccd_files
-            .iter()
+            .par_iter()
             .map(|ccd| ccd.to_polars(&keys))
-            .collect::<Result<Vec<_>, _>>()?;
-
+            .collect::<Result<Vec<_>, _>>();
+        let mut dfs = match dfs {
+            Ok(dfs) => dfs,
+            Err(e) => return Err(e),
+        };
         let mut df = dfs.pop().ok_or("No data found")?;
         for mut d in dfs {
             df.vstack_mut(&mut d)?;
@@ -349,9 +330,23 @@ impl ExperimentLoader {
     }
 }
 
+// function to unpack an image wile iterating rhough a polars dataframe.
+pub fn get_image(vec: Vec<u32>, shape: Vec<u32>) -> Array2<u32> {
+    let (rows, cols) = (shape[0] as usize, shape[1] as usize);
+    let img = aview1(&vec.clone()).to_owned();
+    img.into_shape((rows, cols)).unwrap()
+}
+
 // workhorse functions for loading and processing CCD data.
 pub fn read_fits(file_path: &str) -> Result<DataFrame, Box<dyn std::error::Error>> {
-    let df = FitsLoader::new(file_path)?.to_polars(&[])?;
+    let loader = match FitsLoader::new(file_path) {
+        Ok(loader) => loader,
+        Err(e) => return Err(e),
+    };
+    let df = match loader.to_polars(&[]) {
+        Ok(df) => df,
+        Err(e) => return Err(e),
+    };
     Ok(df)
 }
 
@@ -359,39 +354,4 @@ pub fn read_experiment(dir: &str, exp_type: &str) -> Result<DataFrame, Box<dyn s
     let exp = ExperimentType::from_str(exp_type)?;
     let df = ExperimentLoader::new(dir, exp)?.to_polars()?;
     Ok(df)
-}
-
-pub fn img_to_series(name: &str, array: Array2<u32>) -> Series {
-    let mut s = Series::new_empty(name, &DataType::List(Box::new(DataType::UInt32)));
-    let flat = array.iter().copied().collect::<Vec<_>>();
-    let mut chunked_builder = ListPrimitiveChunkedBuilder::<UInt32Type>::new(
-        "",
-        array.shape().iter().product::<usize>(),
-        array.shape().iter().product::<usize>(),
-        DataType::UInt32,
-    );
-    chunked_builder.append_slice(flat.as_slice());
-    let new_series = chunked_builder.finish().into_series();
-    let _ = s.extend(&new_series);
-    s
-}
-
-pub fn get_image(df: &DataFrame, i: &usize, img: &str, shape: usize) -> Array2<u32> {
-    let data = match df[img].get(*i).unwrap_or(AnyValue::Null) {
-        AnyValue::List(s) => s,
-        _ => panic!("Expected list type"),
-    };
-    to_array(data, shape)
-}
-
-fn to_array(data: Series, shape: usize) -> Array2<u32> {
-    let dim = (shape, shape);
-    let listed = data
-        .iter()
-        .map(|x| match x {
-            AnyValue::UInt32(x) => x,
-            _ => panic!("Expected u32 type"),
-        })
-        .collect::<Vec<_>>();
-    Array2::from_shape_vec(dim, listed).unwrap_or(Array2::zeros((0, 0)))
 }

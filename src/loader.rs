@@ -355,3 +355,27 @@ pub fn read_experiment(dir: &str, exp_type: &str) -> Result<DataFrame, Box<dyn s
     let df = ExperimentLoader::new(dir, exp)?.to_polars()?;
     Ok(df)
 }
+
+pub fn simple_update(df: &mut DataFrame, dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let ccd_files: Vec<_> = fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("fits"))
+        .collect();
+    let not_loaded = ccd_files.len() - df.height() as usize;
+    let ccd_files = ccd_files[..not_loaded]
+        .par_iter() // Parallel iterator using Rayon
+        .map(|entry| FitsLoader::new(entry.path().to_str().unwrap()))
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error + Send + Sync>>>();
+    let ccd_files = match ccd_files {
+        Ok(ccd_files) => ccd_files,
+        Err(e) => return Err(e),
+    };
+    let mut new_df = ExperimentLoader {
+        dir: dir.to_string(),
+        ccd_files,
+        experiment_type: ExperimentType::Xrr,
+    }
+    .to_polars()?;
+    df.vstack_mut(&mut new_df)?;
+    Ok(())
+}

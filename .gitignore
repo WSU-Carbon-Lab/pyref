@@ -12,6 +12,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+.comments
 build/
 develop-eggs/
 dist/

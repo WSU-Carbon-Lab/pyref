@@ -33,6 +33,7 @@ dependencies = [
   "torchvision>=0.19.0",
   "opencv-python-headless>=4.10.0.84",
   "maturin>=1.7.1",
+  "ipympl>=0.9.4",
 ]
 
 keywords = ["X-ray", "reflectivity", "data", "analysis"]

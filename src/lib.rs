@@ -1,4 +1,5 @@
 use astrors::io::header::card::*;
+use numpy::PyArray2;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 use pyref_core::loader::*;
@@ -125,6 +126,21 @@ pub fn py_read_experiment(dir: &str, exp_type: &str) -> PyDataFrame {
     PyDataFrame(df)
 }
 
+#[pyfunction]
+pub fn py_simple_update(df: PyDataFrame, dir: &str) -> PyDataFrame {
+    let mut df = df.0;
+    let _ = simple_update(&mut df, dir);
+    PyDataFrame(df)
+}
+
+#[pyfunction]
+pub fn py_get_image(vec: Vec<u32>, shape: Vec<u32>) -> PyResult<Py<PyArray2<u32>>> {
+    pyo3::Python::with_gil(|py| {
+        let array = get_image(vec, shape);
+        Ok(PyArray2::from_array(py, &array).to_owned())
+    })
+}
+
 #[pymodule]
 pub fn pyref_rs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyCard>()?;
@@ -133,5 +149,7 @@ pub fn pyref_rs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyExperimentLoader>()?;
     m.add_function(wrap_pyfunction!(py_read_fits, m)?)?;
     m.add_function(wrap_pyfunction!(py_read_experiment, m)?)?;
+    m.add_function(wrap_pyfunction!(py_get_image, m)?)?;
+    m.add_function(wrap_pyfunction!(py_simple_update, m)?)?;
     Ok(())
 }

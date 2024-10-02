@@ -180,9 +180,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.1.23"
+version = "1.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bbb537bb4a30b90362caddba8f360c0a56bc13d3a5570028e7197204cb54a17"
+checksum = "812acba72f0a070b003d3697490d2b55b837230ae7c6c6497f05cc2ddbb8d938"
 dependencies = [
  "jobserver",
  "libc",
@@ -759,6 +759,21 @@ checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "numpy"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef41cbb417ea83b30525259e30ccef6af39b31c240bda578889494c5392d331"
+dependencies = [
+ "libc",
+ "ndarray",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "pyo3",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -1741,17 +1756,19 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.2.29"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a496e5381d8ac7c90474d1ba51a0d7377fd9d359a236f26fb684662cdb02dae8"
+checksum = "e260a4877a182fd7b3281974ceb63d4dd760376f0140a262191a11f14e3e8e4b"
 dependencies = [
  "astrors",
  "ndarray",
  "ndarray-ndimage",
+ "numpy",
  "physical_constants",
  "polars 0.35.4",
  "polars-core 0.43.1",
  "rand",
+ "rayon",
 ]
 
 [[package]]
@@ -1759,6 +1776,7 @@ name = "pyref_rs"
 version = "0.1.0"
 dependencies = [
  "astrors",
+ "numpy",
  "pyo3",
  "pyo3-polars",
  "pyref-core",
@@ -1885,6 +1903,12 @@ name = "regex-syntax"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc_version"

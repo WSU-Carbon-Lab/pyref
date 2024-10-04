@@ -16,10 +16,10 @@
 /// ```
 ///
 /// For more information, see the [README](README.md).
-use astrors::fits;
-use astrors::io;
-use astrors::io::hdulist::*;
-use astrors::io::header::*;
+use astrors_fork::fits;
+use astrors_fork::io;
+use astrors_fork::io::hdulist::*;
+use astrors_fork::io::header::*;
 use jemallocator::Jemalloc;
 use numpy::ndarray::{aview1, Array2};
 use physical_constants;

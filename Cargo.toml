@@ -13,7 +13,7 @@ name = "pyref_core"
 path = "src/lib.rs"
 
 [dependencies]
-astrors = {git = "https://github.com/HarlanHeilman/astrors.git", version = "0.1.9"}
+astrors-fork = "0.1.9"
 jemallocator = {version = "*"}
 ndarray = "0.15.6"
 numpy = "0.21.0"

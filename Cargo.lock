@@ -61,9 +61,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf7d0a018de4f6aa429b9d33d69edf69072b1c5b1cb8d3e4a5f7ef898fc3eb76"
 
 [[package]]
-name = "astrors"
+name = "astrors-fork"
 version = "0.1.9"
-source = "git+https://github.com/HarlanHeilman/astrors.git#f4cd86da363855c906c39158fa38be5cf13cd34b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a26ca10999db6e80a20402826a332753f9da9dcf05455d5236ba031c1cf4dca"
 dependencies = [
  "byteorder",
  "cc",
@@ -1396,7 +1397,7 @@ dependencies = [
 name = "pyref-core"
 version = "0.3.5"
 dependencies = [
- "astrors",
+ "astrors-fork",
  "jemallocator",
  "ndarray",
  "numpy",

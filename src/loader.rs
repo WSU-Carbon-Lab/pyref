@@ -20,15 +20,15 @@ use astrors_fork::fits;
 use astrors_fork::io;
 use astrors_fork::io::hdulist::*;
 use astrors_fork::io::header::*;
-use jemallocator::Jemalloc;
+// use jemallocator::Jemalloc;
 use numpy::ndarray::{aview1, Array2};
 use physical_constants;
 use polars::prelude::*;
 use rayon::prelude::*;
 use std::fs;
 
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+// #[global_allocator]
+// static GLOBAL: Jemalloc = Jemalloc;
 
 // Enum representing different types of experiments.
 pub enum ExperimentType {

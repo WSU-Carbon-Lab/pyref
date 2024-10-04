@@ -6,33 +6,21 @@ edition = "2021"
 license = "GPL-2.0"
 name = "pyref-core"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
-version = "0.3.4"
+version = "0.3.5"
 
 [lib]
 name = "pyref_core"
 path = "src/lib.rs"
 
 [dependencies]
-astrors = "0.1.8"
+astrors = {git = "https://github.com/HarlanHeilman/astrors.git", version = "0.1.9"}
+jemallocator = {version = "*"}
 ndarray = "0.15.6"
-ndarray-ndimage = "0.4.0"
 numpy = "0.21.0"
 physical_constants = "0.5.0"
-polars-core = {version = "0.43.1", features = ["dtype-array"]}
+polars = {version = "0.43.1", features = ["fmt", "dtype-u16"]}
 rand = "0.8.5"
 rayon = "1.10.0"
-
-[dependencies.polars]
-default-features = false
-features = [
-  "docs",
-  "zip_with",
-  "csv",
-  "temporal",
-  "fmt",
-  "dtype-full",
-]
-version = "0.35.4"
 
 [docs]
 all-features = true

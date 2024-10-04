@@ -20,11 +20,15 @@ use astrors::fits;
 use astrors::io;
 use astrors::io::hdulist::*;
 use astrors::io::header::*;
+use jemallocator::Jemalloc;
 use numpy::ndarray::{aview1, Array2};
 use physical_constants;
 use polars::prelude::*;
 use rayon::prelude::*;
 use std::fs;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 // Enum representing different types of experiments.
 pub enum ExperimentType {
@@ -227,9 +231,9 @@ impl FitsLoader {
             self.get_all_cards()
                 .iter()
                 .map(|card| {
-                    let name = card.keyword.clone();
+                    let name = PlSmallStr::from_string(card.keyword.clone());
                     let value = card.value.as_float().unwrap_or(0.0);
-                    Series::new(&name, vec![value])
+                    Series::new(name.clone(), vec![value])
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -237,7 +241,7 @@ impl FitsLoader {
             keys.iter()
                 .filter_map(|key| {
                     self.get_value(key)
-                        .map(|value| Series::new(key, vec![value]))
+                        .map(|value| Series::new(PlSmallStr::from_str(key), vec![value]))
                 })
                 .collect::<Vec<_>>()
         };
@@ -248,14 +252,18 @@ impl FitsLoader {
         };
         s_vec.push(vec_series("Raw", image));
         s_vec.push(vec_series("Raw Shape", size));
-        s_vec.push(Series::new("Q", vec![self.get_value("Q").unwrap()]));
+        s_vec.push(Series::new(
+            PlSmallStr::from_str("Q [A^-1]"),
+            vec![self.get_value("Q").unwrap()],
+        ));
         DataFrame::new(s_vec).map_err(From::from)
     }
 }
 // Function facilitate storing the image data as a single element in a Polars DataFrame.
 pub fn vec_series(name: &str, img: Vec<u32>) -> Series {
     let new_series = [img.iter().collect::<Series>()];
-    Series::new(name, new_series)
+    let name = PlSmallStr::from_str(name);
+    Series::new(name.clone(), new_series)
 }
 
 pub struct ExperimentLoader {

@@ -1,17 +1,20 @@
-"""
-Simple interfacing module for reducing reflectometry data.
-"""
+"""Simple interfacing module for reducing reflectometry data."""
 
-import pyref_rs as rs
-import polars as pl
+from collections.abc import Generator
+
 import numpy as np
-from typing import Generator
-from masking import InteractiveImageMasker
+import polars as pl
+import pyref_rs as rs
+from result import Ok
+
+from pyref.masking import InteractiveImageMasker
+
+# ============/ Light Rust Wrappers /============
 
 
 class Loader:
     """
-    Loader class to load RSoXR data from beamline 11.0.1.2 at the ALS
+    Loader class to load RSoXR data from beamline 11.0.1.2 at the ALS.
 
     Parameters
     ----------
@@ -38,25 +41,19 @@ class Loader:
     def __init__(self, path: str) -> None:
         self.path = path
         self.name = path.split("/")[-1]
-        self._data: pl.DataFrame = pl.DataFrame(rs.py_read_experiment(path, "xrr"))
-        self._refl: pl.DataFrame | None = None
-        self._mask: None | np.ndarray = None
-        self.dynamic_range: None | float = None
+        self.raw: pl.DataFrame = Ok(rs.py_read_experiment(path, "xrr")).unwrap_err(
+            "Failed to read experiment"
+        )
 
     def __repr__(self) -> str:
-        s = f"Loader(path={self.path})" + "\n"
-        s += f"Name: {self.name}" + "\n"
-        s += f"Dynamic Range: {self.dynamic_range}" + "\n"
-        s += f"Data: {self.data}" + "\n"
-        return s
+        return self.raw.__repr__()
 
     def __str__(self) -> str:
-        return self.__repr__()
+        return self.raw.__str__()
 
     @property
-    def data(self) -> pl.DataFrame:
-        current_len = len(self._data)
-        self._data = rs.py_simple_update(self._data, self.path)
+    def raw(self) -> pl.DataFrame:
+        self.raw = rs.py_simple_update(self.raw, self.path)
 
     @property
     def mask(self) -> None | np.ndarray:
@@ -72,7 +69,7 @@ class Loader:
 
     def img(self, img_col: str) -> Generator[np.ndarray, None, None]:
         """
-        Generator to iterate through images in a specified column.
+        Image iterator.
 
         Parameters
         ----------
@@ -90,7 +87,7 @@ class Loader:
 
     def __iter__(self) -> Generator[np.ndarray, None, None]:
         """
-        Iterator to iterate through images in the "Raw" column.
+        Raw Image Iterator.
 
         Yields
         ------
@@ -101,54 +98,37 @@ class Loader:
 
     # ============/ Initial Data Processing /============
     def spec_reflectance(self):
-        """
-        Calculate the specular reflectance from the data, adding a new column to the
-        DataFrame.
-        """
+        """Calculate the specular reflectance from the data."""
         return self.beam() - self.bg()
 
     def locate_beam(self):
         """
         Locate the beam position in the data, adding a new column to the DataFrame.
         """
-        ...
 
     def bg(self) -> int:
         """
         Subtract the background from the data, adding a new column to the DataFrame.
         """
-        ...
 
     def beam(self) -> int:
         """
         Subtract the beam from the data, adding a new column to the DataFrame.
         """
-        ...
 
     # ============/ Stitching /============
-    @property
-    def refl(self) -> pl.DataFrame:
-        if self._refl is None:
-            self._refl = self._data.iter_rows().map(
-                self.spec_reflectance, in_place=False
-            )
-        return self._refl
-
     def stitch(self):
         """
         Stitch the data together to form a contiguous dataset.
         """
-        ...
 
     def avg_overlap(self):
         """
         Average the overlap between datasets.
         """
-        ...
 
 
 if __name__ == "__main__":
     loader = Loader("/home/hduva/projects/pyref-ccd/test")
     print(loader)
-    for img in loader:
-        print(img)
+    print(loader.raw)

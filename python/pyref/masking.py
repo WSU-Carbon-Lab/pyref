@@ -1,5 +1,7 @@
-import numpy as np
+"""Interactive Image Masking in Python using Matplotlib."""
+
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.widgets import RectangleSelector
 
 
@@ -7,8 +9,8 @@ class InteractiveImageMasker:
     """
     A class to interactively create a mask on an image using a rectangular selector.
 
-    Attributes:
-    -----------
+    Attributes
+    ----------
     image : ndarray
         The original image to be masked.
     mask : ndarray
@@ -20,13 +22,14 @@ class InteractiveImageMasker:
     selector : matplotlib.widgets.RectangleSelector
         The rectangular selector for selecting regions on the image.
 
-    Methods:
-    --------
+    Methods
+    -------
     __init__(image):
         Initializes the InteractiveImageMasker with the given image.
 
     on_select(eclick, erelease):
-        Callback when the user makes a selection. Updates the mask and displays the masked image.
+        Callback when the user makes a selection. Updates the mask and displays the
+        masked image.
 
     toggle_selector(event):
         Enables/disables the selector based on key press (toggle with 't').
@@ -61,7 +64,8 @@ class InteractiveImageMasker:
 
     def on_select(self, eclick, erelease):
         """
-        Callback when the user makes a selection.
+        User selection function.
+
         eclick and erelease are the press and release events.
         """
         x1, y1 = int(eclick.xdata), int(eclick.ydata)

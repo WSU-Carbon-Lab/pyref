@@ -1,4 +1,4 @@
-use astrors::io::header::card::*;
+use astrors_fork::io::header::card::*;
 use numpy::PyArray2;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
@@ -134,13 +134,14 @@ pub fn py_simple_update(df: PyDataFrame, dir: &str) -> PyDataFrame {
 }
 
 #[pyfunction]
-pub fn py_get_image(vec: Vec<u32>, shape: Vec<u32>) -> PyResult<Py<PyArray2<u32>>> {
+pub fn py_get_image(vec: Vec<u32>, shape: Vec<u32>) -> PyResult<Py<PyAny>> {
     pyo3::Python::with_gil(|py| {
         let array = get_image(vec, shape);
-        Ok(PyArray2::from_array(py, &array).to_owned())
+        Ok(PyArray2::from_array_bound(py, &array).into_py(py))
     })
 }
 
+#[allow(deprecated)] // GIL Ref API
 #[pymodule]
 pub fn pyref_rs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyCard>()?;

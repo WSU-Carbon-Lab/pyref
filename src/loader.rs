@@ -231,9 +231,9 @@ impl FitsLoader {
             self.get_all_cards()
                 .iter()
                 .map(|card| {
-                    let name = PlSmallStr::from_string(card.keyword.clone());
+                    let name = card.keyword.as_str();
                     let value = card.value.as_float().unwrap_or(0.0);
-                    Series::new(name.clone(), vec![value])
+                    Series::new(name, vec![value])
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -241,7 +241,7 @@ impl FitsLoader {
             keys.iter()
                 .filter_map(|key| {
                     self.get_value(key)
-                        .map(|value| Series::new(PlSmallStr::from_str(key), vec![value]))
+                        .map(|value| Series::new(key, vec![value]))
                 })
                 .collect::<Vec<_>>()
         };
@@ -252,18 +252,14 @@ impl FitsLoader {
         };
         s_vec.push(vec_series("Raw", image));
         s_vec.push(vec_series("Raw Shape", size));
-        s_vec.push(Series::new(
-            PlSmallStr::from_str("Q [A^-1]"),
-            vec![self.get_value("Q").unwrap()],
-        ));
+        s_vec.push(Series::new("Q [A^-1]", vec![self.get_value("Q").unwrap()]));
         DataFrame::new(s_vec).map_err(From::from)
     }
 }
 // Function facilitate storing the image data as a single element in a Polars DataFrame.
 pub fn vec_series(name: &str, img: Vec<u32>) -> Series {
     let new_series = [img.iter().collect::<Series>()];
-    let name = PlSmallStr::from_str(name);
-    Series::new(name.clone(), new_series)
+    Series::new(name, new_series)
 }
 
 pub struct ExperimentLoader {

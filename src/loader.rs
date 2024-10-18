@@ -20,12 +20,11 @@ use astrors_fork::fits;
 use astrors_fork::io;
 use astrors_fork::io::hdulist::*;
 use astrors_fork::io::header::*;
-// use jemallocator::Jemalloc;
 use numpy::ndarray::{aview1, Array2};
-use physical_constants;
-use polars::prelude::*;
+use polars::{lazy::prelude::*, prelude::*};
 use rayon::prelude::*;
 use std::fs;
+use std::ops::Mul;
 
 // #[global_allocator]
 // static GLOBAL: Jemalloc = Jemalloc;
@@ -142,21 +141,11 @@ impl FitsLoader {
     ///
     /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
-        if card_name == "Q" {
-            let theta = self.get_value("Sample Theta");
-            let en = self.get_value("Beamline Energy");
-            // calculate the q value from the sample theta and beamline energy
-            let lambda = 1e10
-                * physical_constants::MOLAR_PLANCK_CONSTANT
-                * physical_constants::SPEED_OF_LIGHT_IN_VACUUM
-                / en.unwrap();
-            return Some(4.0 * std::f64::consts::PI * (theta.unwrap().to_radians().sin() / lambda));
-        }
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => hdu
                 .header
                 .get_card(card_name)
-                .map(|c| c.value.as_float().unwrap()),
+                .map(|c| (c.value.as_float().unwrap() * 10.0).round() / 10.0),
             _ => None,
         }
     }
@@ -252,7 +241,6 @@ impl FitsLoader {
         };
         s_vec.push(vec_series("Raw", image));
         s_vec.push(vec_series("Raw Shape", size));
-        s_vec.push(Series::new("Q [A^-1]", vec![self.get_value("Q").unwrap()]));
         DataFrame::new(s_vec).map_err(From::from)
     }
 }
@@ -330,8 +318,60 @@ impl ExperimentLoader {
         for mut d in dfs {
             df.vstack_mut(&mut d)?;
         }
-        Ok(df)
+        Ok(post_process(df))
     }
+}
+
+// Post process dataframe
+pub fn post_process(df: DataFrame) -> DataFrame {
+    let h = physical_constants::PLANCK_CONSTANT_IN_EV_PER_HZ;
+    let c = physical_constants::SPEED_OF_LIGHT_IN_VACUUM * 1e10;
+    // Calculate lambda and q values in angstrom
+    let lz = df
+        .clone()
+        .lazy()
+        .sort(
+            [
+                "Beamline Energy",
+                "Sample Theta",
+                "Horizontal Exit Slit Size",
+                "Higher Order Suppressor",
+                "EXPOSURE",
+            ],
+            Default::default(),
+        )
+        .with_column(
+            col("Beamline Energy")
+                .pow(-1)
+                .mul(lit(h * c))
+                .alias("Lambda [Å]"),
+        )
+        .with_column(
+            as_struct(vec![col("Sample Theta"), col("Lambda [Å]")])
+                .map(
+                    |s| {
+                        let struc = s.struct_()?;
+                        let th_series = struc.field_by_name("Sample Theta")?;
+                        let theta = th_series.f64()?;
+                        let lam_series = struc.field_by_name("Lambda [Å]")?;
+                        let lam = lam_series.f64()?;
+
+                        let out: Float64Chunked = theta
+                            .into_iter()
+                            .zip(lam.iter())
+                            .map(|(theta, lam)| match (theta, lam) {
+                                (Some(theta), Some(lam)) => Some(q(lam, theta)),
+                                _ => None,
+                            })
+                            .collect();
+
+                        Ok(Some(out.into_series()))
+                    },
+                    GetOutput::from_type(DataType::Float64),
+                )
+                .alias("Q [Å⁻¹]"),
+        );
+    lz.collect().unwrap()
 }
 
 // function to unpack an image wile iterating rhough a polars dataframe.
@@ -387,4 +427,8 @@ pub fn simple_update(df: &mut DataFrame, dir: &str) -> Result<(), Box<dyn std::e
     .to_polars()?;
     df.vstack_mut(&mut new_df)?;
     Ok(())
+}
+
+fn q(lam: f64, theta: f64) -> f64 {
+    4.0 * std::f64::consts::PI * theta.to_radians().sin() / lam
 }

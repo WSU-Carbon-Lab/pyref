@@ -222,7 +222,7 @@ impl FitsLoader {
                 .map(|card| {
                     let name = card.keyword.as_str();
                     let value = card.value.as_float().unwrap_or(0.0);
-                    Series::new(name, vec![value])
+                    Series::new(name.into(), vec![value])
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -230,7 +230,7 @@ impl FitsLoader {
             keys.iter()
                 .filter_map(|key| {
                     self.get_value(key)
-                        .map(|value| Series::new(key, vec![value]))
+                        .map(|value| Series::new(PlSmallStr::from_str(key), vec![value]))
                 })
                 .collect::<Vec<_>>()
         };
@@ -247,7 +247,7 @@ impl FitsLoader {
 // Function facilitate storing the image data as a single element in a Polars DataFrame.
 pub fn vec_series(name: &str, img: Vec<u32>) -> Series {
     let new_series = [img.iter().collect::<Series>()];
-    Series::new(name, new_series)
+    Series::new(name.into(), new_series)
 }
 
 pub struct ExperimentLoader {

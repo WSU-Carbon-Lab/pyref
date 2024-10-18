@@ -378,7 +378,7 @@ pub fn post_process(df: DataFrame) -> DataFrame {
 pub fn get_image(vec: Vec<u32>, shape: Vec<u32>) -> Array2<u32> {
     let (rows, cols) = (shape[0] as usize, shape[1] as usize);
     let img = aview1(&vec.clone()).to_owned();
-    img.into_shape((rows, cols)).unwrap()
+    img.into_shape_clone((rows, cols)).unwrap()
 }
 
 // workhorse functions for loading and processing CCD data.

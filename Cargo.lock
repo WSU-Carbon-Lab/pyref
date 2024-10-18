@@ -1350,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "astrors-fork",
  "ndarray 0.15.6",

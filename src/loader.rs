@@ -375,22 +375,22 @@ pub fn post_process(df: DataFrame) -> DataFrame {
         .lazy()
         .sort(
             [
-                "Beamline Energy",
-                "Sample Theta",
-                "Horizontal Exit Slit Size",
-                "Higher Order Suppressor",
-                "EXPOSURE",
+                "Beamline Energy [eV]",
+                "Sample Theta [deg]",
+                "Horizontal Exit Slit Size [um]",
+                "Higher Order Suppressor [mm]",
+                "EXPOSURE [s]",
             ],
             Default::default(),
         )
         .with_column(
-            col("Beamline Energy")
+            col("Beamline Energy [eV]")
                 .pow(-1)
                 .mul(lit(h * c))
                 .alias("Lambda [Å]"),
         )
         .with_column(
-            as_struct(vec![col("Sample Theta"), col("Lambda [Å]")])
+            as_struct(vec![col("Sample Theta [deg]"), col("Lambda [Å]")])
                 .map(
                     |s| {
                         let struc = s.struct_()?;

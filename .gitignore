@@ -10,6 +10,9 @@ __pycache__/
 # C extensions
 *.so
 
+# data
+/test
+
 # Distribution / packaging
 .Python
 .comments

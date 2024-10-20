@@ -141,9 +141,9 @@ pub fn py_get_image(vec: Vec<u32>, shape: Vec<u32>) -> PyResult<Py<PyAny>> {
     })
 }
 
-#[allow(deprecated)] // GIL Ref API
 #[pymodule]
-pub fn pyref_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+#[pyo3(name = "pyref_rs")]
+pub fn pyref_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCard>()?;
     m.add_class::<PyExType>()?;
     m.add_class::<PyFitsLoader>()?;

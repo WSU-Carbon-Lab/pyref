@@ -57,13 +57,12 @@ exclude = [
   "docs",
   "src",
 ]
-extend-include = [
-  "*.ipynb",
-]
-fix = true
+include = ["pyproject.toml", "python/**/*.py"]
+indent-width = 4
 line-length = 88
 
 [tool.ruff.lint]
+ignore = ["D200"]
 select = [
   "E", # pycodestyle
   "W", # pycodestyle
@@ -71,8 +70,6 @@ select = [
   "B", # flake8-bugbear
   "C4", # flake8-comprehensions
   "D", # flake8-docstrings
-  "D213", # Augment NumPy docstring convention: Multi-line docstring summary should start at the second line
-  "D417", # Augment NumPy docstring convention: Missing argument descriptions
   "I", # isort
   "SIM", # flake8-simplify
   "TCH", # flake8-type-checking

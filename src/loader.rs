@@ -394,7 +394,7 @@ pub fn post_process(df: DataFrame) -> DataFrame {
                 .map(
                     |s| {
                         let struc = s.struct_()?;
-                        let th_series = struc.field_by_name("Sample Theta")?;
+                        let th_series = struc.field_by_name("Sample Theta [deg]")?;
                         let theta = th_series.f64()?;
                         let lam_series = struc.field_by_name("Lambda [Å]")?;
                         let lam = lam_series.f64()?;

@@ -1782,14 +1782,13 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "astrors-fork",
  "ndarray 0.15.6",
  "numpy",
  "physical_constants",
  "polars 0.43.1",
- "rand",
  "rayon",
 ]
 

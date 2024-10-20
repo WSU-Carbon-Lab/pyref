@@ -20,7 +20,7 @@ use astrors_fork::fits;
 use astrors_fork::io;
 use astrors_fork::io::hdulist::*;
 use astrors_fork::io::header::*;
-use numpy::ndarray::{aview1, Array2};
+use numpy::ndarray::Array2;
 use polars::{lazy::prelude::*, prelude::*};
 use rayon::prelude::*;
 use std::fs;
@@ -46,18 +46,61 @@ impl ExperimentType {
         }
     }
 
-    pub fn get_keys(&self) -> Vec<&str> {
+    pub fn get_keys(&self) -> Vec<HeaderValue> {
         match self {
             ExperimentType::Xrr => vec![
-                "Sample Theta",
-                "Beamline Energy",
-                "EPU Polarization",
-                "Horizontal Exit Slit Size",
-                "Higher Order Suppressor",
-                "EXPOSURE",
+                HeaderValue::SampleTheta,
+                HeaderValue::BeamlineEnergy,
+                HeaderValue::EPUPolarization,
+                HeaderValue::HorizontalExitSlitSize,
+                HeaderValue::HigherOrderSuppressor,
+                HeaderValue::Exposure,
             ],
-            ExperimentType::Xrs => vec!["Energy"],
+            ExperimentType::Xrs => vec![HeaderValue::BeamlineEnergy],
             ExperimentType::Other => vec![],
+        }
+    }
+}
+
+pub enum HeaderValue {
+    SampleTheta,
+    BeamlineEnergy,
+    EPUPolarization,
+    HorizontalExitSlitSize,
+    HigherOrderSuppressor,
+    Exposure,
+}
+
+impl HeaderValue {
+    pub fn unit(&self) -> &str {
+        match self {
+            HeaderValue::SampleTheta => "[deg]",
+            HeaderValue::BeamlineEnergy => "[eV]",
+            HeaderValue::EPUPolarization => "[deg",
+            HeaderValue::HorizontalExitSlitSize => "[um]",
+            HeaderValue::HigherOrderSuppressor => "mm",
+            HeaderValue::Exposure => "s",
+        }
+    }
+    pub fn hdu(&self) -> &str {
+        match self {
+            HeaderValue::SampleTheta => "Sample Theta",
+            HeaderValue::BeamlineEnergy => "Beamline Energy",
+            HeaderValue::EPUPolarization => "EPU Polarization",
+            HeaderValue::HorizontalExitSlitSize => "Horizontal Exit Slit Size",
+            HeaderValue::HigherOrderSuppressor => "Higher Order Suppressor",
+            HeaderValue::Exposure => "EXPOSURE",
+        }
+    }
+    pub fn name(&self) -> &str {
+        // match and return the string "hdu" + "unit"
+        match self {
+            HeaderValue::SampleTheta => "Sample Theta [deg]",
+            HeaderValue::BeamlineEnergy => "Beamline Energy [eV]",
+            HeaderValue::EPUPolarization => "EPU Polarization [deg]",
+            HeaderValue::HorizontalExitSlitSize => "Horizontal Exit Slit Size [um]",
+            HeaderValue::HigherOrderSuppressor => "Higher Order Suppressor [mm]",
+            HeaderValue::Exposure => "EXPOSURE [s]",
         }
     }
 }
@@ -213,7 +256,7 @@ impl FitsLoader {
     /// A `Result` containing the converted `DataFrame` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     pub fn to_polars(
         &self,
-        keys: &[&str],
+        keys: &Vec<HeaderValue>,
     ) -> Result<DataFrame, Box<dyn std::error::Error + Send + Sync>> {
         let mut s_vec = if keys.is_empty() {
             // When keys are empty, use all cards.
@@ -229,8 +272,8 @@ impl FitsLoader {
             // Use specified keys
             keys.iter()
                 .filter_map(|key| {
-                    self.get_value(key)
-                        .map(|value| Series::new(PlSmallStr::from_str(key), vec![value]))
+                    self.get_value(key.hdu())
+                        .map(|value| Series::new(PlSmallStr::from_str(key.name()), vec![value]))
                 })
                 .collect::<Vec<_>>()
         };
@@ -375,10 +418,10 @@ pub fn post_process(df: DataFrame) -> DataFrame {
 }
 
 // function to unpack an image wile iterating rhough a polars dataframe.
-pub fn get_image(vec: Vec<u32>, shape: Vec<u32>) -> Array2<u32> {
-    let (rows, cols) = (shape[0] as usize, shape[1] as usize);
-    let img = aview1(&vec.clone()).to_owned();
-    img.into_shape_clone((rows, cols)).unwrap()
+pub fn get_image(image_data: &[u32], shape: (usize, usize)) -> Result<Array2<u32>, PolarsError> {
+    let image_array = Array2::from_shape_vec(shape, image_data.to_vec())
+        .map_err(|_| PolarsError::ComputeError("Invalid image data".into()))?;
+    Ok(image_array)
 }
 
 // workhorse functions for loading and processing CCD data.
@@ -387,7 +430,7 @@ pub fn read_fits(file_path: &str) -> Result<DataFrame, Box<dyn std::error::Error
         Ok(loader) => loader,
         Err(e) => return Err(e),
     };
-    let df = match loader.to_polars(&[]) {
+    let df = match loader.to_polars(&vec![]) {
         Ok(df) => df,
         Err(e) => return Err(e),
     };

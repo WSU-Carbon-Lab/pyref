@@ -6,7 +6,7 @@ edition = "2021"
 license = "GPL-2.0"
 name = "pyref-core"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
-version = "0.3.11"
+version = "0.3.12"
 
 [lib]
 name = "pyref_core"
@@ -18,7 +18,6 @@ ndarray = "0.15.6"
 numpy = "0.22.0"
 physical_constants = "0.5.0"
 polars = {version = "0.43.1", features = ["fmt", "dtype-u16", "lazy", "dtype-struct"]}
-rand = "0.8.5"
 rayon = "1.10.0"
 
 [docs]

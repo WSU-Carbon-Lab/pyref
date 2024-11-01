@@ -78,8 +78,8 @@ impl HeaderValue {
             HeaderValue::BeamlineEnergy => "[eV]",
             HeaderValue::EPUPolarization => "[deg",
             HeaderValue::HorizontalExitSlitSize => "[um]",
-            HeaderValue::HigherOrderSuppressor => "mm",
-            HeaderValue::Exposure => "s",
+            HeaderValue::HigherOrderSuppressor => "[mm]",
+            HeaderValue::Exposure => "[s]",
         }
     }
     pub fn hdu(&self) -> &str {
@@ -184,6 +184,15 @@ impl FitsLoader {
     ///
     /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
+        if card_name == "EXPOSURE" {
+            return match &self.hdul.hdus[0] {
+                io::hdulist::HDU::Primary(hdu) => hdu
+                    .header
+                    .get_card(card_name)
+                    .map(|c| (c.value.as_float().unwrap() * 1000.0).round() / 1000.0),
+                _ => None,
+            };
+        }
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => hdu
                 .header

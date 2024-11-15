@@ -6,6 +6,7 @@ requires = ["maturin>=1.7,<2.0"]
 authors = [{name = "Harlan Heilman", email = "Harlan.Heilman@wsu.edu"}]
 dependencies = [
   "numpy",
+  "numba",
   "pandas",
   "polars",
   "matplotlib",
@@ -29,6 +30,7 @@ dependencies = [
   "opencv-python-headless>=4.10.0.84",
   "maturin>=1.7.1",
   "ipympl>=0.9.4",
+  "patchelf>=0.17.2.1",
 ]
 description = "Blazingly fast X-ray reflectivity data analysis package"
 license = {file = "LICENSE"}
@@ -47,6 +49,7 @@ keywords = ["X-ray", "reflectivity", "data", "analysis"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+format = "sdist"
 python-source = "python/"
 
 [tool.ruff]
@@ -57,6 +60,7 @@ exclude = [
   "docs",
   "src",
 ]
+
 include = ["pyproject.toml", "python/**/*.py"]
 indent-width = 4
 line-length = 88

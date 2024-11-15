@@ -45,7 +45,7 @@ class InteractiveImageMasker:
         self.image = image  # Original image
         self.mask = np.ones_like(image)  # Mask (same size as image)
         self.fig, self.ax = plt.subplots()
-        self.ax.imshow(self.image, cmap="gray")  # Display the image
+        self.ax.imshow(self.image, cmap="terrain")  # Display the image
         self.selector = RectangleSelector(
             self.ax,
             self.on_select,
@@ -78,7 +78,7 @@ class InteractiveImageMasker:
         # Apply mask to the image (masking the outside part)
         masked_image = self.image * self.mask
         self.ax.clear()  # Clear the previous plot
-        self.ax.imshow(masked_image, cmap="gray")  # Show the masked image
+        self.ax.imshow(masked_image, cmap="terrain")  # Show the masked image
         plt.draw()  # Redraw the figure with updated image
 
     def toggle_selector(self, event):
@@ -99,12 +99,3 @@ class InteractiveImageMasker:
     def get_mask(self):
         """Return the mask."""
         return self.mask
-
-
-# Create a random grayscale image (100x100)
-img = np.random.rand(100, 100)
-
-# Create an instance of the interactive image masker
-masker = InteractiveImageMasker(img)
-# Example of how to retrieve the mask after interaction
-mask = masker.get_mask()  # Retrieve the mask after the user completes their selection

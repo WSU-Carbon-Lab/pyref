@@ -1,8 +1,8 @@
+"""File Dialogs."""
+
 from pathlib import Path
 from tkinter import Tk, filedialog
 from typing import Final
-
-import numpy as np
 
 HC: Final[int] = 12400
 
@@ -43,24 +43,24 @@ class FileDialog:
         return openName
 
 
-class XrayDomainTransform:
-    @staticmethod
-    @np.vectorize
-    def toLam(energy: float) -> float:
-        global HC
-        return HC / energy
+# class XrayDomainTransform:
+#     @staticmethod
+#     @np.vectorize
+#     def toLam(energy: float) -> float:
+#         global HC
+#         return HC / energy
 
-    @staticmethod
-    @np.vectorize
-    def toK(energy: float) -> float:
-        lam = XrayDomainTransform.toLam(energy)
-        return 2 * np.pi / lam
+#     @staticmethod
+#     @np.vectorize
+#     def toK(energy: float) -> float:
+#         lam = XrayDomainTransform.toLam(energy)
+#         return 2 * np.pi / lam
 
-    @staticmethod
-    @np.vectorize
-    def toQ(energy: float, twoTheta: float) -> float:
-        lam = XrayDomainTransform.toLam(energy)
-        return round(4 * np.pi * np.sin(np.radians(twoTheta)) / lam, 4)
+#     @staticmethod
+#     @np.vectorize
+#     def toQ(energy: float, twoTheta: float) -> float:
+#         lam = XrayDomainTransform.toLam(energy)
+#         return round(4 * np.pi * np.sin(np.radians(twoTheta)) / lam, 4)
 
 
 if __name__ == "__main__":

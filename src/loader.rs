@@ -184,7 +184,10 @@ impl FitsLoader {
     ///
     /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
-        if card_name == "EXPOSURE" || card_name == "Sample Theta" {
+        if card_name == "EXPOSURE"
+            || card_name == "Sample Theta"
+            || "Higher Order Suppressor" == card_name
+        {
             return match &self.hdul.hdus[0] {
                 io::hdulist::HDU::Primary(hdu) => hdu
                     .header

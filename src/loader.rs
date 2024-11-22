@@ -184,18 +184,16 @@ impl FitsLoader {
     ///
     /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
-        if card_name == "EXPOSURE"
-            || card_name == "Sample Theta"
-            || "Higher Order Suppressor" == card_name
-        {
-            return match &self.hdul.hdus[0] {
-                io::hdulist::HDU::Primary(hdu) => hdu
-                    .header
-                    .get_card(card_name)
-                    .map(|c| (c.value.as_float().unwrap() * 1000.0).round() / 1000.0),
-                _ => None,
-            };
-        }
+        let value = &self.value_froom_hdu(card_name)?;
+        let rounded_value = match card_name {
+            "EXPOSURE" | "Sample Theta" => (value * 1000.0).round() / 1000.0,
+            "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
+            _ => (value * 10.0).round() / 10.0,
+        };
+        Some(rounded_value)
+    }
+
+    pub fn value_froom_hdu(&self, card_name: &str) -> Option<f64> {
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => hdu
                 .header
@@ -206,19 +204,13 @@ impl FitsLoader {
     }
 
     pub fn get_scan_num(&self) -> i32 {
-        let test_str = "/ZnPc82261-00340.fits";
-        let scan_id = test_str
-            .split("/")
-            .last()
-            .unwrap()
-            .split("-")
-            .last()
-            .unwrap()
-            .split(".")
+        self.path
+            .rsplit('/')
             .next()
-            .unwrap();
-        let scan_id = scan_id.trim_start_matches('0');
-        scan_id.parse::<i32>().unwrap()
+            .and_then(|filename| filename.split('-').last())
+            .and_then(|scan_id| scan_id.split('.').next())
+            .and_then(|scan_id| scan_id.trim_start_matches('0').parse::<i32>().ok())
+            .unwrap_or(0)
     }
 
     /// Retrieves all cards from the FITS file.

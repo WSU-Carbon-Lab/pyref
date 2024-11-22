@@ -291,6 +291,18 @@ impl FitsLoader {
             Ok(data) => data,
             Err(e) => return Err(e),
         };
+        let scan_id = self
+            .path
+            .split("/")
+            .last()
+            .unwrap()
+            .split("-")
+            .last()
+            .unwrap();
+        let scan_id = scan_id.trim_start_matches('0');
+        let scan_id = scan_id.parse::<i32>().unwrap();
+
+        s_vec.push(Series::new("Scan ID".into(), vec![scan_id]));
         s_vec.push(vec_series("Raw", image));
         s_vec.push(vec_series("Raw Shape", size));
         DataFrame::new(s_vec).map_err(From::from)

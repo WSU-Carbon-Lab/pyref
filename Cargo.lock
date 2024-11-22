@@ -1782,7 +1782,7 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "astrors-fork",
  "ndarray 0.15.6",

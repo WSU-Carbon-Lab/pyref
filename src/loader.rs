@@ -205,6 +205,22 @@ impl FitsLoader {
         }
     }
 
+    pub fn get_scan_num(&self) -> i32 {
+        let test_str = "/ZnPc82261-00340.fits";
+        let scan_id = test_str
+            .split("/")
+            .last()
+            .unwrap()
+            .split("-")
+            .last()
+            .unwrap()
+            .split(".")
+            .next()
+            .unwrap();
+        let scan_id = scan_id.trim_start_matches('0');
+        scan_id.parse::<i32>().unwrap()
+    }
+
     /// Retrieves all cards from the FITS file.
     ///
     /// # Returns
@@ -294,18 +310,8 @@ impl FitsLoader {
             Ok(data) => data,
             Err(e) => return Err(e),
         };
-        let scan_id = self
-            .path
-            .split("/")
-            .last()
-            .unwrap()
-            .split("-")
-            .last()
-            .unwrap();
-        let scan_id = scan_id.trim_start_matches('0');
-        let scan_id = scan_id.parse::<i32>().unwrap();
 
-        s_vec.push(Series::new("Scan ID".into(), vec![scan_id]));
+        s_vec.push(Series::new("Scan ID".into(), vec![self.get_scan_num()]));
         s_vec.push(vec_series("Raw", image));
         s_vec.push(vec_series("Raw Shape", size));
         DataFrame::new(s_vec).map_err(From::from)

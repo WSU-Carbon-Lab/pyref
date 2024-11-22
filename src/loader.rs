@@ -185,7 +185,6 @@ impl FitsLoader {
     /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
         let value = &self.value_froom_hdu(card_name)?;
-        println!("{}: {}", card_name, value);
         let rounded_value = match card_name {
             "EXPOSURE" | "Sample Theta" => (value * 1000.0).round() / 1000.0,
             "Higher Order Suppressor" => (value * 100.0).round() / 100.0,

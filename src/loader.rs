@@ -403,7 +403,16 @@ pub fn post_process(df: DataFrame) -> DataFrame {
     let lz = df
         .clone()
         .lazy()
-        .sort(["Beamline Energy [eV]", "Scan ID"], Default::default())
+        .sort(
+            [
+                "Beamline Energy [eV]",
+                "Sample Theta [deg]",
+                "Horizontal Exit Slit Size [um]",
+                "Higher Order Suppressor [mm]",
+                "EXPOSURE [s]",
+            ],
+            Default::default(),
+        )
         .with_column(
             col("Beamline Energy [eV]")
                 .pow(-1)

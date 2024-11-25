@@ -1903,9 +1903,9 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.16"
+version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8d751364908fc5fc09fa7d81e21de4f0ae103058c17e902a3f3e8594980765d"
+checksum = "da12c51e339941656e75a778cc5100fde7a104dfd2a4b87dc32d479a1ef93c9a"
 dependencies = [
  "astrors-fork",
  "ndarray 0.15.6",

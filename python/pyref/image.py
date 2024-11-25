@@ -37,6 +37,7 @@ def spec_reflectance(masked, beam_spot, box_size):
     # Initialize sums and counts
     direct_beam_sum = 0.0
     direct_beam_count = 0
+    direct_beam_weight = 0.0
     bg_weighted_sum = 0.0
     bg_weight_total = 0.0
 
@@ -46,11 +47,13 @@ def spec_reflectance(masked, beam_spot, box_size):
             value = masked[i, j]
             if value == 0:
                 continue
+
+            weight = 1.0 / value
             if (roi_start <= i < roi_end) and (roj_start <= j < roj_end):
                 direct_beam_sum += value
                 direct_beam_count += 1
+                direct_beam_weight += weight
             else:
-                weight = 1.0 / value
                 bg_weighted_sum += value * weight
                 bg_weight_total += weight
 
@@ -61,11 +64,19 @@ def spec_reflectance(masked, beam_spot, box_size):
         return direct_beam_sum, 0.0
 
     bg_mean = bg_weighted_sum / bg_weight_total
-    bg_std = np.sqrt(1.0 / bg_weight_total)
 
     spec_reflectance_value = direct_beam_sum - (bg_mean * direct_beam_count)
-    assert spec_reflectance_value >= 0
-    uncertainty = np.sqrt(direct_beam_count) + bg_std
+    uncertainty = np.sqrt(direct_beam_count + direct_beam_count / bg_weight_total)
+
+    # # Check for overlap in the error bars
+    # #           [-----x------]   <-- Reflectance
+    # #    Background -->   [-----x------]
+    # if bg_mean + bg_std / 2 > refl_mean - refl_std / 2:
+    #     return None, uncertainty
+
+    # Check if the reflectance is negative
+    if spec_reflectance_value - uncertainty < 0:
+        return None, uncertainty
     return spec_reflectance_value, uncertainty
 
 
@@ -110,26 +121,26 @@ def find_beam_from_contours(contours: np.ndarray) -> tuple[int, int]:
     return tuple(center)
 
 
-def on_edge(beam_spot, img_shape):
+def on_edge(beam_spot, img_shape, roi):
     """Check if the beam spot is on the edge of the image."""
     return (
-        beam_spot[0] == 10
-        or beam_spot[1] == 10
-        or beam_spot[0] == img_shape[0] - 9
-        or beam_spot[1] == img_shape[1] - 9
+        beam_spot[0] == roi
+        or beam_spot[1] == roi
+        or beam_spot[0] == img_shape[0] - roi
+        or beam_spot[1] == img_shape[1] - roi
     )
 
 
-def beamspot(image: np.ndarray, radius=10) -> tuple[int, int]:
+def beamspot(image: np.ndarray, roi: int, radius=10) -> tuple[int, int]:
     """Locate the beam in the image."""
     # convert the image to the correct shape
     img = skimage.filters.gaussian(image, sigma=radius)
     beam_spot = find_max_index(img)
-    if on_edge(beam_spot, img.shape):
+    if on_edge(beam_spot, img.shape, roi):
         # Use edge detection to find the beam
         elevation_map = skimage.filters.sobel(img)
         segmentation = skimage.segmentation.felzenszwalb(
-            elevation_map, min_size=2 * radius
+            elevation_map, min_size=roi // 2
         )
         # plot contours of the segmentation on the image
         beam_spot = find_beam_from_contours(segmentation)
@@ -146,18 +157,24 @@ def reduce_masked(masks, beam_centers, roi):
         mask = masks[i]
         beam_center = beam_centers[i]
         r, e = spec_reflectance(mask, beam_center, roi)
+        if r is None and i > 0:
+            beam_center = beam_centers[i - 1]
+            r, e = spec_reflectance(mask, beam_center, roi)
+        if r is None:
+            r = e
+            e = e
         refl[i] = r
         refl_err[i] = e
     return refl, refl_err
 
 
-def pre_process_all(imgs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def pre_process_all(imgs: np.ndarray, roi: int) -> tuple[np.ndarray, np.ndarray]:
     """Mask all the images in the DataFrame."""
     masked = np.zeros_like(imgs)
     beamspots = np.zeros((imgs.shape[0], 2), dtype=np.int32)
     for i in prange(imgs.shape[0]):
         masked[i] = apply_mask(imgs[i])
-        beamspots[i] = beamspot(masked[i])
+        beamspots[i] = beamspot(masked[i], roi)
     return masked, beamspots
 
 
@@ -166,11 +183,13 @@ def locate_beams(df: pl.DataFrame, roi: int) -> tuple[np.ndarray, np.ndarray]:
     imgs = df.select("Raw").to_numpy()[:, 0]
     shapes = df.select("Raw Shape").to_numpy()[:, 0]
 
-    return pre_process_all(
-        np.array(
-            [img.reshape(*shape) for img, shape in zip(imgs, shapes, strict=False)]
-        )
+    reshaped_imgs = np.array(
+        [
+            np.reshape(img, shape[::-1])[::-1, :]
+            for img, shape in zip(imgs, shapes, strict=False)
+        ]
     )
+    return pre_process_all(reshaped_imgs, roi)
 
 
 def reduce_masked_data(lzf: pl.DataFrame, roi: int) -> pl.LazyFrame:

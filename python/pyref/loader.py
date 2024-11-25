@@ -56,10 +56,31 @@ final_columns = [
     "δI [arb. un.]",
     "I₀ [arb. un.]",
     "δI₀ [arb. un.]",
+    "Beamline Energy [eV]",
     "Q [Å⁻¹]",
     "r [a. u.]",
     "δr [a. u.]",
 ]
+
+
+class UnknownPolarizationError(Exception):
+    """Exception raised for unknown polarization values."""
+
+    def __init__(self, message="Unknown polarization"):
+        self.message = message
+        super().__init__(self.message)
+
+
+class OverlapError(Exception):
+    """Exception raised when the overlap between two datasets is too small."""
+
+    def __init__(
+        self, message="No overlap found between datasets", prior=None, current=None
+    ):
+        self.message = message
+        if prior is not None and current is not None:
+            self.message += f"\nPrior: {prior.tail(10)}\nCurrent: {current.head(10)}"
+        super().__init__(self.message)
 
 
 class PrsoxrLoader:
@@ -207,12 +228,35 @@ class PrsoxrLoader:
         # Files for output
         self.beam_drift = None
         self.meta: pl.DataFrame = pyref.py_read_experiment(str(directory), "xrr")
-        self.stitched: pl.DataFrame = None
+        self.data: pl.DataFrame | list[pl.DataFrame] = self.meta.group_by(
+            "Beamline Energy [eV]"
+        ).agg(pl.all())
+        self.stitched: list[pl.DataFrame] = []
         self.refl: pl.DataFrame = None
         self.shape = len(self.meta)
 
         self.blur_strength: int = 4
         self.roi: int = 10
+        self._energy: float | None = None
+        self._polarization: Literal["s", "p"] | None = None
+
+    @property
+    def energy(self) -> int:
+        """Energy getter."""
+        return [
+            e[0] for e in self.meta.select("Beamline Energy [eV]").unique().to_numpy()
+        ]
+
+    @property
+    def polarization(self) -> Literal["s", "p"]:
+        """Polarization getter."""
+        match self.meta.select("EPU Polarization [deg]").unique().to_numpy()[0][0]:
+            case 190.0:
+                return "p"
+            case 100.0:
+                return "s"
+            case _:
+                raise UnknownPolarizationError()
 
     def __str__(self):
         """Return string representation."""
@@ -237,7 +281,7 @@ class PrsoxrLoader:
     ):
         """Return reflectivity dataframe."""
         self.meta = pyref.py_simple_update(self.meta, self.path)
-        refl = self._calc_refl(roi, sample_detector_distance, pixel_dim)
+        refl = self._calc_refl(roi)
         print(refl)
         return refl
 
@@ -275,26 +319,58 @@ class PrsoxrLoader:
             description="Blur Strength",
             layout=widgets.Layout(width="300px"),
         )
+        histogram = widgets.ToggleButton(
+            value=False,
+            description="Histogram",
+            button_style="info",
+            layout=widgets.Layout(width="300px"),
+        )
 
         # Initialize figure for plotting
-        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+        fig, ax = plt.subplots(
+            1,
+            2,
+            figsize=(12.8, 4.8),
+            gridspec_kw={"hspace": 0.5, "wspace": 0.5},
+        )
 
-        def plot_frame(blur, roi, frame):
+        def plot_frame(blur, roi, frame, histogram):
             """Inner function to process and plot a single frame with given settings."""
             # Get metadata and process the image for the specified frame
             meta = self.meta.row(frame, named=True)
-            image = np.reshape(meta["Raw"], meta["Raw Shape"])
+            image = np.reshape(meta["Raw"], meta["Raw Shape"][::-1])[::-1, :]
             masked = apply_mask(image, self.mask)
-            bs = beamspot(masked, radius=blur)
+            bs = beamspot(masked, roi, radius=blur)
             refl, refl_err = spec_reflectance(image, beam_spot=bs, box_size=roi)
-
+            if refl is None:
+                refl = refl_err
+            imax = ax[0]
+            hist = ax[1]
             # Clear and set up the plot
-            ax.clear()
-            ax.set_title(f"Specular Reflectance: {refl} ± {refl_err}")
-            ax.imshow(image, cmap="terrain", interpolation="none")
+            imax.clear()
+            hist.clear()
+
+            imax.imshow(image, cmap="terrain", interpolation="none")
+
+            # Draw arrow to beam spot labeling the properties
+            bbox = {"boxstyle": "round,pad=0.3", "fc": "white", "ec": "black", "lw": 1}
+            arrowprops = {
+                "arrowstyle": "->",
+                "connectionstyle": "angle,angleA=0,angleB=90,rad=20",
+            }
+            props = f"r = {refl:.2f}\nδr = {refl_err:.3f}\n"
+            props += f"Q = {meta["Q [Å⁻¹]"]:.3f}\nE= {meta["Beamline Energy [eV]"]:.1f}"
+            imax.annotate(
+                props,
+                xy=bs[::-1],
+                xytext=(40, 10),
+                bbox=bbox,
+                arrowprops=arrowprops,
+                textcoords="offset points",
+            )
 
             # Add rectangles to highlight the beam spot and dark frame
-            ax.add_patch(
+            imax.add_patch(
                 plt.Rectangle(
                     (0, bs[0] - roi),
                     image.shape[1],
@@ -303,7 +379,7 @@ class PrsoxrLoader:
                     facecolor="none",
                 )
             )
-            ax.add_patch(
+            imax.add_patch(
                 plt.Rectangle(
                     (bs[1] - roi, bs[0] - roi),
                     2 * roi,
@@ -312,7 +388,52 @@ class PrsoxrLoader:
                     facecolor="none",
                 )
             )
-            ax.axis("off")
+            imax.axis("off")
+            # Add histogram of pixel intensities
+            if histogram:
+                # highlight the points that are at are within 100 of the max at
+                # Slice the image to just the blue slice
+                slice = image[bs[0] - roi : bs[0] + roi, :]
+                df = pl.DataFrame(
+                    {
+                        "Intensity In ROI": slice.ravel(),
+                    }
+                )
+                # Filter points that are within 100 of 2^16 (max pixel value) and
+                # points within 100 of 0 (min pixel value)
+                df = df.with_columns(
+                    pl.when(pl.col("Intensity In ROI") > 2**16 - 10)
+                    .then(pl.lit("High"))
+                    .when(pl.col("Intensity In ROI") < 10)
+                    .then(pl.lit("Low"))
+                    .otherwise(pl.lit("Normal"))
+                    .alias("Saturation")
+                )
+                sns.histplot(
+                    data=df.to_pandas(),
+                    x="Intensity In ROI",
+                    stat="density",
+                    ax=hist,
+                    element="step",
+                    hue="Saturation",
+                )
+                # add quanitiles
+                q5 = np.quantile(slice, 0.01)
+                q95 = np.quantile(slice, 0.99)
+                q50 = np.quantile(slice, 0.5)
+                hist.fill_betweenx(
+                    hist.get_ylim(),
+                    q5,
+                    q95,
+                    color="C5",
+                    alpha=0.2,
+                    label="99% of data",
+                )
+
+                hist.set_xlim(np.quantile(slice, 0.001), np.quantile(slice, 0.999))
+                hist.axvline(q50, color="C5", linestyle="--")
+                hist.set_title("Pixel Intensity Histogram")
+                hist.legend()
             fig.canvas.draw_idle()
 
             # Update class attributes for blur and ROI
@@ -326,6 +447,7 @@ class PrsoxrLoader:
             blur=blur_selector,
             roi=roi_selector,
             frame=frame_selector,
+            histogram=histogram,
         )
 
         # Display the sliders and plot
@@ -346,8 +468,8 @@ class PrsoxrLoader:
             .alias("sum"),
         ).sort("sum")[0]
         image = np.reshape(
-            min_frame["Raw"].to_numpy()[0], min_frame["Raw Shape"].to_numpy()[0]
-        )
+            min_frame["Raw"].to_numpy()[0], min_frame["Raw Shape"].to_numpy()[0][::-1]
+        )[::-1, :]
         self.masker = InteractiveImageMasker(image)
 
     @property
@@ -524,24 +646,31 @@ class PrsoxrLoader:
                 maintain_order=True,
             )
         ):
+            print(stitch.head(10))
+            print(stitch.tail(10))
             if i == 0:
                 izero = get_izero_df(stitch)
-
             else:
-                izero = get_reletive_izero(stitch, stitch_dfs[-1])
+                prior = stitch_dfs[-1].filter(
+                    pl.col("Sample Theta [deg]").is_in(stitch["Sample Theta [deg]"])
+                )
+                if prior.shape[0] == 0:
+                    raise OverlapError(prior=stitch_dfs[-1], current=stitch)
+
+                izero = get_reletive_izero(stitch, prior)
             stitch = stitch.join(
                 izero.select("Beamline Energy [eV]", "I₀ [arb. un.]", "δI₀ [arb. un.]"),
                 on="Beamline Energy [eV]",
                 how="left",
             )
             stitch_dfs.append(stitch)
-        self.stitched = pl.concat(stitch_dfs).rename({"Sample Theta [deg]": "θ [deg]"})
+        self.stitched.append(
+            pl.concat(stitch_dfs).rename({"Sample Theta [deg]": "θ [deg]"})
+        )
 
     def _calc_refl(
         self,
         roi: int | None = None,
-        sample_detector_distance: int = 130,
-        pixel_dim: float = 0.027,
     ):
         """
         Calculate Reflectivity from loaded data.
@@ -549,9 +678,11 @@ class PrsoxrLoader:
         if roi is None:
             roi = self.roi
         lzf = reduce_masked_data(self.meta, roi)
-        self._stitch(lzf)
+        for e in self.energy:
+            self._stitch(lzf.filter(pl.col("Beamline Energy [eV]") == e))
         # Stitch the data together
-        self.refl = self.stitched.with_columns(
+        stitched = pl.concat(self.stitched)
+        self.refl = stitched.with_columns(
             (pl.col("I [arb. un.]") / pl.col("I₀ [arb. un.]")).alias("r [a. u.]"),
             err_prop_div(
                 *col_and_err("I [arb. un.]"),
@@ -560,26 +691,23 @@ class PrsoxrLoader:
         ).select(final_columns)
         return self.refl
 
-    def plot_data(self):
+    def plot_data(self, energies: list[float] | None = None):
         """Plot Reflectivity data."""
-
-        def get_err_bounds(df: pl.DataFrame, col, err, max_percent_err=15):
-            """Get the error bounds for a given column."""
-            upper_err = np.maximum(df[err].to_numpy(), df[col] * max_percent_err / 100)
-            lower_err = np.maximum(df[err].to_numpy(), df[col] * max_percent_err / 100)
-            lower = df[col] - lower_err
-            upper = df[col] + upper_err
-            return lower, upper
-
-        lower, upper = get_err_bounds(self.refl, "r [a. u.]", "δr [a. u.]")
-
+        if energies is not None and energies in self.energy:
+            data = self.refl.filter(
+                pl.col("Beamline Energy [eV]") == energies
+            ).to_pandas()
+        else:
+            data = self.refl.to_pandas()
         sns.set_theme(style="ticks")
         g = sns.lineplot(
-            data=self.refl.to_pandas(),
+            data=data,
             x="Q [Å⁻¹]",
             y="r [a. u.]",
+            hue="Beamline Energy [eV]",
+            palette="tab10",
         )
-        g.fill_between(self.refl["Q [Å⁻¹]"], lower, upper, alpha=0.3, color="C2")
+        # g.fill_between(self.refl["Q [Å⁻¹]"], lower, upper, alpha=0.3, color="C2")
         g.set_xlim(0, self.refl["Q [Å⁻¹]"].max())
         g.set(yscale="log")
         return g

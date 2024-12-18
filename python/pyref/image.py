@@ -161,7 +161,7 @@ def reduce_masked(masks, beam_centers, roi):
             beam_center = beam_centers[i - 1]
             r, e = spec_reflectance(mask, beam_center, roi)
         if r is None:
-            r = e
+            r = float("inf")
             e = e
         refl[i] = r
         refl_err[i] = e
@@ -197,10 +197,10 @@ def reduce_masked_data(lzf: pl.DataFrame, roi: int) -> pl.LazyFrame:
     masked_images, beam_centers = locate_beams(lzf, roi)
 
     # Stack the masked images into a 3D array
-    masked_images_array = np.stack(masked_images)
+    masked_images_array = np.stack(masked_images) # type: ignore
 
     # Stack the beam centers into a 2D array
-    beam_centers_array = np.vstack(beam_centers)
+    beam_centers_array = np.vstack(beam_centers) # type: ignore
 
     # Call the reduce_masked function
     refl, refl_err = reduce_masked(masked_images_array, beam_centers_array, roi)
@@ -209,8 +209,8 @@ def reduce_masked_data(lzf: pl.DataFrame, roi: int) -> pl.LazyFrame:
                 refl: {refl}\n refl_err: {refl_err}"""
         raise ValueError(err)
 
-    lzf = lzf.lazy().with_columns(
+    lzf: pl.LazyFrame = lzf.lazy().with_columns(  # type: ignore
         (pl.lit(refl) / pl.col("EXPOSURE [s]")).alias("I [arb. un.]"),
         (pl.lit(refl_err) / pl.col("EXPOSURE [s]")).alias("δI [arb. un.]"),
     )
-    return lzf
+    return lzf # type: ignore

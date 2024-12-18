@@ -203,7 +203,7 @@ class PrsoxrLoader:
     def __init__(
         self,
         directory: Path,
-        mask: np.ndarray = None,
+        mask: np.ndarray | None = None,
     ):
 
         # Sample information
@@ -223,7 +223,7 @@ class PrsoxrLoader:
         ]
 
         # Image stats
-        self.edge_trim = 5  # Edge of detector to ignore
+        self.edge_trim = 1  # Edge of detector to ignore
 
         # Files for output
         self.beam_drift = None
@@ -232,7 +232,7 @@ class PrsoxrLoader:
             "Beamline Energy [eV]"
         ).agg(pl.all())
         self.stitched: list[pl.DataFrame] = []
-        self.refl: pl.DataFrame = None
+        self.refl: pl.DataFrame | None = None
         self.shape = len(self.meta)
 
         self.blur_strength: int = 4
@@ -241,7 +241,7 @@ class PrsoxrLoader:
         self._polarization: Literal["s", "p"] | None = None
 
     @property
-    def energy(self) -> int:
+    def energy(self) -> list[float]:
         """Energy getter."""
         return [
             e[0] for e in self.meta.select("Beamline Energy [eV]").unique().to_numpy()
@@ -350,7 +350,7 @@ class PrsoxrLoader:
             imax.clear()
             hist.clear()
 
-            imax.imshow(image, cmap="terrain", interpolation="none")
+            imax.imshow(masked, cmap="terrain", interpolation="none")
 
             # Draw arrow to beam spot labeling the properties
             bbox = {"boxstyle": "round,pad=0.3", "fc": "white", "ec": "black", "lw": 1}
@@ -646,10 +646,13 @@ class PrsoxrLoader:
                 maintain_order=True,
             )
         ):
-            print(stitch.head(10))
-            print(stitch.tail(10))
             if i == 0:
                 izero = get_izero_df(stitch)
+                print(
+                    izero.select(
+                        "Beamline Energy [eV]", "I₀ [arb. un.]", "δI₀ [arb. un.]"
+                    )
+                )
             else:
                 prior = stitch_dfs[-1].filter(
                     pl.col("Sample Theta [deg]").is_in(stitch["Sample Theta [deg]"])
@@ -658,10 +661,9 @@ class PrsoxrLoader:
                     raise OverlapError(prior=stitch_dfs[-1], current=stitch)
 
                 izero = get_reletive_izero(stitch, prior)
-            stitch = stitch.join(
+            stitch = stitch.join_asof(
                 izero.select("Beamline Energy [eV]", "I₀ [arb. un.]", "δI₀ [arb. un.]"),
                 on="Beamline Energy [eV]",
-                how="left",
             )
             stitch_dfs.append(stitch)
         self.stitched.append(
@@ -681,6 +683,7 @@ class PrsoxrLoader:
         for e in self.energy:
             self._stitch(lzf.filter(pl.col("Beamline Energy [eV]") == e))
         # Stitch the data together
+        print(self.stitched)
         stitched = pl.concat(self.stitched)
         self.refl = stitched.with_columns(
             (pl.col("I [arb. un.]") / pl.col("I₀ [arb. un.]")).alias("r [a. u.]"),
@@ -691,24 +694,40 @@ class PrsoxrLoader:
         ).select(final_columns)
         return self.refl
 
-    def plot_data(self, energies: list[float] | None = None):
+    def plot_data(self, energies: list[float] | None = None, line: bool = True):
         """Plot Reflectivity data."""
-        if energies is not None and energies in self.energy:
-            data = self.refl.filter(
-                pl.col("Beamline Energy [eV]") == energies
-            ).to_pandas()
-        else:
-            data = self.refl.to_pandas()
+        if self.refl is None:
+            print("Process data prior to plotting it")
+            return
+        if energies is None:
+            energies = self.energy
+        # ensure energies list is a subset of the available energies
+        if not set(energies).issubset(self.energy):
+            err = "Energies must be a subset of the available energies"
+            raise ValueError(err)
+        data = self.refl.filter(
+            pl.col("Beamline Energy [eV]").is_in(energies),
+            pl.col("Q [Å⁻¹]") > 0,
+        ).to_pandas()
         sns.set_theme(style="ticks")
-        g = sns.lineplot(
-            data=data,
-            x="Q [Å⁻¹]",
-            y="r [a. u.]",
-            hue="Beamline Energy [eV]",
-            palette="tab10",
-        )
+        if line:
+            g = sns.lineplot(
+                data=data,
+                x="Q [Å⁻¹]",
+                y="r [a. u.]",
+                hue="Beamline Energy [eV]",
+                palette="tab10",
+            )
+        else:
+            g = sns.scatterplot(
+                data=data,
+                x="Q [Å⁻¹]",
+                y="r [a. u.]",
+                hue="Beamline Energy [eV]",
+                palette="tab10",
+            )
         # g.fill_between(self.refl["Q [Å⁻¹]"], lower, upper, alpha=0.3, color="C2")
-        g.set_xlim(0, self.refl["Q [Å⁻¹]"].max())
+        g.set_xlim(data["Q [Å⁻¹]"].min(), data["Q [Å⁻¹]"].max())
         g.set(yscale="log")
         return g
 

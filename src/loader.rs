@@ -51,6 +51,7 @@ impl ExperimentType {
             ExperimentType::Xrr => vec![
                 HeaderValue::SampleTheta,
                 HeaderValue::BeamlineEnergy,
+                HeaderValue::BeamCurrent,
                 HeaderValue::EPUPolarization,
                 HeaderValue::HorizontalExitSlitSize,
                 HeaderValue::HigherOrderSuppressor,
@@ -66,6 +67,7 @@ pub enum HeaderValue {
     SampleTheta,
     BeamlineEnergy,
     EPUPolarization,
+    BeamCurrent,
     HorizontalExitSlitSize,
     HigherOrderSuppressor,
     Exposure,
@@ -76,7 +78,8 @@ impl HeaderValue {
         match self {
             HeaderValue::SampleTheta => "[deg]",
             HeaderValue::BeamlineEnergy => "[eV]",
-            HeaderValue::EPUPolarization => "[deg",
+            HeaderValue::BeamCurrent => "[mA]",
+            HeaderValue::EPUPolarization => "[deg]",
             HeaderValue::HorizontalExitSlitSize => "[um]",
             HeaderValue::HigherOrderSuppressor => "[mm]",
             HeaderValue::Exposure => "[s]",
@@ -86,6 +89,7 @@ impl HeaderValue {
         match self {
             HeaderValue::SampleTheta => "Sample Theta",
             HeaderValue::BeamlineEnergy => "Beamline Energy",
+            HeaderValue::BeamCurrent => "Beam Current",
             HeaderValue::EPUPolarization => "EPU Polarization",
             HeaderValue::HorizontalExitSlitSize => "Horizontal Exit Slit Size",
             HeaderValue::HigherOrderSuppressor => "Higher Order Suppressor",
@@ -97,6 +101,7 @@ impl HeaderValue {
         match self {
             HeaderValue::SampleTheta => "Sample Theta [deg]",
             HeaderValue::BeamlineEnergy => "Beamline Energy [eV]",
+            HeaderValue::BeamCurrent => "Beam Current [mA]",
             HeaderValue::EPUPolarization => "EPU Polarization [deg]",
             HeaderValue::HorizontalExitSlitSize => "Horizontal Exit Slit Size [um]",
             HeaderValue::HigherOrderSuppressor => "Higher Order Suppressor [mm]",

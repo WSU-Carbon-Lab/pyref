@@ -82,6 +82,7 @@ impl PyHduType {
         let hdu = match hdu.to_lowercase().as_str() {
             "sample theta" => HeaderValue::SampleTheta,
             "beamline energy" => HeaderValue::BeamlineEnergy,
+            "beam polarization" => HeaderValue::BeamCurrent,
             "epu polarization" => HeaderValue::EPUPolarization,
             "horizontal exit slit size" => HeaderValue::HorizontalExitSlitSize,
             "higher order suppressor" => HeaderValue::HigherOrderSuppressor,
@@ -128,6 +129,7 @@ impl PyFitsLoader {
             .map(|s| match s.as_str() {
                 "sample theta" => HeaderValue::SampleTheta,
                 "beamline energy" => HeaderValue::BeamlineEnergy,
+                "beam current" => HeaderValue::BeamCurrent,
                 "epu polarization" => HeaderValue::EPUPolarization,
                 "horizontal exit slit size" => HeaderValue::HorizontalExitSlitSize,
                 "higher order suppressor" => HeaderValue::HigherOrderSuppressor,

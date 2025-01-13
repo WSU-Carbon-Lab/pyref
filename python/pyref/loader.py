@@ -694,13 +694,15 @@ class PrsoxrLoader:
         ).select(final_columns)
         return self.refl
 
-    def plot_data(self, energies: list[float] | None = None, line: bool = True):
+    def plot_data(self, energies: list[float] | float | None = None, line: bool = True):
         """Plot Reflectivity data."""
         if self.refl is None:
             print("Process data prior to plotting it")
             return
         if energies is None:
             energies = self.energy
+        if isinstance(energies, (int, float)):
+            energies = [energies]
         # ensure energies list is a subset of the available energies
         if not set(energies).issubset(self.energy):
             err = "Energies must be a subset of the available energies"
@@ -716,7 +718,6 @@ class PrsoxrLoader:
                 x="Q [Å⁻¹]",
                 y="r [a. u.]",
                 hue="Beamline Energy [eV]",
-                palette="tab10",
             )
         else:
             g = sns.scatterplot(
@@ -724,7 +725,6 @@ class PrsoxrLoader:
                 x="Q [Å⁻¹]",
                 y="r [a. u.]",
                 hue="Beamline Energy [eV]",
-                palette="tab10",
             )
         # g.fill_between(self.refl["Q [Å⁻¹]"], lower, upper, alpha=0.3, color="C2")
         g.set_xlim(data["Q [Å⁻¹]"].min(), data["Q [Å⁻¹]"].max())

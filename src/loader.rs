@@ -196,10 +196,8 @@ impl FitsLoader {
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
         let value = &self.value_from_hdu(card_name)?;
         let rounded_value = match card_name {
-            // "EXPOSURE" | "Sample Theta" | "CCD Theta" | "Beam Current" => {
-            //     (value * 10000.0).round() / 10000.0
-            // }
-            // "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
+            "EXPOSURE" | "Beam Current" => (value * 10000.0).round() / 10000.0,
+            "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
             _ => value.clone(),
         };
         Some(rounded_value)

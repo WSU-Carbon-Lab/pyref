@@ -197,7 +197,7 @@ impl FitsLoader {
         let value = &self.value_from_hdu(card_name)?;
         let rounded_value = match card_name {
             "EXPOSURE" | "Beam Current" => (value * 10000.0).round() / 10000.0,
-            "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
+            "Higher Order Suppressor" | "Beamline Energy" => (value * 100.0).round() / 100.0,
             _ => value.clone(),
         };
         Some(rounded_value)

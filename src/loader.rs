@@ -196,7 +196,9 @@ impl FitsLoader {
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
         let value = &self.value_from_hdu(card_name)?;
         let rounded_value = match card_name {
-            "EXPOSURE" | "Sample Theta" => (value * 1000.0).round() / 1000.0,
+            "EXPOSURE" | "Sample Theta" | "CCD Theta" | "Beam Current" => {
+                (value * 10000.0).round() / 10000.0
+            }
             "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
             _ => (value * 10.0).round() / 10.0,
         };
@@ -405,16 +407,7 @@ pub fn post_process(df: DataFrame) -> DataFrame {
     let lz = df
         .clone()
         .lazy()
-        .sort(
-            [
-                "Beamline Energy [eV]",
-                "Sample Theta [deg]",
-                "Horizontal Exit Slit Size [um]",
-                "Higher Order Suppressor [mm]",
-                "EXPOSURE [s]",
-            ],
-            Default::default(),
-        )
+        .sort(["Scan ID"], Default::default())
         .with_column(
             col("Beamline Energy [eV]")
                 .pow(-1)
@@ -548,8 +541,7 @@ pub fn simple_update(df: &mut DataFrame, dir: &str) -> Result<(), Box<dyn std::e
 fn theta_offset(theta: f64, ccd_theta: f64) -> f64 {
     // 2theta = -ccd_theta / 2 - theta rounded to 3 decimal places
     let ccd_theta = ccd_theta / 2.0;
-    let theta_offset = ccd_theta - theta;
-    -1.0 * (theta_offset * 1000.0).round() / 1000.0
+    ccd_theta - theta
 }
 
 fn q(lam: f64, theta: f64, angle_offset: f64) -> f64 {

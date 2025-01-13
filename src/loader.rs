@@ -459,31 +459,33 @@ pub fn post_process(df: DataFrame) -> DataFrame {
         .try_extract::<f64>()
         .unwrap();
     // get the row cor
-    let lz = lz.with_column(
-        as_struct(vec![col("Sample Theta [deg]"), col("Lambda [Å]")])
-            .map(
-                move |s| {
-                    let struc = s.struct_()?;
-                    let th_series = struc.field_by_name("Sample Theta [deg]")?;
-                    let theta = th_series.f64()?;
-                    let lam_series = struc.field_by_name("Lambda [Å]")?;
-                    let lam = lam_series.f64()?;
+    let lz = lz
+        .with_column(lit(angle_offset).alias("Theta Offset [deg]"))
+        .with_column(
+            as_struct(vec![col("Sample Theta [deg]"), col("Lambda [Å]")])
+                .map(
+                    move |s| {
+                        let struc = s.struct_()?;
+                        let th_series = struc.field_by_name("Sample Theta [deg]")?;
+                        let theta = th_series.f64()?;
+                        let lam_series = struc.field_by_name("Lambda [Å]")?;
+                        let lam = lam_series.f64()?;
 
-                    let out: Float64Chunked = theta
-                        .into_iter()
-                        .zip(lam.iter())
-                        .map(|(theta, lam)| match (theta, lam) {
-                            (Some(theta), Some(lam)) => Some(q(lam, theta, angle_offset)),
-                            _ => None,
-                        })
-                        .collect();
+                        let out: Float64Chunked = theta
+                            .into_iter()
+                            .zip(lam.iter())
+                            .map(|(theta, lam)| match (theta, lam) {
+                                (Some(theta), Some(lam)) => Some(q(lam, theta, angle_offset)),
+                                _ => None,
+                            })
+                            .collect();
 
-                    Ok(Some(out.into_series()))
-                },
-                GetOutput::from_type(DataType::Float64),
-            )
-            .alias("Q [Å⁻¹]"),
-    );
+                        Ok(Some(out.into_series()))
+                    },
+                    GetOutput::from_type(DataType::Float64),
+                )
+                .alias("Q [Å⁻¹]"),
+        );
     lz.collect().unwrap()
 }
 

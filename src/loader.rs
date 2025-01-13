@@ -50,6 +50,7 @@ impl ExperimentType {
         match self {
             ExperimentType::Xrr => vec![
                 HeaderValue::SampleTheta,
+                HeaderValue::CCDTheta,
                 HeaderValue::BeamlineEnergy,
                 HeaderValue::BeamCurrent,
                 HeaderValue::EPUPolarization,
@@ -65,6 +66,7 @@ impl ExperimentType {
 
 pub enum HeaderValue {
     SampleTheta,
+    CCDTheta,
     BeamlineEnergy,
     EPUPolarization,
     BeamCurrent,
@@ -77,6 +79,7 @@ impl HeaderValue {
     pub fn unit(&self) -> &str {
         match self {
             HeaderValue::SampleTheta => "[deg]",
+            HeaderValue::CCDTheta => "[deg]",
             HeaderValue::BeamlineEnergy => "[eV]",
             HeaderValue::BeamCurrent => "[mA]",
             HeaderValue::EPUPolarization => "[deg]",
@@ -88,6 +91,7 @@ impl HeaderValue {
     pub fn hdu(&self) -> &str {
         match self {
             HeaderValue::SampleTheta => "Sample Theta",
+            HeaderValue::CCDTheta => "CCD Theta",
             HeaderValue::BeamlineEnergy => "Beamline Energy",
             HeaderValue::BeamCurrent => "Beam Current",
             HeaderValue::EPUPolarization => "EPU Polarization",
@@ -100,6 +104,7 @@ impl HeaderValue {
         // match and return the string "hdu" + "unit"
         match self {
             HeaderValue::SampleTheta => "Sample Theta [deg]",
+            HeaderValue::CCDTheta => "CCD Theta [deg]",
             HeaderValue::BeamlineEnergy => "Beamline Energy [eV]",
             HeaderValue::BeamCurrent => "Beam Current [mA]",
             HeaderValue::EPUPolarization => "EPU Polarization [deg]",
@@ -189,7 +194,7 @@ impl FitsLoader {
     ///
     /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
     pub fn get_value(&self, card_name: &str) -> Option<f64> {
-        let value = &self.value_froom_hdu(card_name)?;
+        let value = &self.value_from_hdu(card_name)?;
         let rounded_value = match card_name {
             "EXPOSURE" | "Sample Theta" => (value * 1000.0).round() / 1000.0,
             "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
@@ -198,7 +203,7 @@ impl FitsLoader {
         Some(rounded_value)
     }
 
-    pub fn value_froom_hdu(&self, card_name: &str) -> Option<f64> {
+    pub fn value_from_hdu(&self, card_name: &str) -> Option<f64> {
         match &self.hdul.hdus[0] {
             io::hdulist::HDU::Primary(hdu) => hdu
                 .header
@@ -415,32 +420,70 @@ pub fn post_process(df: DataFrame) -> DataFrame {
                 .pow(-1)
                 .mul(lit(h * c))
                 .alias("Lambda [Å]"),
-        )
+        );
+    let angle_offset = lz
+        .clone()
+        .filter(col("Sample Theta [deg]").neq(0.0))
+        .first()
+        .select(&[col("CCD Theta [deg]"), col("Sample Theta [deg]")])
         .with_column(
-            as_struct(vec![col("Sample Theta [deg]"), col("Lambda [Å]")])
+            as_struct(vec![col("Sample Theta [deg]"), col("CCD Theta [deg]")])
                 .map(
-                    |s| {
+                    move |s| {
                         let struc = s.struct_()?;
                         let th_series = struc.field_by_name("Sample Theta [deg]")?;
                         let theta = th_series.f64()?;
-                        let lam_series = struc.field_by_name("Lambda [Å]")?;
-                        let lam = lam_series.f64()?;
-
+                        let ccd_th_series = struc.field_by_name("CCD Theta [deg]")?;
+                        let ccd_theta = ccd_th_series.f64()?;
                         let out: Float64Chunked = theta
                             .into_iter()
-                            .zip(lam.iter())
-                            .map(|(theta, lam)| match (theta, lam) {
-                                (Some(theta), Some(lam)) => Some(q(lam, theta)),
-                                _ => None,
+                            .zip(ccd_theta.iter())
+                            .map(|(theta, ccd_theta)| match (theta, ccd_theta) {
+                                (Some(theta), Some(ccd_theta)) => {
+                                    Some(theta_offset(theta, ccd_theta))
+                                }
+                                _ => Some(0.0),
                             })
                             .collect();
-
                         Ok(Some(out.into_series()))
                     },
                     GetOutput::from_type(DataType::Float64),
                 )
-                .alias("Q [Å⁻¹]"),
-        );
+                .alias("Theta Offset [deg]"),
+        )
+        .select(&[col("Theta Offset [deg]")])
+        .collect()
+        .unwrap()
+        .get(0)
+        .unwrap()[0]
+        .try_extract::<f64>()
+        .unwrap();
+    // get the row cor
+    let lz = lz.with_column(
+        as_struct(vec![col("Sample Theta [deg]"), col("Lambda [Å]")])
+            .map(
+                move |s| {
+                    let struc = s.struct_()?;
+                    let th_series = struc.field_by_name("Sample Theta [deg]")?;
+                    let theta = th_series.f64()?;
+                    let lam_series = struc.field_by_name("Lambda [Å]")?;
+                    let lam = lam_series.f64()?;
+
+                    let out: Float64Chunked = theta
+                        .into_iter()
+                        .zip(lam.iter())
+                        .map(|(theta, lam)| match (theta, lam) {
+                            (Some(theta), Some(lam)) => Some(q(lam, theta, angle_offset)),
+                            _ => None,
+                        })
+                        .collect();
+
+                    Ok(Some(out.into_series()))
+                },
+                GetOutput::from_type(DataType::Float64),
+            )
+            .alias("Q [Å⁻¹]"),
+    );
     lz.collect().unwrap()
 }
 
@@ -499,6 +542,15 @@ pub fn simple_update(df: &mut DataFrame, dir: &str) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-fn q(lam: f64, theta: f64) -> f64 {
+// Find the theta offset between theta and the ccd theta or 2theta
+fn theta_offset(theta: f64, ccd_theta: f64) -> f64 {
+    // 2theta = -ccd_theta / 2 - theta rounded to 3 decimal places
+    let ccd_theta = ccd_theta / 2.0;
+    let theta_offset = ccd_theta - theta;
+    -1.0 * (theta_offset * 1000.0).round() / 1000.0
+}
+
+fn q(lam: f64, theta: f64, angle_offset: f64) -> f64 {
+    let theta = theta - angle_offset;
     4.0 * std::f64::consts::PI * theta.to_radians().sin() / lam
 }

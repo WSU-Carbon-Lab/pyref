@@ -197,7 +197,7 @@ impl FitsLoader {
         let value = &self.value_from_hdu(card_name)?;
         let rounded_value = match card_name {
             "EXPOSURE" | "Beam Current" => (value * 10000.0).round() / 10000.0,
-            "Higher Order Suppressor" | "Beamline Energy" => (value * 100.0).round() / 100.0,
+            "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
             _ => value.clone(),
         };
         Some(rounded_value)
@@ -401,6 +401,7 @@ impl ExperimentLoader {
 pub fn post_process(df: DataFrame) -> DataFrame {
     let h = physical_constants::PLANCK_CONSTANT_IN_EV_PER_HZ;
     let c = physical_constants::SPEED_OF_LIGHT_IN_VACUUM * 1e10;
+    println!("{:?}", h * c);
     // Calculate lambda and q values in angstrom
     let lz = df
         .clone()
@@ -414,8 +415,8 @@ pub fn post_process(df: DataFrame) -> DataFrame {
         );
     let angle_offset = lz
         .clone()
-        .filter(col("Sample Theta [deg]").neq(0.0))
-        .first()
+        .filter(col("Sample Theta [deg]").eq(0.0))
+        .last()
         .select(&[col("CCD Theta [deg]"), col("Sample Theta [deg]")])
         .with_column(
             as_struct(vec![col("Sample Theta [deg]"), col("CCD Theta [deg]")])

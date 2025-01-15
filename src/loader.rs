@@ -198,6 +198,7 @@ impl FitsLoader {
         let rounded_value = match card_name {
             "EXPOSURE" => (value * 1000.0).round() / 1000.0,
             "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
+            "Horizontal Exit Slit Size" => (value * 10.0).round() / 10.0,
             _ => value.clone(),
         };
         Some(rounded_value)

@@ -246,7 +246,7 @@ impl FitsLoader {
     ///
     /// # Returns
     ///
-    /// A `Result` containing the image data as a `Array2<u32>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
+    /// A `Result` containing the image data as a `Array2<u16>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     fn get_data(
         &self,
         data: &io::hdus::image::ImageData,
@@ -262,11 +262,11 @@ impl FitsLoader {
         Ok((flat_data, vec![shape[0] as u16, shape[1] as u16]))
     }
 
-    /// Retrieves the image data from the FITS file as an `Array2<u32>`.
+    /// Retrieves the image data from the FITS file as an `Array2<u16>`.
     ///
     /// # Returns
     ///
-    /// A `Result` containing the image data as a `Array2<u32>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
+    /// A `Result` containing the image data as a `Array2<u16>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     pub fn get_image(
         &self,
     ) -> Result<(Vec<u16>, Vec<u16>), Box<dyn std::error::Error + Send + Sync>> {
@@ -483,7 +483,7 @@ pub fn post_process(df: DataFrame) -> DataFrame {
 }
 
 // function to unpack an image wile iterating rhough a polars dataframe.
-pub fn get_image(image_data: &[u32], shape: (usize, usize)) -> Result<Array2<u32>, PolarsError> {
+pub fn get_image(image_data: &[u16], shape: (usize, usize)) -> Result<Array2<u16>, PolarsError> {
     let image_array = Array2::from_shape_vec(shape, image_data.to_vec())
         .map_err(|_| PolarsError::ComputeError("Invalid image data".into()))?;
     Ok(image_array)

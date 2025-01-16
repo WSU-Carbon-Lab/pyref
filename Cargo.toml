@@ -6,7 +6,7 @@ edition = "2021"
 license = "GPL-2.0"
 name = "pyref-core"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
-version = "0.3.35"
+version = "0.3.37"
 
 [lib]
 name = "pyref_core"
@@ -14,6 +14,8 @@ path = "src/lib.rs"
 
 [dependencies]
 astrors-fork = "0.1.10"
+image = "0.25.5"
+imageproc = "0.25.0"
 ndarray = "0.15.6"
 numpy = "0.22.0"
 physical_constants = "0.5.0"

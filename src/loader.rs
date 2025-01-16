@@ -20,7 +20,7 @@ use astrors_fork::fits;
 use astrors_fork::io;
 use astrors_fork::io::hdulist::*;
 use astrors_fork::io::header::*;
-use numpy::ndarray::Array2;
+use ndarray::Array2;
 use polars::{lazy::prelude::*, prelude::*};
 use rayon::prelude::*;
 use std::fs;
@@ -250,16 +250,16 @@ impl FitsLoader {
     fn get_data(
         &self,
         data: &io::hdus::image::ImageData,
-    ) -> Result<(Vec<u32>, Vec<u32>), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(Vec<u16>, Vec<u16>), Box<dyn std::error::Error + Send + Sync>> {
         let (flat_data, shape) = match data {
             io::hdus::image::ImageData::I16(image) => {
-                let flat_data = image.iter().map(|&x| u32::from(x as u16)).collect();
+                let flat_data = image.iter().map(|&x| u16::from(x as u16)).collect();
                 let shape = image.dim();
                 (flat_data, shape)
             }
             _ => return Err("Unsupported image data type".into()),
         };
-        Ok((flat_data, vec![shape[0] as u32, shape[1] as u32]))
+        Ok((flat_data, vec![shape[0] as u16, shape[1] as u16]))
     }
 
     /// Retrieves the image data from the FITS file as an `Array2<u32>`.
@@ -269,7 +269,7 @@ impl FitsLoader {
     /// A `Result` containing the image data as a `Array2<u32>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     pub fn get_image(
         &self,
-    ) -> Result<(Vec<u32>, Vec<u32>), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(Vec<u16>, Vec<u16>), Box<dyn std::error::Error + Send + Sync>> {
         match &self.hdul.hdus[2] {
             io::hdulist::HDU::Image(i_hdu) => self.get_data(&i_hdu.data),
             _ => Err("Image HDU not found".into()),
@@ -321,7 +321,7 @@ impl FitsLoader {
     }
 }
 // Function facilitate storing the image data as a single element in a Polars DataFrame.
-pub fn vec_series(name: &str, img: Vec<u32>) -> Series {
+pub fn vec_series(name: &str, img: Vec<u16>) -> Series {
     let new_series = [img.iter().collect::<Series>()];
     Series::new(name.into(), new_series)
 }

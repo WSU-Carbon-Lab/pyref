@@ -113,6 +113,14 @@ impl HeaderValue {
             HeaderValue::Exposure => "EXPOSURE [s]",
         }
     }
+    pub fn round(&self, value: f64) -> f64 {
+        match self {
+            HeaderValue::Exposure => (value * 1000.0).round() / 1000.0,
+            HeaderValue::HigherOrderSuppressor => (value * 100.0).round() / 100.0,
+            HeaderValue::HorizontalExitSlitSize => (value * 10.0).round() / 10.0,
+            _ => value,
+        }
+    }
 }
 
 // Struct representing a CCD FITS file.
@@ -177,40 +185,18 @@ impl FitsLoader {
     /// # Returns
     ///
     /// An `Option` containing the requested `card::Card` if found, or `None` if not found.
-    pub fn get_card(&self, card_name: &str) -> Option<card::Card> {
-        match &self.hdul.hdus[0] {
-            io::hdulist::HDU::Primary(hdu) => hdu.header.get_card(card_name).cloned(),
-            _ => None,
+    pub fn get_card(&self, hdu: usize, card_name: &str) -> Result<card::Card, ()> {
+        match &self.hdul.hdus[hdu] {
+            io::hdulist::HDU::Primary(hdu) => Ok(hdu.header.get_card(card_name).cloned().unwrap()),
+            io::hdulist::HDU::Image(hdu) => Ok(hdu.header.get_card(card_name).cloned().unwrap()),
+            _ => Err(()),
         }
     }
 
-    /// Retrieves the value of a specific card from the FITS file.
-    ///
-    /// # Arguments
-    ///
-    /// * `card_name` - The name of the card to retrieve the value from.
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing the value of the requested card as a `f64` if found, or `None` if not found.
-    pub fn get_value(&self, card_name: &str) -> Option<f64> {
-        let value = &self.value_from_hdu(card_name)?;
-        let rounded_value = match card_name {
-            "EXPOSURE" => (value * 1000.0).round() / 1000.0,
-            "Higher Order Suppressor" => (value * 100.0).round() / 100.0,
-            "Horizontal Exit Slit Size" => (value * 10.0).round() / 10.0,
-            _ => value.clone(),
-        };
-        Some(rounded_value)
-    }
-
-    pub fn value_from_hdu(&self, card_name: &str) -> Option<f64> {
-        match &self.hdul.hdus[0] {
-            io::hdulist::HDU::Primary(hdu) => hdu
-                .header
-                .get_card(card_name)
-                .map(|c| (c.value.as_float().unwrap())),
-            _ => None,
+    pub fn get_value(&self, hdu: usize, card: &HeaderValue) -> Option<f64> {
+        match self.get_card(hdu, card.name()) {
+            Ok(c) => c.value.as_float().map(|v| card.round(v)),
+            Err(_) => None,
         }
     }
 
@@ -250,16 +236,19 @@ impl FitsLoader {
     fn get_data(
         &self,
         data: &io::hdus::image::ImageData,
-    ) -> Result<(Vec<u16>, Vec<u16>), Box<dyn std::error::Error + Send + Sync>> {
-        let (flat_data, shape) = match data {
+    ) -> Result<(Vec<i64>, Vec<u32>), Box<dyn std::error::Error + Send + Sync>> {
+        let bzero = self.get_card(2, "BZERO").unwrap().value.as_int().unwrap();
+        println!("{:?}", bzero);
+
+        match data {
             io::hdus::image::ImageData::I16(image) => {
-                let flat_data = image.iter().map(|&x| u16::from(x as u16)).collect();
+                let flat_data: Vec<i64> =
+                    image.iter().map(|&x| i64::from(x as i64 + bzero)).collect();
                 let shape = image.dim();
-                (flat_data, shape)
+                Ok((flat_data, vec![shape[0] as u32, shape[1] as u32]))
             }
-            _ => return Err("Unsupported image data type".into()),
-        };
-        Ok((flat_data, vec![shape[0] as u16, shape[1] as u16]))
+            _ => Err("Unsupported image data type".into()),
+        }
     }
 
     /// Retrieves the image data from the FITS file as an `Array2<u16>`.
@@ -269,7 +258,7 @@ impl FitsLoader {
     /// A `Result` containing the image data as a `Array2<u16>` if successful, or a boxed `dyn std::error::Error` if an error occurred.
     pub fn get_image(
         &self,
-    ) -> Result<(Vec<u16>, Vec<u16>), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(Vec<i64>, Vec<u32>), Box<dyn std::error::Error + Send + Sync>> {
         match &self.hdul.hdus[2] {
             io::hdulist::HDU::Image(i_hdu) => self.get_data(&i_hdu.data),
             _ => Err("Image HDU not found".into()),
@@ -303,7 +292,7 @@ impl FitsLoader {
             // Use specified keys
             keys.iter()
                 .filter_map(|key| {
-                    self.get_value(key.hdu())
+                    self.get_value(0, key)
                         .map(|value| Series::new(PlSmallStr::from_str(key.name()), vec![value]))
                 })
                 .collect::<Vec<_>>()
@@ -315,13 +304,18 @@ impl FitsLoader {
         };
 
         s_vec.push(Series::new("Scan ID".into(), vec![self.get_scan_num()]));
-        s_vec.push(vec_series("Raw", image));
-        s_vec.push(vec_series("Raw Shape", size));
+        s_vec.push(vec_i64("Raw Image", image));
+        s_vec.push(vec_u32("Image Size".into(), size));
         DataFrame::new(s_vec).map_err(From::from)
     }
 }
 // Function facilitate storing the image data as a single element in a Polars DataFrame.
-pub fn vec_series(name: &str, img: Vec<u16>) -> Series {
+fn vec_i64(name: &str, img: Vec<i64>) -> Series {
+    let new_series = [img.iter().collect::<Series>()];
+    Series::new(name.into(), new_series)
+}
+
+fn vec_u32(name: &str, img: Vec<u32>) -> Series {
     let new_series = [img.iter().collect::<Series>()];
     Series::new(name.into(), new_series)
 }
@@ -538,13 +532,20 @@ pub fn simple_update(df: &mut DataFrame, dir: &str) -> Result<(), Box<dyn std::e
 }
 
 // Find the theta offset between theta and the ccd theta or 2theta
-fn theta_offset(theta: f64, ccd_theta: f64) -> f64 {
+pub fn theta_offset(theta: f64, ccd_theta: f64) -> f64 {
     // 2theta = -ccd_theta / 2 - theta rounded to 3 decimal places
     let ccd_theta = ccd_theta / 2.0;
     ccd_theta - theta
 }
 
-fn q(lam: f64, theta: f64, angle_offset: f64) -> f64 {
+pub fn q(lam: f64, theta: f64, angle_offset: f64) -> f64 {
     let theta = theta - angle_offset;
     4.0 * std::f64::consts::PI * theta.to_radians().sin() / lam
+}
+
+pub fn load() {
+    let test_path = "/home/hduva/projects/pyref-ccd/test/F0072_exps_85684-00001.fits";
+
+    let data = read_fits(test_path).unwrap();
+    println!("{:?}", data);
 }

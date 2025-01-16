@@ -128,9 +128,9 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "astrors-fork"
-version = "0.1.10"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "788a0c9781d7db9ee4d7eae9a8f5f73ba602137fa7fc98d5d99ed8f8e6c00197"
+checksum = "482e2d81e9fce3d1e54e5fe0571bb4eaaa0d1f42df9e9ab820896a8d12e485ca"
 dependencies = [
  "byteorder",
  "cc",
@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.38"
+version = "0.3.39"
 dependencies = [
  "astrors-fork",
  "image",

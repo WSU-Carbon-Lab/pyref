@@ -181,14 +181,6 @@ pub fn py_simple_update(df: PyDataFrame, dir: &str) -> PyDataFrame {
     PyDataFrame(df)
 }
 
-// #[pyfunction]
-// pub fn py_get_image(vec: Vec<u16>, shape: (usize, usize)) -> PyResult<Py<PyAny>> {
-//     pyo3::Python::with_gil(|py| {
-//         let array = get_image(&vec, shape)
-//             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-//         Ok(PyArray2::from_array_bound(py, &array).into_py(py))
-//     })
-// }
 // ==================== UTILS =====================
 fn binary_amortized_elementwise<'a, T, K, F>(
     lhs: &'a ListChunked,
@@ -336,6 +328,146 @@ fn err_prop_div(inputs: &[Series]) -> PolarsResult<Series> {
         .collect();
     Ok(out.into_series())
 }
+// ==================== Utils =====================
+pub fn err_prop_div(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
+    ((lhs.clone() / rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2)))
+        .sqrt()
+        .into()
+}
+
+pub fn err_prop_mult(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
+    ((lhs.clone() * rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2)))
+        .sqrt()
+        .into()
+}
+
+pub fn weighted_mean(values: Expr, weights: Expr) -> Expr {
+    let values = values.cast(DataType::Float64);
+    let weights = weights.cast(DataType::Float64);
+    let numerator = values.clone() * weights.clone();
+    let denominator = weights.clone();
+    numerator.sum() / denominator.sum()
+}
+
+pub fn weighted_std(weights: Expr) -> Expr {
+    let weights = weights.cast(DataType::Float64);
+    let denominator = weights.clone();
+    (lit(1.0) / denominator.sum()).sqrt()
+}
+
+// ==================== SITCHING ==================
+pub fn get_izero_df(stitch: DataFrame) -> DataFrame {
+    let i0 = stitch
+        .clone()
+        .lazy()
+        .filter(col("Sample Theta [deg]").eq(lit(0.0)))
+        .collect()
+        .unwrap();
+    let i0_val = i0.column("I [arb. un.]").unwrap().mean().unwrap();
+    let i0_err = i0.column("I [arb. un.]").unwrap().std(1).unwrap();
+    stitch
+        .lazy()
+        .with_column(lit(i0_val).alias("I₀ [arb. un.]"))
+        .with_column(lit(i0_err).alias("δI₀ [arb. un.]"))
+        .collect()
+        .unwrap()
+}
+
+pub fn get_reletive_izero(current_stitch: DataFrame, prior_stitch: DataFrame) -> DataFrame {
+    let energy: f64 = current_stitch
+        .column("Beamline Energy [eV]")
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .extract::<f64>()
+        .unwrap();
+
+    // rename the current stitch so that I [arb. un.] = I[current]
+    let current_stitch = current_stitch
+        .clone()
+        .lazy()
+        .rename(["I [arb. un.]"], ["I[current]"])
+        .collect()
+        .unwrap();
+    let prior_stitch = prior_stitch
+        .clone()
+        .lazy()
+        .rename(["I [arb. un.]"], ["I[prior]"])
+        .collect()
+        .unwrap();
+
+    prior_stitch
+        .tail(Some(10))
+        .lazy()
+        .join(
+            current_stitch.clone().lazy(),
+            [col("Sample Theta [deg]")],
+            [col("Sample Theta [deg]")],
+            JoinArgs::default(),
+        )
+        .group_by(["Sample Theta [deg]"])
+        .agg(vec![
+            col("I[current]"),
+            col("δI[current]"),
+            col("I[prior]"),
+            col("δI[prior]"),
+            col("I₀ [arb. un.]"),
+            col("δI₀ [arb. un.]"),
+        ])
+        .with_columns(vec![
+            weighted_mean(col("I[current]"), col("δI[current]")).alias("I[current]"),
+            weighted_mean(col("I[prior]"), col("δI[prior]")).alias("I[prior]"),
+            weighted_mean(col("I₀ [arb. un.]"), col("δI₀ [arb. un.]")).alias("I₀ [arb. un.]"),
+            weighted_std(col("I[current]")).alias("δI[current]"),
+            weighted_std(col("I[prior]")).alias("δI[prior]"),
+            weighted_std(col("I₀ [arb. un.]")).alias("δI₀ [arb. un.]"),
+        ])
+        .with_columns(vec![
+            (col("I[current]") / col("I[prior]")).alias("k"),
+            err_prop_mult(
+                col("I[current]"),
+                col("I[prior]"),
+                col("δI[current]"),
+                col("δI[prior]"),
+            )
+            .alias("δk"),
+        ])
+        .with_columns(vec![
+            (col("I₀ [arb. un.]") * col("k")).alias("I₀ʳ [arb. un.]"),
+            err_prop_mult(
+                col("I₀ [arb. un.]"),
+                col("k"),
+                col("δI₀ [arb. un.]"),
+                col("δk"),
+            )
+            .alias("δI₀ʳ [arb. un.]"),
+            lit(true).alias("dummy"),
+        ])
+        .group_by(["dummy"])
+        .agg(vec![col("I₀ʳ [arb. un.]"), col("δI₀ʳ [arb. un.]")])
+        .with_columns(vec![
+            weighted_mean(col("I₀ʳ [arb. un.]"), col("δI₀ʳ [arb. un.]")).alias("I₀ [arb. un.]"),
+            weighted_std(col("I₀ʳ [arb. un.]")).alias("δI₀ [arb. un.]"),
+            lit(energy).alias("Beamline Energy [eV]"),
+        ])
+        .collect()
+        .unwrap()
+}
+
+#[pyfunction]
+pub fn py_get_izero_df(stitch: PyDataFrame) -> PyDataFrame {
+    let df = get_izero_df(stitch.0);
+    PyDataFrame(df)
+}
+
+#[pyfunction]
+pub fn py_get_reletive_izero(
+    current_stitch: PyDataFrame,
+    prior_stitch: PyDataFrame,
+) -> PyDataFrame {
+    let df = get_reletive_izero(current_stitch.0, prior_stitch.0);
+    PyDataFrame(df)
+}
 
 // ==================== MODULE ====================
 
@@ -350,5 +482,7 @@ pub fn pyref(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_read_experiment, m)?)?;
     // m.add_function(wrap_pyfunction!(py_get_image, m)?)?;
     m.add_function(wrap_pyfunction!(py_simple_update, m)?)?;
+    m.add_function(wrap_pyfunction!(py_get_izero_df, m)?)?;
+    m.add_function(wrap_pyfunction!(py_get_reletive_izero, m)?)?;
     Ok(())
 }

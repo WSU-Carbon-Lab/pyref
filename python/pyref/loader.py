@@ -22,7 +22,7 @@ from pyref.image import (
 )
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue
-from pyref.utils import err_prop_div, weighted_mean, weighted_std
+from pyref.utils import err_prop_div, weighted_mean, weighted_std, err_prop_mult
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -266,7 +266,13 @@ class PrsoxrLoader:
 
     @property
     def name(self) -> str | list[str]:
-        return self.meta.select("Sample Name").unique().to_numpy().flatten()
+        return (
+            self.meta.filter(~pl.col("Sample Name").str.starts_with("Captured"))
+            .select("Sample Name")
+            .unique()
+            .to_numpy()
+            .flatten()
+        )
 
     def __str__(self):
         """Return string representation."""
@@ -650,7 +656,9 @@ class PrsoxrLoader:
             print("Process data prior to plotting it")
             return
 
-        p = self.refl.plot.scatter(
+        refl = self.refl.filter(~pl.col("Sample Name").str.starts_with("Captured"))
+
+        p = refl.plot.scatter(
             x="Q [Å⁻¹]",
             y="r [a. u.]",
             by=["Sample Name", "Beamline Energy [eV]"],
@@ -774,7 +782,7 @@ def get_reletive_izero(
         )
         .with_columns(
             (pl.col("I₀ [arb. un.]") * pl.col("k")).alias("I₀ʳ [arb. un.]"),
-            err_prop_div(*col_and_err("I₀ [arb. un.]"), *col_and_err("k")).alias(
+            err_prop_mult(*col_and_err("I₀ [arb. un.]"), *col_and_err("k")).alias(
                 "δI₀ʳ [arb. un.]"
             ),
             pl.lit(True).alias("dummy"),

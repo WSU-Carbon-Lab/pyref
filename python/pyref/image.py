@@ -24,7 +24,7 @@ def find_max_index(arr):
 
 
 @njit(cache=True, nogil=True)
-def reduction0(
+def reduction(
     masked: np.ndarray, beam_spot: tuple[int], box_size: int, edge_trim: int
 ) -> tuple[int, int]:
     """Calculate the specular reflectance from a masked image."""
@@ -72,7 +72,7 @@ def reduction0(
 
 
 @njit(cache=True, nogil=True)
-def reduction(
+def reduction1(
     masked: np.ndarray, beam_spot: tuple[int], box_size: int, edge_trim: int
 ) -> tuple[int, int]:
     # Direct beam intensity
@@ -195,10 +195,7 @@ def locate_beams(df: pl.DataFrame, roi: int) -> tuple[np.ndarray, np.ndarray]:
     shapes = df.select("Raw Shape").to_numpy()[:, 0]
 
     reshaped_imgs = np.array(
-        [
-            np.reshape(img, shape[::-1])[::-1, :]
-            for img, shape in zip(imgs, shapes, strict=False)
-        ]
+        [np.reshape(img, shape)[::-1] for img, shape in zip(imgs, shapes, strict=False)]
     )
     return pre_process_all(reshaped_imgs, roi)
 

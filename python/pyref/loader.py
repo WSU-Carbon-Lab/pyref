@@ -351,7 +351,7 @@ class PrsoxrLoader:
             meta = self.meta.filter(pl.col("Beamline Energy [eV]") == energy).row(
                 frame, named=True
             )
-            image = np.reshape(meta["Raw"], meta["Raw Shape"][::-1])[::-1, :]
+            image = np.reshape(meta["Raw"], meta["Raw Shape"])[::-1]
             masked = apply_mask(image, self.mask)
             bs = beamspot(masked, roi, radius=blur)
             db, bg = reduction(

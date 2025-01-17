@@ -98,8 +98,11 @@ exclude = [
 # pyref = "pyref:main"
 
 [tool.maturin]
+bindings = "pyo3"
 features = ["pyo3/extension-module"]
 format = "sdist"
+manifest-path = "Cargo.toml"
+profile = "release"
 python-source = "python/"
 
 [build-system]

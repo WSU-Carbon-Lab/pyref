@@ -203,6 +203,15 @@ impl FitsLoader {
             .unwrap_or(0)
     }
 
+    pub fn sampel_name(&self) -> String {
+        self.path
+            .rsplit('/')
+            .next()
+            .and_then(|filename| filename.split('-').next())
+            .unwrap_or("Unknown")
+            .to_string()
+    }
+
     /// Retrieves all cards from the FITS file.
     ///
     /// # Returns
@@ -297,6 +306,7 @@ impl FitsLoader {
         };
 
         s_vec.push(Series::new("Scan ID".into(), vec![self.get_scan_num()]));
+        s_vec.push(Series::new("Sample Name".into(), vec![self.sampel_name()]));
         s_vec.push(vec_i64("Raw", image));
         s_vec.push(vec_u32("Raw Shape", size));
         DataFrame::new(s_vec).map_err(From::from)
@@ -393,6 +403,7 @@ pub fn post_process(df: DataFrame) -> DataFrame {
     let lz = df
         .clone()
         .lazy()
+        .sort(["Sample Name"], Default::default())
         .sort(["Scan ID"], Default::default())
         .with_column(
             col("Beamline Energy [eV]")

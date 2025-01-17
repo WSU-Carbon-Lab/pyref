@@ -193,13 +193,6 @@ impl FitsLoader {
         }
     }
 
-    pub fn get_value(&self, hdu: usize, card: &HeaderValue) -> Option<f64> {
-        match self.get_card(hdu, card.name()) {
-            Ok(c) => c.value.as_float().map(|v| card.round(v)),
-            Err(_) => None,
-        }
-    }
-
     pub fn get_scan_num(&self) -> i32 {
         self.path
             .rsplit('/')
@@ -279,7 +272,6 @@ impl FitsLoader {
         keys: &Vec<HeaderValue>,
     ) -> Result<DataFrame, Box<dyn std::error::Error + Send + Sync>> {
         let mut s_vec = if keys.is_empty() {
-            // When keys are empty, use all cards.
             self.get_all_cards()
                 .iter()
                 .map(|card| {
@@ -289,11 +281,13 @@ impl FitsLoader {
                 })
                 .collect::<Vec<_>>()
         } else {
-            // Use specified keys
             keys.iter()
                 .filter_map(|key| {
-                    self.get_value(0, key)
-                        .map(|value| Series::new(PlSmallStr::from_str(key.name()), vec![value]))
+                    let val = self.get_card(0, key.hdu()).unwrap();
+                    Some(Series::new(
+                        key.name().into(),
+                        vec![key.round(val.value.as_float().unwrap_or(0.0))],
+                    ))
                 })
                 .collect::<Vec<_>>()
         };
@@ -540,12 +534,15 @@ pub fn theta_offset(theta: f64, ccd_theta: f64) -> f64 {
 
 pub fn q(lam: f64, theta: f64, angle_offset: f64) -> f64 {
     let theta = theta - angle_offset;
-    4.0 * std::f64::consts::PI * theta.to_radians().sin() / lam
+    match 4.0 * std::f64::consts::PI * theta.to_radians().sin() / lam {
+        q if q < 0.0 => 0.0,
+        q => q,
+    }
 }
 
 pub fn load() {
-    let test_path = "/home/hduva/projects/pyref-ccd/test/F0072_exps_85684-00001.fits";
+    let test_path = "/home/hduva/projects/pyref-ccd/test/";
 
-    let data = read_fits(test_path).unwrap();
+    let data = read_experiment(test_path, "xrr").unwrap();
     println!("{:?}", data);
 }

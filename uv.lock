@@ -1764,7 +1764,7 @@ wheels = [
 ]
 
 [[package]]
-name = "pyref"
+name = "pyref-staging"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -6,9 +6,10 @@ from typing import TYPE_CHECKING
 
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
+import hvplot.polars  # noqa: F401
+from pathlib import Path
 import numpy as np
 import polars as pl
-import seaborn as sns
 from IPython.display import display
 from ipywidgets import VBox, interactive
 
@@ -24,13 +25,11 @@ from pyref.types import HeaderValue
 from pyref.utils import err_prop_div, weighted_mean, weighted_std
 
 if TYPE_CHECKING:
-    from pathlib import Path
     from typing import Literal
 
     from pyref.types import Motor
     from pyref.utils import IntoExprColumn
 
-sns.set_theme(style="ticks")
 
 intensity_agg = (pl.col("I [arb. un.]"), pl.col("δI [arb. un.]"))
 overlap_agg = (
@@ -51,6 +50,7 @@ prior_columns = [
     "δI₀ [arb. un.]",
 ]
 final_columns = [
+    "Sample Name",
     "θ [deg]",
     "I [arb. un.]",
     "δI [arb. un.]",
@@ -212,8 +212,8 @@ class PrsoxrLoader:
     ):
 
         # Sample information
-        self.name: str = directory.stem  # Name of the series to be loaded
-        self.path: str = str(directory)  # Path to the data
+        # self.name: str = directory.stem  # Name of the series to be loaded
+        self.path: str = Path(directory)  # Path to the data
 
         # Configuration
         self.shutter_offset: float = 0.00389278  # [s]
@@ -264,6 +264,10 @@ class PrsoxrLoader:
             case _:
                 raise UnknownPolarizationError()
 
+    @property
+    def name(self) -> str | list[str]:
+        return self.meta.select("Sample Name").unique().to_numpy().flatten()
+
     def __str__(self):
         """Return string representation."""
         s = []  # ["{:_>50}".format("")]
@@ -286,9 +290,8 @@ class PrsoxrLoader:
         pixel_dim: float = 0.027,
     ):
         """Return reflectivity dataframe."""
-        self.meta = pyref.py_simple_update(self.meta, self.path)
+        self.meta = pyref.py_simple_update(self.meta, str(self.path))
         refl = self._calc_refl(roi)
-        print(refl)
         return refl
 
     def __len__(self):
@@ -308,6 +311,11 @@ class PrsoxrLoader:
             description="Frame Index",
             layout=widgets.Layout(width="300px"),
             continuous_update=False,
+        )
+        sample_selector = widgets.Dropdown(
+            options=self.name,
+            description="Sample",
+            layout=widgets.Layout(width="200px"),
         )
         energy_selector = widgets.Dropdown(
             options=self.energy,
@@ -345,12 +353,19 @@ class PrsoxrLoader:
             gridspec_kw={"hspace": 0.5, "wspace": 0.5},
         )
 
-        def plot_frame(blur, roi, energy, frame, histogram):
+        def plot_frame(blur, roi, energy, name, frame, histogram):
             """Inner function to process and plot a single frame with given settings."""
             # Get metadata and process the image for the specified frame
-            meta = self.meta.filter(pl.col("Beamline Energy [eV]") == energy).row(
-                frame, named=True
+
+            meta = self.meta.filter(
+                (pl.col("Beamline Energy [eV]") == energy)
+                & (pl.col("Sample Name") == name)
             )
+            if meta.height < frame or meta.height == 0:
+                return
+
+            meta = meta.row(frame, named=True)
+
             image = np.reshape(meta["Raw"], meta["Raw Shape"])[::-1]
             masked = apply_mask(image, self.mask)
             bs = beamspot(masked, roi, radius=blur)
@@ -426,7 +441,7 @@ class PrsoxrLoader:
                     .otherwise(pl.lit("Normal"))
                     .alias("Saturation")
                 )
-                sns.histplot(
+                plt.histplot(
                     data=df.to_pandas(),
                     x="Intensity In ROI",
                     stat="density",
@@ -465,6 +480,7 @@ class PrsoxrLoader:
             roi=roi_selector,
             frame=frame_selector,
             energy=energy_selector,
+            name=sample_selector,
             histogram=histogram,
         )
 
@@ -495,7 +511,7 @@ class PrsoxrLoader:
         """Mask getter."""
         return self.masker.mask
 
-    def write_csv(self, save_name):
+    def write_csv(self):
         """
         Save calculated reflectivity as a .csv file.
 
@@ -520,114 +536,13 @@ class PrsoxrLoader:
             print("Process data prior to saving it")
             return
 
-        self.refl.write_csv(f"{self.path}/{save_name}_refl.csv")
-        self.meta.write_csv(f"{self.path}/{save_name}_meta.csv")
+        for g in self.refl.group_by("Sample Name"):
+            name = g[0][0]
+            data = g[1].drop("Sample Name")
+            data.drop_in_place("Sample Name")
+            data.write_csv(f"{self.path}/{name}.csv")
 
-    def write_hdf5(
-        self, save_name: str, save_images=False, compress="gzip", en_offset=0
-    ):
-        """
-        Export calculation to .hdf5 file.
-
-        Parameters
-        ----------
-            path : str
-                Directory that you want to save your data.
-
-            hdf5_name : str
-                Name of hdf5 file to save data.
-
-            save_images : Boolean
-                Option to save each image along with the processed data.
-
-            compress : str
-                Type of compression for image files.
-
-            en_offset : float
-                Optional offset to apply to naming convention. Use if energy offset was
-                applied BEFORE taking data.
-
-        Notes
-        -----
-        Able to save multiple scans to the same .hdf5 file by giving the same
-        ``hdf5_name``. This allows you to compile all measurements on a single
-        sample into a single file.
-        The .hdf5 folder structure will be as follows::
-
-            SAMPLE_NAME
-                MEASUREMENT
-                    EN_1 # Energy
-                        POL_1 # Polarization
-                            DATA
-                                Q,R,R_err
-                            META_DATA
-                                IMAGE0 # Meta data and images
-                                IMAGE1
-                                ...
-                        Pol_2
-                            Data
-                                ...
-                    En_2
-                        ...
-
-        """
-        if self.refl is None:
-            print("Process data prior to saving it")
-            return
-
-        import h5py
-
-        with h5py.File((f"{self.path}/{save_name}.h5py"), "a") as file_hdf5:
-            # Create HDF5structure for saving data
-            measurement = file_hdf5.require_group(
-                "MEASUREMENT"
-            )  # Folder to hold the data
-            pol_label = "POL_" + str(int(self.meta["EPU Polarization"].iloc[0]))
-            en_label = "EN_" + str(
-                np.round(self.meta["Beamline Energy"].iloc[0] + en_offset, 1)
-            ).replace(".", "pt")
-            scan_label = measurement.require_group(en_label + "/" + pol_label)
-            # Save Images if desired
-            if save_images:
-                raw_image_group = scan_label.require_group("META_DATA")
-                for index, scan in enumerate(self.files):
-                    image_folder = raw_image_group.require_group("IMAGE" + str(index))
-                    image_folder.attrs["FILE_PATH"] = str(scan)
-                    try:
-                        image_folder.create_dataset(
-                            "IMAGE_RAW", data=self.images[index], compression=compress
-                        )
-                        image_folder.create_dataset(
-                            "IMAGE_LOCBEAM",
-                            data=self.image_locbeam[index],
-                            compression=compress,
-                        )
-                        image_folder.create_dataset(
-                            "IMAGE_SPOT",
-                            data=self.image_spot[index],
-                            compression=compress,
-                        )
-                        image_folder.create_dataset(
-                            "IMAGE_DARK",
-                            data=self.image_dark[index],
-                            compression=compress,
-                        )
-                    except RuntimeError:
-                        pass
-                    for key, value in self.meta.iloc[index].items():
-                        image_folder.attrs[key] = value
-            # Save process variables
-            # data_group = scan_label.require_group('DATA')
-            save_vars = self.process_vars
-            for key in save_vars:
-                scan_label.attrs[key] = str(save_vars[key])
-            data_save = scan_label.create_dataset("DATA", data=self.refl)
-            data_save.attrs["Energy label offset"] = str(en_offset)
-            data_save.attrs["Column 1"] = "Q"
-            data_save.attrs["Column 2"] = "R"
-            data_save.attrs["Column 3"] = "R_err"
-
-    def write_parquet(self, save_name: str):
+    def write_parquet(self):
         """
         Save calculated reflectivity as a .parquet file.
 
@@ -647,11 +562,28 @@ class PrsoxrLoader:
         if self.refl is None:
             print("Process data prior to saving it")
             return
+        refl = self.path / "refl"
+        meta = self.path / "meta"
 
-        self.refl.write_parquet(f"{self.path}/{save_name}_refl.parquet")
-        self.meta.write_parquet(f"{self.path}/{save_name}_meta.parquet")
+        if not refl.exists():
+            refl.mkdir()
+
+        if not meta.exists():
+            meta.mkdir()
+
+        self.refl.write_parquet(refl / "all.parquet")
+        self.meta.write_parquet(meta / "all.parquet")
+
+        for g in self.refl.group_by("Sample Name"):
+            name = g[0][0]
+            data = g[1].drop("Sample Name")
+            data.write_parquet(refl / f"{name}.parquet")
+            g_meta = self.meta.filter(pl.col("Sample Name") == name)
+            g_meta.write_parquet(meta / f"{name}.parquet")
 
     def _stitch(self, lzf: pl.LazyFrame):
+        if lzf.limit(1).collect().shape[0] == 0:
+            return
         stitch_dfs = []
         # group by the HOS and HES columns
         for i, (_, stitch) in enumerate(
@@ -696,7 +628,10 @@ class PrsoxrLoader:
             roi = self.roi
         lzf = reduce_masked_data(self.meta, roi, self.shutter_offset, self.snr_cutoff)
         for e in self.energy:
-            self._stitch(lzf.filter(pl.col("Beamline Energy [eV]") == e))
+            frame = lzf.filter(pl.col("Beamline Energy [eV]") == e)
+            for name in self.name:
+                self._stitch(frame.filter(pl.col("Sample Name") == name))
+
         # Stitch the data together
         stitched = pl.concat(self.stitched)
         self.refl = stitched.with_columns(
@@ -708,42 +643,24 @@ class PrsoxrLoader:
         ).select(final_columns)
         return self.refl
 
-    def plot_data(self, energies: list[float] | float | None = None, line: bool = True):
+    def plot_data(self):
         """Plot Reflectivity data."""
+
         if self.refl is None:
             print("Process data prior to plotting it")
             return
-        if energies is None:
-            energies = self.energy
-        if isinstance(energies, (int, float)):
-            energies = [energies]
-        # ensure energies list is a subset of the available energies
-        if not set(energies).issubset(self.energy):
-            err = "Energies must be a subset of the available energies"
-            raise ValueError(err)
-        data = self.refl.filter(
-            pl.col("Beamline Energy [eV]").is_in(energies),
-            pl.col("Q [Å⁻¹]") > 0,
-        ).to_pandas()
-        sns.set_theme(style="ticks")
-        if line:
-            g = sns.lineplot(
-                data=data,
-                x="Q [Å⁻¹]",
-                y="r [a. u.]",
-                hue="Beamline Energy [eV]",
-            )
-        else:
-            g = sns.scatterplot(
-                data=data,
-                x="Q [Å⁻¹]",
-                y="r [a. u.]",
-                hue="Beamline Energy [eV]",
-            )
-        # g.fill_between(self.refl["Q [Å⁻¹]"], lower, upper, alpha=0.3, color="C2")
-        g.set_xlim(data["Q [Å⁻¹]"].min(), data["Q [Å⁻¹]"].max())
-        g.set(yscale="log")
-        return g
+
+        p = self.refl.plot.scatter(
+            x="Q [Å⁻¹]",
+            y="r [a. u.]",
+            by=["Sample Name", "Beamline Energy [eV]"],
+            title="Reflectivity",
+            logy=True,
+            height=600,
+            width=1200,
+            muted_alpha=0,
+        ).opts(legend_position="top_right")
+        return p
 
 
 def _overlap_name_map(label: Literal["current", "prior"]) -> dict[str, str]:

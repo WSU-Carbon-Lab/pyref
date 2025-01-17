@@ -231,7 +231,6 @@ impl FitsLoader {
         data: &io::hdus::image::ImageData,
     ) -> Result<(Vec<i64>, Vec<u32>), Box<dyn std::error::Error + Send + Sync>> {
         let bzero = self.get_card(2, "BZERO").unwrap().value.as_int().unwrap();
-        println!("{:?}", bzero);
 
         match data {
             io::hdus::image::ImageData::I16(image) => {
@@ -390,7 +389,6 @@ impl ExperimentLoader {
 pub fn post_process(df: DataFrame) -> DataFrame {
     let h = physical_constants::PLANCK_CONSTANT_IN_EV_PER_HZ;
     let c = physical_constants::SPEED_OF_LIGHT_IN_VACUUM * 1e10;
-    println!("{:?}", h * c);
     // Calculate lambda and q values in angstrom
     let lz = df
         .clone()

@@ -298,8 +298,8 @@ impl FitsLoader {
         };
 
         s_vec.push(Series::new("Scan ID".into(), vec![self.get_scan_num()]));
-        s_vec.push(vec_i64("Raw Image", image));
-        s_vec.push(vec_u32("Image Size".into(), size));
+        s_vec.push(vec_i64("Raw", image));
+        s_vec.push(vec_u32("Raw Shape", size));
         DataFrame::new(s_vec).map_err(From::from)
     }
 }

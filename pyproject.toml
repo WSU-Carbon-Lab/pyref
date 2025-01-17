@@ -1,9 +1,14 @@
-[build-system]
-build-backend = "maturin"
-requires = ["maturin>=1.7,<2.0"]
-
 [project]
-authors = [{name = "Harlan Heilman", email = "Harlan.Heilman@wsu.edu"}]
+authors = [
+  {name = "Harlan", email = "Harlan.Heilman@wsu.edu"},
+]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
   "numpy",
   "numba",
@@ -31,39 +36,15 @@ dependencies = [
   "maturin>=1.7.1",
   "ipympl>=0.9.4",
   "patchelf>=0.17.2.1",
+  "hvplot>=0.11.2",
 ]
 description = "Blazingly fast X-ray reflectivity data analysis package"
+keywords = ["X-ray", "reflectivity", "data", "analysis"]
 license = {file = "LICENSE"}
 name = "pyref"
 readme = "README.md"
 requires-python = ">=3.12"
-
-classifiers = [
-  "Programming Language :: Rust",
-  "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
-  "Intended Audience :: Science/Research",
-  "Topic :: Scientific/Engineering :: Physics",
-]
-keywords = ["X-ray", "reflectivity", "data", "analysis"]
-
-[tool.maturin]
-features = ["pyo3/extension-module"]
-format = "sdist"
-python-source = "python/"
-
-[tool.ruff]
-exclude = [
-  ".github",
-  ".git",
-  ".vscode",
-  "docs",
-  "src",
-]
-
-include = ["pyproject.toml", "python/**/*.py"]
-indent-width = 4
-line-length = 88
+version = "0.1.0"
 
 [tool.ruff.lint]
 ignore = ["D200"]
@@ -89,7 +70,6 @@ select = [
   "EM", # flake8-errmsg
   "FBT001", # flake8-boolean-trap
 ]
-
 [tool.ruff.lint.pycodestyle]
 max-doc-length = 88
 
@@ -104,3 +84,24 @@ strict = true
 
 [tool.ruff.format]
 docstring-code-format = true
+
+[tool.ruff]
+exclude = [
+  ".github",
+  ".git",
+  ".vscode",
+  "docs",
+  "src",
+]
+
+# [project.scripts]
+# pyref = "pyref:main"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+format = "sdist"
+python-source = "python/"
+
+[build-system]
+build-backend = "maturin"
+requires = ["maturin>=1.0,<2.0"]

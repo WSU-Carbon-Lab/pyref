@@ -3,8 +3,9 @@
 import numpy as np
 import polars as pl
 import skimage
-from numba import njit, prange
+from numba import njit, prange, jit
 from skimage import measure
+from scipy.ndimage import median_filter
 
 
 @njit(cache=True, nogil=True)
@@ -22,8 +23,10 @@ def find_max_index(arr):
     return (x, y)  # Return a tuple instead of a list
 
 
-@njit(cache=True, nogil=True, fastmath=True)
-def spec_reflectance(masked, beam_spot, box_size):
+@njit(cache=True, nogil=True)
+def reduction0(
+    masked: np.ndarray, beam_spot: tuple[int], box_size: int, edge_trim: int
+) -> tuple[int, int]:
     """Calculate the specular reflectance from a masked image."""
     beam_x = beam_spot[0]
     beam_y = beam_spot[1]
@@ -35,49 +38,62 @@ def spec_reflectance(masked, beam_spot, box_size):
     roj_end = min(masked.shape[1], beam_y + box_size + 1)
 
     # Initialize sums and counts
-    direct_beam_sum = 0.0
-    direct_beam_count = 0
-    direct_beam_weight = 0.0
-    bg_weighted_sum = 0.0
-    bg_weight_total = 0.0
+    db_sum = 0
+    db_count = 0
+    bg_sum = 0
+    bg_count = 0
 
     # Iterate over all rows and columns
-    for i in range(masked.shape[0]):
-        for j in range(masked.shape[1]):
+    for i in range(masked.shape[1]):
+        if i <= edge_trim or i >= masked.shape[1] - edge_trim:
+            continue
+        for j in range(masked.shape[0]):
             value = masked[i, j]
             if value == 0:
                 continue
 
-            weight = 1.0 / value
+            if j <= edge_trim or j >= masked.shape[0] - edge_trim:
+                continue
+
             if (roi_start <= i < roi_end) and (roj_start <= j < roj_end):
-                direct_beam_sum += value
-                direct_beam_count += 1
-                direct_beam_weight += weight
+                db_sum += value
+                db_count += 1
             else:
-                bg_weighted_sum += value * weight
-                bg_weight_total += weight
+                bg_sum += value
+                bg_count += 1
 
-    # Calculate the means
-    if direct_beam_sum == 0:
-        return 0.0, 0.0
-    if bg_weight_total == 0:
-        return direct_beam_sum, 0.0
+    if bg_count == 0:
+        return 0, 0
+    if db_sum == 0:
+        return 0, 0
 
-    bg_mean = bg_weighted_sum / bg_weight_total
+    bg_sum *= db_count / bg_count
+    return db_sum, bg_sum
 
-    spec_reflectance_value = direct_beam_sum - (bg_mean * direct_beam_count)
-    uncertainty = np.sqrt(direct_beam_count + direct_beam_count / bg_weight_total)
 
-    # # Check for overlap in the error bars
-    # #           [-----x------]   <-- Reflectance
-    # #    Background -->   [-----x------]
-    # if bg_mean + bg_std / 2 > refl_mean - refl_std / 2:
-    #     return None, uncertainty
+@njit(cache=True, nogil=True)
+def reduction(
+    masked: np.ndarray, beam_spot: tuple[int], box_size: int, edge_trim: int
+) -> tuple[int, int]:
+    # Direct beam intensity
+    db_slice1 = slice(beam_spot[0] - box_size // 2, beam_spot[0] + box_size)
+    db_slice2 = slice(beam_spot[1] - box_size // 2, beam_spot[1] + box_size)
+    db_slice = (db_slice1, db_slice2)
+    db = np.sum(masked[db_slice])
 
-    # Check if the reflectance is negative
-    if spec_reflectance_value - uncertainty < 0:
-        return None, uncertainty
-    return spec_reflectance_value, uncertainty
+    # Background intensity
+    side = "rhs" if beam_spot[1] < masked.shape[1] // 2 else "lhs"
+    bg_spot = (
+        (beam_spot[0], edge_trim)
+        if side == "rhs"
+        else (beam_spot[0], masked.shape[1] - edge_trim)
+    )
+    bg_slice1 = slice(bg_spot[0] - box_size // 2, bg_spot[0] + box_size)
+    bg_slice2 = slice(bg_spot[1] - box_size // 2, bg_spot[1] + box_size)
+    bg_slice = (bg_slice1, bg_slice2)
+    bg = np.sum(masked[bg_slice])
+
+    return db, bg
 
 
 @njit(cache=True, nogil=True)
@@ -148,24 +164,18 @@ def beamspot(image: np.ndarray, roi: int, radius=10) -> tuple[int, int]:
 
 
 @njit(cache=True, nogil=True, parallel=True, fastmath=True)
-def reduce_masked(masks, beam_centers, roi):
+def reduce_masked(
+    masks, beam_centers, roi, edge_trim: int
+) -> tuple[np.ndarray, np.ndarray]:
     """Reduce the masked images."""
     n_images = masks.shape[0]
-    refl = np.zeros(n_images)
-    refl_err = np.zeros(n_images)
+    db = np.zeros(n_images, dtype=np.uint64)
+    bg = np.zeros(n_images, dtype=np.uint64)
     for i in prange(n_images):
         mask = masks[i]
         beam_center = beam_centers[i]
-        r, e = spec_reflectance(mask, beam_center, roi)
-        if r is None and i > 0:
-            beam_center = beam_centers[i - 1]
-            r, e = spec_reflectance(mask, beam_center, roi)
-        if r is None:
-            r = float("inf")
-            e = e
-        refl[i] = r
-        refl_err[i] = e
-    return refl, refl_err
+        db[i], bg[i] = reduction(mask, beam_center, roi, edge_trim)
+    return db, bg
 
 
 def pre_process_all(imgs: np.ndarray, roi: int) -> tuple[np.ndarray, np.ndarray]:
@@ -173,7 +183,8 @@ def pre_process_all(imgs: np.ndarray, roi: int) -> tuple[np.ndarray, np.ndarray]
     masked = np.zeros_like(imgs)
     beamspots = np.zeros((imgs.shape[0], 2), dtype=np.int32)
     for i in prange(imgs.shape[0]):
-        masked[i] = apply_mask(imgs[i])
+        zinged = dezinger_image(imgs[i])
+        masked[i] = apply_mask(zinged)
         beamspots[i] = beamspot(masked[i], roi)
     return masked, beamspots
 
@@ -192,7 +203,9 @@ def locate_beams(df: pl.DataFrame, roi: int) -> tuple[np.ndarray, np.ndarray]:
     return pre_process_all(reshaped_imgs, roi)
 
 
-def reduce_masked_data(lzf: pl.DataFrame, roi: int) -> pl.LazyFrame:
+def reduce_masked_data(
+    lzf: pl.DataFrame, roi: int, edge_trim: int, shutter_offeset: float = 0.00389278
+) -> pl.LazyFrame:
     """Reduce the masked data."""
     masked_images, beam_centers = locate_beams(lzf, roi)
 
@@ -203,18 +216,41 @@ def reduce_masked_data(lzf: pl.DataFrame, roi: int) -> pl.LazyFrame:
     beam_centers_array = np.vstack(beam_centers)  # type: ignore
 
     # Call the reduce_masked function
-    refl, refl_err = reduce_masked(masked_images_array, beam_centers_array, roi)
-    if np.any(refl <= 0) or np.any(refl_err <= 0):
-        err = f"""Reflectance or error cannot be negative\n
-                refl: {refl}\n refl_err: {refl_err}"""
-        raise ValueError(err)
-
+    direct_beam, background = reduce_masked(
+        masked_images_array, beam_centers_array, roi, edge_trim
+    )
     lzf: pl.LazyFrame = lzf.lazy().with_columns(  # type: ignore
-        (pl.lit(refl) / pl.col("EXPOSURE [s]") / pl.col("Beam Current [mA]")).alias(
-            "I [arb. un.]"
-        ),
-        (pl.lit(refl_err) / pl.col("EXPOSURE [s]") / pl.col("Beam Current [mA]")).alias(
-            "δI [arb. un.]"
-        ),
+        (
+            pl.lit(direct_beam - background)
+            / (
+                (pl.col("EXPOSURE [s]") + pl.lit(shutter_offeset))
+                * pl.col("Beam Current [mA]")
+            )
+        ).alias("I [arb. un.]"),
+        (
+            pl.lit(direct_beam + background).sqrt()
+            / (
+                (pl.col("EXPOSURE [s]") + pl.lit(shutter_offeset))
+                * pl.col("Beam Current [mA]")
+            )
+        ).alias("δI [arb. un.]"),
     )
     return lzf  # type: ignore
+
+
+def dezinger_image(image: np.ndarray, threshold=10, size=3) -> np.ndarray:
+    """Dezinger an image."""
+    # set false values to zero
+    image[image < 0] = 0
+    med_result = median_filter(image, size=size)  # Apply Median Filter to image
+
+    diff_image = image / np.abs(
+        med_result
+    )  # Calculate Ratio of each pixel to compared to a threshold
+    # Repopulate image by removing pixels that exceed the threshold -- From Jan Ilavsky's IGOR implementation.
+    output = image * np.greater(threshold, diff_image).astype(
+        int
+    ) + med_result * np.greater(
+        diff_image, threshold
+    )  #
+    return output  # Return dezingered image and averaged image

@@ -6,7 +6,7 @@ import numpy as np
 from IPython.display import display
 from ipywidgets import Layout, VBox, interactive
 
-from pyref.image import apply_mask, beamspot, spec_reflectance
+from pyref.image import apply_mask, beamspot, reduction, dezinger_image
 from pyref.loader import PrsoxrLoader
 
 
@@ -25,10 +25,10 @@ class SpotChecker:
 
         def plot_frame(blur, roi, frame):
             meta = self.meta.row(frame, named=True)
-            image = np.reshape(meta["Raw"], meta["Raw Shape"])
+            image = dezinger_image(np.reshape(meta["Raw"], meta["Raw Shape"]))
             masked = apply_mask(image, self.mask)
             bs = beamspot(masked, radius=blur)
-            refl, refl_err = spec_reflectance(image, beam_spot=bs, box_size=roi)
+            refl, refl_err = reduction(image, beam_spot=bs, box_size=roi)
 
             # Display the processed image
             ax.clear()

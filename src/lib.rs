@@ -1,5 +1,5 @@
 use astrors_fork::io::header::card::*;
-use numpy::PyArray2;
+// use numpy::PyArray2;
 use polars::{prelude::*, series::amortized_iter::*};
 use polars_core::{export::num::Pow, utils::align_chunks_binary};
 use pyo3::prelude::*;
@@ -107,12 +107,12 @@ impl PyFitsLoader {
         let loader = FitsLoader::new(path).unwrap();
         Ok(PyFitsLoader { loader })
     }
-    pub fn get_card(&self, card_name: &str) -> PyResult<PyCard> {
-        let card = self.loader.get_card(card_name).unwrap();
+    pub fn get_card(&self, hdu: usize, card_name: &str) -> PyResult<PyCard> {
+        let card = self.loader.get_card(hdu, card_name).unwrap();
         Ok(PyCard::from_card(card))
     }
-    pub fn get_value(&self, card_name: &str) -> PyResult<f64> {
-        let card = self.loader.get_card(card_name).unwrap();
+    pub fn get_value(&self, hdu: usize, card_name: &str) -> PyResult<f64> {
+        let card = self.loader.get_card(hdu, card_name).unwrap();
         let value = card.value.as_float().unwrap();
         Ok(value)
     }
@@ -181,14 +181,14 @@ pub fn py_simple_update(df: PyDataFrame, dir: &str) -> PyDataFrame {
     PyDataFrame(df)
 }
 
-#[pyfunction]
-pub fn py_get_image(vec: Vec<u32>, shape: (usize, usize)) -> PyResult<Py<PyAny>> {
-    pyo3::Python::with_gil(|py| {
-        let array = get_image(&vec, shape)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-        Ok(PyArray2::from_array_bound(py, &array).into_py(py))
-    })
-}
+// #[pyfunction]
+// pub fn py_get_image(vec: Vec<u16>, shape: (usize, usize)) -> PyResult<Py<PyAny>> {
+//     pyo3::Python::with_gil(|py| {
+//         let array = get_image(&vec, shape)
+//             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+//         Ok(PyArray2::from_array_bound(py, &array).into_py(py))
+//     })
+// }
 // ==================== UTILS =====================
 fn binary_amortized_elementwise<'a, T, K, F>(
     lhs: &'a ListChunked,
@@ -348,7 +348,7 @@ pub fn pyref(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExperimentLoader>()?;
     m.add_function(wrap_pyfunction!(py_read_fits, m)?)?;
     m.add_function(wrap_pyfunction!(py_read_experiment, m)?)?;
-    m.add_function(wrap_pyfunction!(py_get_image, m)?)?;
+    // m.add_function(wrap_pyfunction!(py_get_image, m)?)?;
     m.add_function(wrap_pyfunction!(py_simple_update, m)?)?;
     Ok(())
 }

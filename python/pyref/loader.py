@@ -17,7 +17,7 @@ from pyref.image import (
     apply_mask,
     beamspot,
     reduce_masked_data,
-    spec_reflectance,
+    reduction,
 )
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue
@@ -75,11 +75,16 @@ class OverlapError(Exception):
     """Exception raised when the overlap between two datasets is too small."""
 
     def __init__(
-        self, message="No overlap found between datasets", prior=None, current=None
+        self,
+        message="No overlap found between datasets",
+        selected=None,
+        prior=None,
+        current=None,
     ):
         self.message = message
         if prior is not None and current is not None:
             self.message += f"\nPrior: {prior.tail(10)}\nCurrent: {current.head(10)}"
+            self.message += f"\nSelected: {selected}"
         super().__init__(self.message)
 
 
@@ -227,14 +232,15 @@ class PrsoxrLoader:
 
         # Files for output
         self.beam_drift = None
-        self.meta: pl.DataFrame = pyref.py_read_experiment(str(directory), "xrr")
+        self.meta: pl.DataFrame = pyref.py_read_experiment(
+            str(directory), "xrr"
+        ).with_columns(pl.col("Beamline Energy [eV]").round(1))
         self.data: pl.DataFrame | list[pl.DataFrame] = self.meta.group_by(
             "Beamline Energy [eV]"
         ).agg(pl.all())
         self.stitched: list[pl.DataFrame] = []
         self.refl: pl.DataFrame | None = None
         self.shape = len(self.meta)
-
         self.blur_strength: int = 4
         self.roi: int = 10
         self._energy: float | None = None
@@ -243,9 +249,9 @@ class PrsoxrLoader:
     @property
     def energy(self) -> list[float]:
         """Energy getter."""
-        return [
-            e[0] for e in self.meta.select("Beamline Energy [eV]").unique().to_numpy()
-        ]
+        return np.sort(
+            self.meta.select("Beamline Energy [eV]").unique().to_numpy().flatten()
+        )
 
     @property
     def polarization(self) -> Literal["s", "p"]:
@@ -303,6 +309,11 @@ class PrsoxrLoader:
             layout=widgets.Layout(width="300px"),
             continuous_update=False,
         )
+        energy_selector = widgets.Dropdown(
+            options=self.energy,
+            description="Energy",
+            layout=widgets.Layout(width="200px"),
+        )
         roi_selector = widgets.IntSlider(
             value=self.roi,
             min=0,
@@ -334,23 +345,29 @@ class PrsoxrLoader:
             gridspec_kw={"hspace": 0.5, "wspace": 0.5},
         )
 
-        def plot_frame(blur, roi, frame, histogram):
+        def plot_frame(blur, roi, energy, frame, histogram):
             """Inner function to process and plot a single frame with given settings."""
             # Get metadata and process the image for the specified frame
-            meta = self.meta.row(frame, named=True)
+            meta = self.meta.filter(pl.col("Beamline Energy [eV]") == energy).row(
+                frame, named=True
+            )
             image = np.reshape(meta["Raw"], meta["Raw Shape"][::-1])[::-1, :]
             masked = apply_mask(image, self.mask)
             bs = beamspot(masked, roi, radius=blur)
-            refl, refl_err = spec_reflectance(image, beam_spot=bs, box_size=roi)
-            if refl is None:
-                refl = refl_err
+            db, bg = reduction(
+                image, beam_spot=bs, box_size=roi, edge_trim=self.edge_trim
+            )
+
             imax = ax[0]
             hist = ax[1]
             # Clear and set up the plot
             imax.clear()
             hist.clear()
 
-            imax.imshow(masked, cmap="terrain", interpolation="none")
+            cmap = plt.cm.get_cmap("terrain", 256)
+            cmap.set_bad("black")
+
+            imax.imshow(image, cmap=cmap, interpolation="none")
 
             # Draw arrow to beam spot labeling the properties
             bbox = {"boxstyle": "round,pad=0.3", "fc": "white", "ec": "black", "lw": 1}
@@ -358,7 +375,7 @@ class PrsoxrLoader:
                 "arrowstyle": "->",
                 "connectionstyle": "angle,angleA=0,angleB=90,rad=20",
             }
-            props = f"r = {refl:.2f}\nδr = {refl_err:.3f}\n"
+            props = f"direct beam = {db:.2f}\nbackground = {bg:.3f}\n"
             props += f"Q = {meta["Q [Å⁻¹]"]:.3f}\nE= {meta["Beamline Energy [eV]"]:.1f}"
             imax.annotate(
                 props,
@@ -447,6 +464,7 @@ class PrsoxrLoader:
             blur=blur_selector,
             roi=roi_selector,
             frame=frame_selector,
+            energy=energy_selector,
             histogram=histogram,
         )
 
@@ -633,7 +651,7 @@ class PrsoxrLoader:
         self.refl.write_parquet(f"{self.path}/{save_name}_refl.parquet")
         self.meta.write_parquet(f"{self.path}/{save_name}_meta.parquet")
 
-    def _stitch(self, lzf):
+    def _stitch(self, lzf: pl.LazyFrame):
         stitch_dfs = []
         # group by the HOS and HES columns
         for i, (_, stitch) in enumerate(
@@ -648,17 +666,14 @@ class PrsoxrLoader:
         ):
             if i == 0:
                 izero = get_izero_df(stitch)
-                print(
-                    izero.select(
-                        "Beamline Energy [eV]", "I₀ [arb. un.]", "δI₀ [arb. un.]"
-                    )
-                )
             else:
                 prior = stitch_dfs[-1].filter(
                     pl.col("Sample Theta [deg]").is_in(stitch["Sample Theta [deg]"])
                 )
                 if prior.shape[0] == 0:
-                    raise OverlapError(prior=stitch_dfs[-1], current=stitch)
+                    raise OverlapError(
+                        selected=prior, prior=stitch_dfs[-1], current=stitch
+                    )
 
                 izero = get_reletive_izero(stitch, prior)
             stitch = stitch.join_asof(
@@ -679,11 +694,10 @@ class PrsoxrLoader:
         """
         if roi is None:
             roi = self.roi
-        lzf = reduce_masked_data(self.meta, roi)
+        lzf = reduce_masked_data(self.meta, roi, self.shutter_offset, self.snr_cutoff)
         for e in self.energy:
             self._stitch(lzf.filter(pl.col("Beamline Energy [eV]") == e))
         # Stitch the data together
-        print(self.stitched)
         stitched = pl.concat(self.stitched)
         self.refl = stitched.with_columns(
             (pl.col("I [arb. un.]") / pl.col("I₀ [arb. un.]")).alias("r [a. u.]"),
@@ -758,17 +772,12 @@ def get_izero_df(stitch: pl.DataFrame) -> pl.DataFrame:
     pl.DataFrame
         A DataFrame containing the Izero and Izero Error.
     """
-    return (
-        stitch.group_by("Sample Theta [deg]")
-        .agg(
-            *intensity_agg,
-            pl.col("Beamline Energy [eV]").mean(),
-        )
-        .filter(pl.col("Sample Theta [deg]") == stitch["Sample Theta [deg]"][0])
-        .with_columns(
-            weighted_mean(*col_and_err("I [arb. un.]")).alias("I₀ [arb. un.]"),
-            weighted_std(*col_and_err("I [arb. un.]")).alias("δI₀ [arb. un.]"),
-        )
+    i0 = stitch.filter(pl.col("Sample Theta [deg]") == 0.0)
+    i0_val = i0.select("I [arb. un.]").mean().to_numpy()[0][0]
+    i0_err = i0.select("I [arb. un.]").std().to_numpy()[0][0]
+    return stitch.with_columns(
+        pl.lit(i0_val).alias("I₀ [arb. un.]"),
+        pl.lit(i0_err).alias("δI₀ [arb. un.]"),
     )
 
 

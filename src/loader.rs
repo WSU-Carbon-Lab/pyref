@@ -21,15 +21,12 @@ use astrors_fork::io;
 use astrors_fork::io::hdulist::HDU;
 use astrors_fork::io::hdus::image::imagehdu::ImageHDU;
 use astrors_fork::io::hdus::primaryhdu::PrimaryHDU;
-use ndarray::{s, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr, ViewRepr};
+use ndarray::{ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use polars::export::chrono::NaiveDateTime;
 use polars::{error::PolarsError, lazy::prelude::*, prelude::*}; // Add the import statement for PolarsError
 use rayon::prelude::*;
 use std::fs;
 use std::ops::Mul;
-
-// #[global_allocator]
-// static GLOBAL: Jemalloc = Jemalloc;
 
 // Enum representing different types of experiments.
 pub enum ExperimentType {
@@ -390,7 +387,6 @@ pub fn read_fits(
     s_vec.extend(img_data);
     s_vec.extend(names);
     let d = DataFrame::new(s_vec).unwrap();
-    println!("{:?}", d);
     Ok(d)
 }
 
@@ -440,9 +436,9 @@ pub fn q(lam: f64, theta: f64, angle_offset: f64) -> f64 {
     }
 }
 
-pub fn load() {
-    let test_path = "C:\\Users\\hduva\\Washington State University (email.wsu.edu)\\Carbon Lab Research Group - Documents\\Synchrotron Logistics and Data\\ALS - Berkeley\\Data\\BL1101\\2024Nov\\XRR\\znpc\\2024 11 15\\CCD Scan 85249\\CCD\\znpc_85249-00001.fits";
+pub fn _load() {
+    let test_path = "/home/hduva/projects/pyref-ccd/test/";
 
-    let data = read_fits(test_path.into(), &ExperimentType::Xrr.get_keys()).unwrap();
-    println!("{:?}", data);
+    let data = read_experiment(test_path.into(), "xrr").unwrap();
+    println!("{:?}", data.collect().unwrap());
 }

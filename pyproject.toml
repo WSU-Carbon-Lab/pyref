@@ -36,6 +36,31 @@ name = "pyref_staging"
 readme = "README.md"
 requires-python = ">=3.12"
 version = "0.1.2"
+    "jupyter>=1.1.1",
+]
+
+[project.optional-dependencies]
+matplotlib = ["matplotlib >= 3.8.3"]
+pandas = ["pandas >= 2.2.0"]
+jupyter = ["jupyter >= 1.0.0"]
+numpy = ["numpy >= 1.26.4"]
+plotly = ["plotly >= 5.18.0"]
+typer = ["typer >= 0.9.0"]
+click = ["click >= 8.1.7"]
+scipy = ["scipy >= 1.12.0"]
+scikit-learn = ["scikit-learn >= 1.4.0"]
+astropy = ["astropy >= 6.0.0"]
+
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "pyref"
+
+
+[tool.ruff]
+line-length = 88
+fix = true
 
 [tool.ruff.lint]
 ignore = ["D200"]

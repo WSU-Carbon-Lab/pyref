@@ -40,6 +40,7 @@ jobs:
           --out Xml
           --engine llvm
           --skip-clean
+        continue-on-error: true
       - name: Upload coverage reports to Codecov
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v3

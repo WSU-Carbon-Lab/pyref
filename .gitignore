@@ -10,8 +10,12 @@ __pycache__/
 # C extensions
 *.so
 
+# data
+test/
+
 # Distribution / packaging
 .Python
+.comments
 build/
 develop-eggs/
 dist/
@@ -54,6 +58,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+data/*
 
 # Translations
 *.mo

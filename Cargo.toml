@@ -1,15 +1,25 @@
 [package]
-name = "pyref"
-version = "0.1.0"
+authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
+description = "Enable running pyref workloads in Python"
+documentation = "https://docs.rs/pyref/latest"
 edition = "2021"
+license = "GPL-3.0"
+name = "pyref_rs"
+repository = "https://github.com/WSU-Carbon-Lab/pyref"
+version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "pyref"
 crate-type = ["cdylib"]
+name = "pyref"
+path = "src/lib.rs"
 
 [dependencies]
-astrors = "0.1.8"
-notify = "6.1.1"
-polars = "0.39.2"
-pyo3 = "0.20.0"
+astrors-fork = "0.1.10"
+numpy = "0.22.0"
+polars = {version = "0.43.1", features = ["fmt", "dtype-u16", "lazy", "dtype-struct"]}
+pyo3 = {version = "0.22.0", features = ["extension-module", "generate-import-lib"]}
+pyo3-polars = {version = "0.17.0", features = ["lazy", "dtype-struct", "derive"]}
+pyref-core = "0.3.10"
+rayon = "1.10.0"
+serde = "1.0.210"

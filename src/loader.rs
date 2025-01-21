@@ -21,7 +21,9 @@ use astrors_fork::io;
 use astrors_fork::io::hdulist::HDU;
 use astrors_fork::io::hdus::image::imagehdu::ImageHDU;
 use astrors_fork::io::hdus::primaryhdu::PrimaryHDU;
-use polars::{lazy::prelude::*, prelude::*};
+use ndarray::{s, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr, ViewRepr};
+use polars::export::chrono::NaiveDateTime;
+use polars::{error::PolarsError, lazy::prelude::*, prelude::*}; // Add the import statement for PolarsError
 use rayon::prelude::*;
 use std::fs;
 use std::ops::Mul;
@@ -130,29 +132,143 @@ impl HeaderValue {
             HeaderValue::Exposure => "EXPOSURE [s]",
         }
     }
-    pub fn round(&self, value: f64) -> f64 {
-        match self {
-            HeaderValue::Exposure => (value * 1000.0).round() / 1000.0,
-            HeaderValue::HigherOrderSuppressor => (value * 100.0).round() / 100.0,
-            HeaderValue::HorizontalExitSlitSize => (value * 10.0).round() / 10.0,
-            _ => value,
+}
+
+// Polars Helper Function
+fn col_from_array(
+    name: PlSmallStr,
+    array: ArrayBase<OwnedRepr<i64>, Dim<IxDynImpl>>,
+) -> Result<Column, PolarsError> {
+    let size0 = array.len_of(Axis(0));
+    let size1 = array.len_of(Axis(1));
+
+    let mut s = Column::new_empty(
+        name,
+        &DataType::List(Box::new(DataType::List(Box::new(DataType::Int64)))),
+    );
+
+    let mut chunked_builder = ListPrimitiveChunkedBuilder::<Int64Type>::new(
+        PlSmallStr::EMPTY,
+        array.len_of(Axis(0)),
+        array.len_of(Axis(1)) * array.len_of(Axis(0)),
+        DataType::Int64,
+    );
+    for row in array.axis_iter(Axis(0)) {
+        match row.as_slice() {
+            Some(row) => chunked_builder.append_slice(row),
+            None => chunked_builder.append_slice(&row.to_owned().into_raw_vec()),
         }
+    }
+    let new_series = chunked_builder
+        .finish()
+        .into_series()
+        .implode()
+        .unwrap()
+        .into_column();
+    let _ = s.extend(&new_series);
+    let s = s.cast(&DataType::Array(
+        Box::new(DataType::Array(Box::new(DataType::Int32), size1)),
+        size0,
+    ));
+    s
+}
+
+// ================== CCD Data Loader ==================
+pub fn process_image(img: &ImageHDU) -> Result<Vec<Column>, PolarsError> {
+    let bzero = img
+        .header
+        .get_card("BZERO")
+        .unwrap()
+        .value
+        .as_int()
+        .unwrap();
+
+    match &img.data {
+        io::hdus::image::ImageData::I16(image) => {
+            let data = image.map(|&x| i64::from(x as i64 + bzero));
+            Ok(vec![col_from_array("Raw".into(), data.clone()).unwrap()])
+        }
+        _ => Err(PolarsError::NoData("Unsupported image data type".into())),
     }
 }
 
-// Function facilitate storing the image data as a single element in a Polars DataFrame.
-fn vec_i64(name: &str, img: Vec<i64>) -> Column {
-    let new_series = [img.iter().collect::<Series>()];
-    Column::new(name.into(), new_series)
+pub fn process_metadata(hdu: &PrimaryHDU, keys: &Vec<HeaderValue>) -> Vec<Column> {
+    if keys.is_empty() {
+        hdu.header
+            .iter()
+            .map(|card| {
+                let name = card.keyword.as_str();
+                let value = card.value.as_float().unwrap_or(0.0);
+                Column::new(name.into(), vec![value])
+            })
+            .collect::<Vec<_>>()
+    } else {
+        keys.iter()
+            .filter_map(|key| {
+                let val = hdu.header.get_card(key.hdu()).unwrap();
+                Some(Column::new(
+                    key.name().into(),
+                    vec![val.value.as_float().unwrap_or(0.0)],
+                ))
+            })
+            .collect::<Vec<_>>()
+    }
 }
 
-fn vec_u32(name: &str, img: Vec<u32>) -> Column {
-    let new_series = [img.iter().collect::<Series>()];
-    Column::new(name.into(), new_series)
+pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
+    let ts = path
+        .metadata()
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let ts = NaiveDateTime::from_timestamp(ts as i64, 0);
+
+    let file_name = path.file_stem().unwrap().to_str().unwrap();
+
+    let filename_segments = file_name.split('-');
+
+    let frame = filename_segments
+        .clone()
+        .last()
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+
+    let remaining = filename_segments
+        .clone()
+        .take(filename_segments.clone().count() - 1)
+        .collect::<String>();
+
+    let scan_id = remaining
+        .chars()
+        .rev()
+        .take(5)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+
+    let sample_name = remaining
+        .chars()
+        .take(remaining.len() - 5)
+        .collect::<String>()
+        .trim_end_matches(|c| c == '-' || c == '_')
+        .to_string();
+
+    vec![
+        Column::new("Scan ID".into(), vec![scan_id]),
+        Column::new("Sample Name".into(), vec![sample_name]),
+        Column::new("Frame Number".into(), vec![frame]),
+        Column::new("Timestamp".into(), vec![ts]),
+    ]
 }
 
-// Post process dataframe
-pub fn post_process(lzf: LazyFrame) -> LazyFrame {
+// ================== CCD Raw Data Processing ============
+pub fn add_calculated_domains(lzf: LazyFrame) -> LazyFrame {
     let h = physical_constants::PLANCK_CONSTANT_IN_EV_PER_HZ;
     let c = physical_constants::SPEED_OF_LIGHT_IN_VACUUM * 1e10;
     // Calculate lambda and q values in angstrom
@@ -160,12 +276,25 @@ pub fn post_process(lzf: LazyFrame) -> LazyFrame {
         .sort(["Sample Name"], Default::default())
         .sort(["Scan ID"], Default::default())
         .sort(["Frame Number"], Default::default())
+        .with_columns(&[
+            col("EXPOSURE [s]").round(3).alias("EXPOSURE [s]"),
+            col("Higher Order Suppressor [mm]")
+                .round(2)
+                .alias("Higher Order Suppressor [mm]"),
+            col("Horizontal Exit Slit Size [um]")
+                .round(1)
+                .alias("Horizontal Exit Slit Size [um]"),
+            col("Beamline Energy [eV]")
+                .round(1)
+                .alias("Beamline Energy [eV]"),
+        ])
         .with_column(
             col("Beamline Energy [eV]")
                 .pow(-1)
                 .mul(lit(h * c))
                 .alias("Lambda [Å]"),
         );
+
     let angle_offset = lz
         .clone()
         .filter(col("Sample Theta [deg]").eq(0.0))
@@ -234,98 +363,19 @@ pub fn post_process(lzf: LazyFrame) -> LazyFrame {
     lz
 }
 
-pub fn process_image(img: &ImageHDU) -> Result<Vec<Column>, PolarsError> {
-    let bzero = img
-        .header
-        .get_card("BZERO")
-        .unwrap()
-        .value
-        .as_int()
-        .unwrap();
-
-    match &img.data {
-        io::hdus::image::ImageData::I16(image) => {
-            let flat_data: Vec<i64> = image.iter().map(|&x| i64::from(x as i64 + bzero)).collect();
-            let shape = image.dim();
-            Ok(vec![
-                vec_i64("Raw", flat_data),
-                vec_u32("Raw Shape", vec![shape[0] as u32, shape[1] as u32]),
-            ])
-        }
-        _ => Err(PolarsError::NoData("Unsupported image data type".into())),
-    }
-}
-
-pub fn process_metadata(hdu: &PrimaryHDU, keys: &Vec<HeaderValue>) -> Vec<Column> {
-    if keys.is_empty() {
-        hdu.header
-            .iter()
-            .map(|card| {
-                let name = card.keyword.as_str();
-                let value = card.value.as_float().unwrap_or(0.0);
-                Column::new(name.into(), vec![value])
-            })
-            .collect::<Vec<_>>()
-    } else {
-        keys.iter()
-            .filter_map(|key| {
-                let val = hdu.header.get_card(key.hdu()).unwrap();
-                Some(Column::new(
-                    key.name().into(),
-                    vec![key.round(val.value.as_float().unwrap_or(0.0))],
-                ))
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-pub fn process_file_name(path: &str) -> Vec<Column> {
-    let file_name = path.rsplit('/').next().unwrap_or("Unknown");
-    let name_spit = file_name.split('-');
-
-    let frame = name_spit
-        .clone()
-        .last()
-        .and_then(|scan_id| scan_id.split('.').next())
-        .and_then(|scan_id| scan_id.trim_start_matches('0').parse::<i32>().ok())
-        .unwrap_or(0);
-
-    let remaining = name_spit
-        .clone()
-        .next()
-        .and_then(|name| name.starts_with("Captured Image").then(|| &name[14..]))
-        .unwrap_or("");
-
-    let scan_id = remaining
-        .chars()
-        .rev()
-        .take(5)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-
-    let sample_name = remaining
-        .chars()
-        .take(remaining.len() - 5)
-        .collect::<String>();
-
-    vec![
-        Column::new("Frame Number".into(), vec![frame]),
-        Column::new("Sample Name".into(), vec![sample_name]),
-        Column::new("Scan ID".into(), vec![scan_id]),
-    ]
-}
-
 // workhorse functions for loading and processing CCD data.
 pub fn read_fits(
-    file_path: &str,
-    header_items: Vec<HeaderValue>,
+    file_path: std::path::PathBuf,
+    header_items: &Vec<HeaderValue>,
 ) -> Result<DataFrame, PolarsError> {
-    let hdul = fits::fromfile(file_path)?;
+    if file_path.extension().and_then(|ext| ext.to_str()) != Some("fits") {
+        return Err(PolarsError::NoData("File is not a FITS file".into()));
+    }
+
+    let hdul = fits::fromfile(file_path.to_str().unwrap())?;
 
     let meta = match hdul.hdus.get(0).clone().unwrap() {
-        HDU::Primary(hdu) => process_metadata(hdu.clone(), &header_items),
+        HDU::Primary(hdu) => process_metadata(hdu, &header_items),
         _ => return Err(PolarsError::NoData("Primary HDU not found".into())),
     };
 
@@ -339,35 +389,40 @@ pub fn read_fits(
     let mut s_vec = meta;
     s_vec.extend(img_data);
     s_vec.extend(names);
-    Ok(DataFrame::new(s_vec).unwrap())
+    let d = DataFrame::new(s_vec).unwrap();
+    println!("{:?}", d);
+    Ok(d)
 }
 
-pub fn read_experiment(dir: &str, exp_type: &str) -> LazyFrame {
-    let exp = ExperimentType::from_str(exp_type).unwrap();
-    let header_items = exp.names(); // Clone the header_items vector
-                                    // iterate over all files in the directory
-    let combined = DataFrame::empty(); // Remove the mut keyword
+pub fn read_experiment(dir: &str, exp_type: &str) -> Result<LazyFrame, PolarsError> {
+    // convert the dir string to a PathBuf
+    let dir = std::path::PathBuf::from(dir);
+    //  if the directory does not exist, return an empty DataFrame
+    if !dir.exists() {
+        return Err(PolarsError::NoData("Directory does not exist".into()));
+    }
 
-    let _ = fs::read_dir(dir)
+    let exp = ExperimentType::from_str(exp_type).unwrap();
+    let header_items = exp.get_keys(); // Clone the header_items vector
+                                       // iterate over all files in the directory
+    let combined = std::sync::Mutex::new(DataFrame::empty());
+
+    let entries: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .into_iter()
         .par_bridge()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("fits"))
-        .map(|entry| {
-            combined.vstack(
-                &read_fits(
-                    entry
-                        .path()
-                        .to_str()
-                        .expect("Failed to convert path to string"),
-                    header_items, // Clone the header_items vector
-                )
-                .unwrap(),
-            )
-        });
+        .collect();
 
-    post_process(combined.lazy())
+    entries.par_iter().for_each(|entry| {
+        let fits_data = read_fits(entry.path(), &header_items).unwrap_or(DataFrame::empty());
+
+        let mut combined = combined.lock().unwrap();
+        let _ = combined.vstack_mut(&fits_data);
+    });
+    let df = combined.into_inner().unwrap();
+    Ok(add_calculated_domains(df.lazy()))
 }
 
 // Find the theta offset between theta and the ccd theta or 2theta
@@ -386,8 +441,8 @@ pub fn q(lam: f64, theta: f64, angle_offset: f64) -> f64 {
 }
 
 pub fn load() {
-    let test_path = "/home/hduva/projects/pyref-ccd/test/";
+    let test_path = "C:\\Users\\hduva\\Washington State University (email.wsu.edu)\\Carbon Lab Research Group - Documents\\Synchrotron Logistics and Data\\ALS - Berkeley\\Data\\BL1101\\2024Nov\\XRR\\znpc\\2024 11 15\\CCD Scan 85249\\CCD\\znpc_85249-00001.fits";
 
-    let data = read_experiment(test_path, "xrr").unwrap();
+    let data = read_fits(test_path.into(), &ExperimentType::Xrr.get_keys()).unwrap();
     println!("{:?}", data);
 }

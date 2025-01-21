@@ -1,21 +1,3 @@
-/// This module provides functionality for working with FITS files using the `astrors::fits` crate.
-///
-/// # Examples
-///
-/// ```
-/// use astrors::fits;
-///
-/// // Load a FITS file
-/// let fits_file = fits::load("path/to/file.fits");
-///
-/// // Access the header information
-/// let header = fits_file.header();
-///
-/// // Access the data
-/// let data = fits_file.data();
-/// ```
-///
-/// For more information, see the [README](README.md).
 use astrors_fork::fits;
 use astrors_fork::io;
 use astrors_fork::io::hdulist::HDU;

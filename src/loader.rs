@@ -74,6 +74,7 @@ pub fn read_experiment(
         .reduce_with(|acc, df| acc.vstack(&df).unwrap_or(DataFrame::empty()))
         .ok_or(FitsLoaderError::NoData)?;
 
+    println!("{:?}", combined_df);
     Ok(add_calculated_domains(combined_df.lazy()))
 }
 

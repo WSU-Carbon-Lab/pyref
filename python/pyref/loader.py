@@ -232,9 +232,8 @@ class PrsoxrLoader:
 
         # Files for output
         self.beam_drift = None
-        self.meta: pl.DataFrame = pyref.py_read_experiment(
-            str(directory), "xrr"
-        ).with_columns(pl.col("Beamline Energy [eV]").round(1))
+        self.meta: pl.DataFrame = pyref.py_read_experiment(str(directory), "xrr")
+        print(self.meta)
         self.data: pl.DataFrame | list[pl.DataFrame] = self.meta.group_by(
             "Beamline Energy [eV]"
         ).agg(pl.all())

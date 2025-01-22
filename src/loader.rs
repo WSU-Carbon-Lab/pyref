@@ -50,7 +50,7 @@ pub fn read_fits(
 pub fn read_experiment(
     dir: &str,
     header_items: &Vec<HeaderValue>,
-) -> Result<DataFrame, FitsLoaderError> {
+) -> Result<LazyFrame, FitsLoaderError> {
     let dir_path = std::path::PathBuf::from(dir);
 
     if !dir_path.exists() {
@@ -74,15 +74,12 @@ pub fn read_experiment(
         .reduce_with(|acc, df| acc.vstack(&df).unwrap_or(DataFrame::empty()))
         .ok_or(FitsLoaderError::NoData)?;
 
-    println!("{:?}", combined_df);
-    Ok(add_calculated_domains(combined_df.lazy())
-        .collect()
-        .unwrap())
+    Ok(add_calculated_domains(combined_df.lazy()))
 }
 
 pub fn _load() {
     let test_path = "/home/hduva/projects/pyref/test/stack/";
 
     let data = read_experiment(test_path.into(), &ExperimentType::Xrr.get_keys()).unwrap();
-    println!("{:?}", data);
+    // println!("{:?}", data);
 }

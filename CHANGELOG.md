@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.52 (2025-01-22)
+
+### Fix
+
+- **loader**: removed print debug statement
+
 ## v0.3.51 (2025-01-22)
 
 ### Fix

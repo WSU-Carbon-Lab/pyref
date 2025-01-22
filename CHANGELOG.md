@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.50 (2025-01-22)
+
+### Fix
+
+- added debug statement for python
+
 ## [0.3.49](https://github.com/WSU-Carbon-Lab/pyref-ccd/compare/v0.3.49...v0.3.49) (2025-01-22)
 
 

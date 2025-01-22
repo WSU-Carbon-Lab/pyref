@@ -5,7 +5,6 @@ use polars::{lazy::prelude::*, prelude::*}; // Add the import statement for Pola
 use rayon::prelude::*;
 use std::fs;
 
-use crate::enums::ExperimentType;
 use crate::enums::HeaderValue;
 use crate::errors::FitsLoaderError;
 use crate::io::{add_calculated_domains, process_file_name, process_image, process_metadata};
@@ -78,8 +77,8 @@ pub fn read_experiment(
 }
 
 pub fn _load() {
-    let test_path = "/home/hduva/projects/pyref/test/stack/";
+    // let test_path = "/home/hduva/projects/pyref/test/stack/";
 
-    let data = read_experiment(test_path.into(), &ExperimentType::Xrr.get_keys()).unwrap();
+    // let data = read_experiment(test_path.into(), &ExperimentType::Xrr.get_keys()).unwrap();
     // println!("{:?}", data);
 }

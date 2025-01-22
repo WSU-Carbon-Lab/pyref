@@ -1571,6 +1571,7 @@ dependencies = [
  "physical_constants",
  "polars",
  "rayon",
+ "thiserror",
 ]
 
 [[package]]

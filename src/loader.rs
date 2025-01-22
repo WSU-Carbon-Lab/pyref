@@ -75,7 +75,7 @@ pub fn read_experiment(
         .ok_or(FitsLoaderError::NoData)?;
 
     println!("{:?}", combined_df);
-    Ok(add_calculated_domains(combined_df.lazy()))
+    Ok(add_calculated_domains(combined_df.lazy()).collect())
 }
 
 pub fn _load() {

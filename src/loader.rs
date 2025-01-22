@@ -84,5 +84,5 @@ pub fn _load() {
     let test_path = "/home/hduva/projects/pyref/test/stack/";
 
     let data = read_experiment(test_path.into(), &ExperimentType::Xrr.get_keys()).unwrap();
-    println!("{:?}", data.collect().unwrap());
+    println!("{:?}", data);
 }

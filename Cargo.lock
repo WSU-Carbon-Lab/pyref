@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.50"
+version = "0.3.49"
 dependencies = [
  "astrors-fork",
  "chrono",

@@ -6,7 +6,7 @@ edition = "2021"
 license = "GPL-2.0"
 name = "pyref-core"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
-version = "0.3.50"
+version = "0.3.49"
 
 [lib]
 name = "pyref_core"

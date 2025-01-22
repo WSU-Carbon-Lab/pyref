@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.51 (2025-01-22)
+
+### Fix
+
+- Unwrap
+- **class**: added unwrap
+- **class**: fixed typing
+- **class**: converted LazyFrame output to DataFrame
+
 ## v0.3.50 (2025-01-22)
 
 ### Fix

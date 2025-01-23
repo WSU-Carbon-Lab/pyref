@@ -49,7 +49,7 @@ pub fn read_fits(
 pub fn read_experiment(
     dir: &str,
     header_items: &Vec<HeaderValue>,
-) -> Result<LazyFrame, FitsLoaderError> {
+) -> Result<DataFrame, FitsLoaderError> {
     let dir_path = std::path::PathBuf::from(dir);
 
     if !dir_path.exists() {

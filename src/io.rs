@@ -63,7 +63,7 @@ pub fn col_from_array(
     s
 }
 // ================== CCD Raw Data Processing ============
-pub fn add_calculated_domains(lzf: LazyFrame) -> LazyFrame {
+pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {
     let h = physical_constants::PLANCK_CONSTANT_IN_EV_PER_HZ;
     let c = physical_constants::SPEED_OF_LIGHT_IN_VACUUM * 1e10;
     // Calculate lambda and q values in angstrom
@@ -155,7 +155,7 @@ pub fn add_calculated_domains(lzf: LazyFrame) -> LazyFrame {
                 )
                 .alias("Q [Å⁻¹]"),
         );
-    lz
+    lz.collect().unwrap()
 }
 
 // ================== CCD Data Loader ==================

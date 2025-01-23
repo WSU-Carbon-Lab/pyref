@@ -158,6 +158,7 @@ pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {
     lz.collect().unwrap()
 }
 
+//
 // ================== CCD Data Loader ==================
 pub fn process_image(img: &ImageHDU) -> Result<Vec<Column>, FitsLoaderError> {
     let bzero = img

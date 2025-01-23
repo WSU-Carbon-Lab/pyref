@@ -54,4 +54,5 @@ jobs:
         run: >
           cargo publish
           --verbose
+          --allow-dirty
           --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

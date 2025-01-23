@@ -263,6 +263,7 @@ pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
         .to_string();
 
     vec![
+        Column::new("File Name".into(), vec![remaining]),
         Column::new("Scan ID".into(), vec![scan_id]),
         Column::new("Sample Name".into(), vec![sample_name]),
         Column::new("Frame Number".into(), vec![frame]),

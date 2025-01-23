@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.57 (2025-01-23)
+
+### Fix
+
+- Added file name to calculation
+
 ## v0.3.56 (2025-01-22)
 
 ### Fix

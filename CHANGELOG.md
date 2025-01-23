@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.54 (2025-01-22)
+
+### Fix
+
+- **io**: Lazy to eager
+- ci fix
+
 ## v0.3.53 (2025-01-22)
 
 ### Fix

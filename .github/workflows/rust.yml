@@ -22,7 +22,6 @@ jobs:
       - name: Build
         run: >
           cargo build
-          --locked
           --verbose
 
       # - name: Run tests (with coverage)

@@ -411,9 +411,9 @@ dependencies = [
 
 [[package]]
 name = "crunchy"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
+checksum = "43da5946c66ffcc7745f48db692ffbb10a83bfe0afd96235c5c2a4fb23994929"
 
 [[package]]
 name = "dyn-clone"
@@ -1807,16 +1807,18 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.49"
+version = "0.3.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d0c7c07759757f584f640dcec3226599cb3f0da0efefc857e1ae9ffa164cdee"
+checksum = "3d1041755aa31f31633f28b0f91db4916619c4e0d74481c5fcb5253f934f69a0"
 dependencies = [
  "astrors-fork",
  "chrono",
  "ndarray 0.15.6",
  "physical_constants",
  "polars",
+ "polars-arrow",
  "rayon",
+ "thiserror 2.0.11",
 ]
 
 [[package]]
@@ -1998,9 +2000,9 @@ checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustix"
-version = "0.38.43"
+version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a78891ee6bf2340288408954ac787aa063d8e8817e9f53abb37c695c6d834ef6"
+checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
 dependencies = [
  "bitflags",
  "errno",

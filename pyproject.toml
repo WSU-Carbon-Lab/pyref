@@ -96,6 +96,14 @@ sdist-generate = "cargo"
 [tool.maturin.version]
 path = "python/pyref/__init__.py"
 
+[tool.commitizen]
+major_version_zero = true
+name = "cz_conventional_commits"
+tag_format = "v$version"
+update_changelog_on_bump = true
+version_provider = "pep621"
+version_scheme = "pep440"
+
 [build-system]
 build-backend = "maturin"
 requires = ["maturin>=1.0,<2.0"]

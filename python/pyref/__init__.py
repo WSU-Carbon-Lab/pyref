@@ -6,7 +6,7 @@ Expansion Module for xray reflectivity modeling and data reduction in python.
 
 __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from pyref.loader import PrsoxrLoader
 from pyref.masking import InteractiveImageMasker

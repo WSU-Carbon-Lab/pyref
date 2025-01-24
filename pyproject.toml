@@ -37,12 +37,18 @@ version = "0.1.2"
 
 [tool.maturin]
 bindings = "pyo3"
+bindings = "pyo3"
 features = ["pyo3/extension-module"]
 format = "sdist"
+format = "sdist"
+manifest-path = "Cargo.toml"
 manifest-path = "Cargo.toml"
 module-name = "pyref"
 profile = "release"
+profile = "release"
 python-source = "python/"
+python-source = "python/"
+sdist-generate = "cargo"
 sdist-generate = "cargo"
 
 [tool.ruff]
@@ -53,6 +59,14 @@ exclude = [
   "docs",
   "src",
 ]
+exclude = [
+  ".github",
+  ".git",
+  ".vscode",
+  "docs",
+  "src",
+]
+fix = true
 fix = true
 line-length = 88
 
@@ -95,6 +109,13 @@ strict = true
 [tool.ruff.format]
 docstring-code-format = true
 
+[tool.commitizen]
+major_version_zero = true
+name = "cz_conventional_commits"
+tag_format = "v$version"
+update_changelog_on_bump = true
+version_provider = "pep621"
+version_scheme = "pep440"
 [tool.commitizen]
 major_version_zero = true
 name = "cz_conventional_commits"

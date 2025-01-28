@@ -23,8 +23,10 @@ dependencies = [
   "fastparquet>=2024.5.0",
   "pyarrow>=17.0.0",
   "scikit-image>=0.24.0",
+  "maturin>=1.7.1",
   "ipympl>=0.9.4",
   "hvplot>=0.11.2",
+  "cudf-polars-cu12>=24.12.0",
 ]
 description = "Blazingly fast X-ray reflectivity data analysis package"
 dynamic = ["version"]
@@ -33,6 +35,16 @@ license = {file = "LICENSE"}
 name = "pyref_staging"
 readme = "README.md"
 requires-python = ">=3.12"
+
+[tool.maturin]
+bindings = "pyo3"
+features = ["pyo3/extension-module"]
+format = "sdist"
+manifest-path = "Cargo.toml"
+module-name = "pyref"
+profile = "release"
+python-source = "python/"
+sdist-generate = "cargo"
 
 [tool.ruff]
 exclude = [
@@ -83,18 +95,6 @@ strict = true
 
 [tool.ruff.format]
 docstring-code-format = true
-
-[tool.maturin]
-bindings = "pyo3"
-features = ["pyo3/extension-module"]
-format = "sdist"
-manifest-path = "Cargo.toml"
-profile = "release"
-python-source = "python/"
-sdist-generate = "cargo"
-
-[tool.maturin.version]
-path = "python/pyref/__init__.py"
 
 [tool.commitizen]
 major_version_zero = true

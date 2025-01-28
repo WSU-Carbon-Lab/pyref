@@ -586,12 +586,12 @@ class PrsoxrLoader:
             g_meta.write_parquet(meta / f"{name}.parquet")
 
     def _stitch(self, lzf: pl.LazyFrame):
-        if lzf.limit(1).collect().shape[0] == 0:
+        if lzf.limit(1).collect(engine="gpu").shape[0] == 0:
             return
         stitch_dfs = []
         # group by the HOS and HES columns
         for i, (_, stitch) in enumerate(
-            lzf.collect().group_by(
+            lzf.collect(engine="gpu").group_by(
                 [
                     "Horizontal Exit Slit Size [um]",
                     "Higher Order Suppressor [mm]",
@@ -656,7 +656,7 @@ class PrsoxrLoader:
 
         refl = self.refl.filter(~pl.col("Sample Name").str.starts_with("Captured"))
 
-        p = refl.plot.scatter(
+        p = refl.hvplot.scatter(
             x="Q [Å⁻¹]",
             y="r [a. u.]",
             by=["Sample Name", "Beamline Energy [eV]"],
@@ -795,4 +795,4 @@ def get_reletive_izero(
             pl.lit(energy).alias("Beamline Energy [eV]"),
         )
     )
-    return overlap.collect()
+    return overlap.collect(engine="gpu")

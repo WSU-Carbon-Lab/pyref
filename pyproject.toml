@@ -26,14 +26,15 @@ dependencies = [
   "maturin>=1.7.1",
   "ipympl>=0.9.4",
   "hvplot>=0.11.2",
+  "cudf-polars-cu12>=24.12.0",
 ]
 description = "Blazingly fast X-ray reflectivity data analysis package"
+dynamic = ["version"]
 keywords = ["X-ray", "reflectivity", "data", "analysis"]
 license = {file = "LICENSE"}
 name = "pyref_staging"
 readme = "README.md"
 requires-python = ">=3.12"
-version = "0.1.2"
 
 [tool.maturin]
 bindings = "pyo3"

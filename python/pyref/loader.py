@@ -16,7 +16,7 @@ from ipywidgets import VBox, interactive
 from pyref import pyref
 from pyref.image import (
     apply_mask,
-    beamspot,
+    locate_beam,
     reduce_masked_data,
     reduction,
 )
@@ -50,7 +50,7 @@ prior_columns = [
     "δI₀ [arb. un.]",
 ]
 final_columns = [
-    "Sample Name",
+    "File Name",
     "θ [deg]",
     "I [arb. un.]",
     "δI [arb. un.]",
@@ -272,6 +272,11 @@ class PrsoxrLoader:
             .flatten()
         )
 
+    @property
+    def files(self) -> str | list[str]:
+        """Files getter."""
+        return self.meta.select("File Name").unique().to_numpy().flatten()
+
     def __str__(self):
         """Return string representation."""
         s = []  # ["{:_>50}".format("")]
@@ -290,11 +295,8 @@ class PrsoxrLoader:
     def __call__(
         self,
         roi: int | None = None,
-        sample_detector_distance: float = 130,
-        pixel_dim: float = 0.027,
     ):
         """Return reflectivity dataframe."""
-        self.meta = pyref.py_simple_update(self.meta, str(self.path))
         refl = self._calc_refl(roi)
         return refl
 
@@ -363,7 +365,7 @@ class PrsoxrLoader:
 
             meta = self.meta.filter(
                 (pl.col("Beamline Energy [eV]") == energy)
-                & (pl.col("Sample Name") == name)
+                & (pl.col("File Name") == name)
             )
             if meta.height < frame or meta.height == 0:
                 return
@@ -372,10 +374,8 @@ class PrsoxrLoader:
 
             image = np.reshape(meta["Raw"], meta["Raw Shape"])[::-1]
             masked = apply_mask(image, self.mask)
-            bs = beamspot(masked, roi, radius=blur)
-            db, bg = reduction(
-                image, beam_spot=bs, box_size=roi, edge_trim=self.edge_trim
-            )
+            bs = locate_beam(masked, blur=blur)
+            db, bg = reduction(image, beam_spot=bs, roi=roi, edge_trim=self.edge_trim)
 
             imax = ax[0]
             hist = ax[1]
@@ -500,14 +500,11 @@ class PrsoxrLoader:
         matplotlib.use("module://ipympl.backend_nbagg")
         min_frame = self.meta.select(
             pl.col("Raw"),
-            pl.col("Raw Shape"),
             pl.col("Raw")
-            .map_elements(lambda img: img.sum(), return_dtype=pl.Float64)
+            .map_elements(lambda img: np.sum(img), return_dtype=pl.Int64)
             .alias("sum"),
         ).sort("sum")[0]
-        image = np.reshape(
-            min_frame["Raw"].to_numpy()[0], min_frame["Raw Shape"].to_numpy()[0][::-1]
-        )[::-1, :]
+        image = min_frame["Raw"].to_numpy()[0]
         self.masker = InteractiveImageMasker(image)
 
     @property
@@ -540,10 +537,10 @@ class PrsoxrLoader:
             print("Process data prior to saving it")
             return
 
-        for g in self.refl.group_by("Sample Name"):
+        for g in self.refl.group_by("File Name"):
             name = g[0][0]
-            data = g[1].drop("Sample Name")
-            data.drop_in_place("Sample Name")
+            data = g[1].drop("File Name")
+            data.drop_in_place("File Name")
             data.write_csv(f"{self.path}/{name}.csv")
 
     def write_parquet(self):
@@ -578,15 +575,15 @@ class PrsoxrLoader:
         self.refl.write_parquet(refl / "all.parquet")
         self.meta.write_parquet(meta / "all.parquet")
 
-        for g in self.refl.group_by("Sample Name"):
+        for g in self.refl.group_by("File Name"):
             name = g[0][0]
-            data = g[1].drop("Sample Name")
+            data = g[1].drop("File Name")
             data.write_parquet(refl / f"{name}.parquet")
-            g_meta = self.meta.filter(pl.col("Sample Name") == name)
+            g_meta = self.meta.filter(pl.col("File Name") == name)
             g_meta.write_parquet(meta / f"{name}.parquet")
 
     def _stitch(self, lzf: pl.LazyFrame):
-        if lzf.limit(1).collect(engine="gpu").shape[0] == 0:
+        if lzf.limit(1).collect().shape[0] == 0:
             return
         stitch_dfs = []
         # group by the HOS and HES columns
@@ -630,11 +627,18 @@ class PrsoxrLoader:
         """
         if roi is None:
             roi = self.roi
-        lzf = reduce_masked_data(self.meta, roi, self.shutter_offset, self.snr_cutoff)
+        lzf = reduce_masked_data(
+            self.meta,
+            self.mask,
+            roi,
+            self.blur_strength,
+            self.edge_trim,
+            self.shutter_offset,
+        )
         for e in self.energy:
             frame = lzf.filter(pl.col("Beamline Energy [eV]") == e)
-            for name in self.name:
-                self._stitch(frame.filter(pl.col("Sample Name") == name))
+            for file in self.files:
+                self._stitch(frame.filter(pl.col("File Name") == file))
 
         # Stitch the data together
         stitched = pl.concat(self.stitched)
@@ -654,12 +658,12 @@ class PrsoxrLoader:
             print("Process data prior to plotting it")
             return
 
-        refl = self.refl.filter(~pl.col("Sample Name").str.starts_with("Captured"))
+        refl = self.refl.filter(pl.col("Q [Å⁻¹]").gt(0.0))
 
         p = refl.hvplot.scatter(
             x="Q [Å⁻¹]",
             y="r [a. u.]",
-            by=["Sample Name", "Beamline Energy [eV]"],
+            by=["File Name", "Beamline Energy [eV]"],
             title="Reflectivity",
             logy=True,
             height=600,

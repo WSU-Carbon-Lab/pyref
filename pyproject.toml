@@ -33,7 +33,7 @@ license = {file = "LICENSE"}
 name = "pyref_staging"
 readme = "README.md"
 requires-python = ">=3.12"
-version = "0.2.0"
+version = "0.2.1"
 
 [tool.maturin]
 bindings = "pyo3"

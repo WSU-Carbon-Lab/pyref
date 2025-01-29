@@ -1,3 +1,9 @@
+## v0.2.1 (2025-01-29)
+
+### Fix
+
+- update io functions at py03 handshake
+
 ## v0.2.0 (2025-01-28)
 
 ### Fix

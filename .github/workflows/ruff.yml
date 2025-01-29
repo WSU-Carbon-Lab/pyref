@@ -40,6 +40,6 @@ jobs:
       - name: Publish
         uses: PyO3/maturin-action@v1
         env:
-          MATURIN_PYPI_TOKEN: "${{ secrets.PYPI_API_TOKEN }}"
+          MATURIN_PYPI_TOKEN: "${{ secrets.MATURIN_PYPI_TOKEN }}"
         with:
           command: publish

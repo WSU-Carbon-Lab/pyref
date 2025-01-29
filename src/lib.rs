@@ -36,7 +36,7 @@ impl PyExType {
         self.exp
             .get_keys()
             .iter()
-            .map(|s| s.name().to_string())
+            .map(|s| s.hdu().to_string())
             .collect()
     }
 }
@@ -52,8 +52,9 @@ impl PyHduType {
     pub fn from_str(hdu: &str) -> PyResult<PyHduType> {
         let hdu = match hdu.to_lowercase().as_str() {
             "sample theta" => HeaderValue::SampleTheta,
+            "ccd theta" => HeaderValue::CCDTheta,
             "beamline energy" => HeaderValue::BeamlineEnergy,
-            "beam polarization" => HeaderValue::BeamCurrent,
+            "beam current" => HeaderValue::BeamCurrent,
             "epu polarization" => HeaderValue::EPUPolarization,
             "horizontal exit slit size" => HeaderValue::HorizontalExitSlitSize,
             "higher order suppressor" => HeaderValue::HigherOrderSuppressor,
@@ -71,8 +72,9 @@ fn get_headers(hdu_strs: Vec<String>) -> Vec<HeaderValue> {
         .iter()
         .map(|s| match s.to_lowercase().as_str() {
             "sample theta" => HeaderValue::SampleTheta,
+            "ccd theta" => HeaderValue::CCDTheta,
             "beamline energy" => HeaderValue::BeamlineEnergy,
-            "beam polarization" => HeaderValue::BeamCurrent,
+            "beam current" => HeaderValue::BeamCurrent,
             "epu polarization" => HeaderValue::EPUPolarization,
             "horizontal exit slit size" => HeaderValue::HorizontalExitSlitSize,
             "higher order suppressor" => HeaderValue::HigherOrderSuppressor,

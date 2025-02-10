@@ -3,8 +3,7 @@
 import numpy as np
 import polars as pl
 import skimage
-from numba import njit, prange, jit
-from skimage import measure
+from numba import njit
 from scipy.ndimage import median_filter
 
 
@@ -67,7 +66,7 @@ def reduction(
 
 
 @njit(cache=True, nogil=True)
-def apply_mask(img, mask=None, edge=10):
+def apply_mask(img: np.ndarray, mask: np.ndarray | None = None, edge: int = 10):
     """Apply a mask to an image."""
     if mask is not None:
         return mask_edge(img * mask, edge=edge)
@@ -84,26 +83,32 @@ def mask_edge(image: np.ndarray, edge: int) -> np.ndarray:
     return image
 
 
-@njit(cache=True, nogil=True)
-def find_beam_from_contours(contours: np.ndarray) -> tuple[int, int]:
+def find_beam_from_contours(
+    img: np.ndarray, segmentation: np.ndarray
+) -> tuple[int, int]:
     """Find the beam from a list of contours."""
-    min_area = np.inf
-    min_contour = None
-    for contour in contours:
-        labeled_contour = measure.label(contour)
-        props = measure.regionprops(labeled_contour)
-        if not props:
-            continue
-        area = props[0].area
-        if area < min_area:
-            min_area = area
-            min_contour = contour
-    if min_contour is None:
-        return 0, 0
-    # Get the centroid of the contour
-    center = np.mean(min_contour, axis=0)
-    center = np.round(center).astype(int)
-    return tuple(center)
+    cluster = np.argmax(
+        [np.sum(img[segmentation == i]) for i in np.unique(segmentation) if i != 0]
+    )
+    segmentation = segmentation == cluster
+    # beamspot is in the center of the cluster
+    y, x = np.where(segmentation)
+    x = np.mean(x)
+    y = np.mean(y)
+    return tuple(map(int, (y, x)))
+
+
+@njit(cache=True, nogil=True)
+def row_by_row_subtraction(image: np.ndarray) -> np.ndarray:
+    """Subtract the average of the left or right side of the image."""
+    left = image[:, :20]
+    right = image[:, -20:]
+    if left.sum() < right.sum():
+        # subtract row by row the average of the right side
+        image = image - right.mean(axis=1)[:, None]
+    else:
+        image = image - left.mean(axis=1)[:, None]
+    return image
 
 
 def on_edge(beam_spot, img_shape, roi):
@@ -118,15 +123,25 @@ def on_edge(beam_spot, img_shape, roi):
 
 def locate_beam(image, roi):
     """Locate the beam in the image."""
-    # Use edge detection to find the beam
+    # do a quick and poorly done background subtraction
+    left = image[:, :20]
+    right = image[:, -20:]
+    if left.sum() < right.sum():
+        image = image - right.mean(axis=1)[:, None]
+    else:
+        image = image - left.mean(axis=1)[:, None]
+
     beam_spot = find_max_index(image)
     if on_edge(beam_spot, image.shape, roi):
         # Use edge detection to find the beam
-        elevation_map = skimage.filters.sobel(image)
-        segmentation = skimage.segmentation.felzenszwalb(
-            elevation_map, min_size=roi // 2
+        u8 = ((image - image.min()) / (image.max() - image.min()) * 255).astype(
+            np.uint8
         )
-        beam_spot = find_beam_from_contours(segmentation)
+        elevation_map = skimage.filters.sobel(u8)
+        segmentation = skimage.segmentation.felzenszwalb(
+            elevation_map, min_size=roi // 2, scale=roi
+        )
+        beam_spot = find_beam_from_contours(u8, segmentation)
     return beam_spot
 
 
@@ -195,10 +210,9 @@ def dezinger_image(image: np.ndarray, threshold=10, size=3) -> np.ndarray:
     diff_image = image / np.abs(
         med_result
     )  # Calculate Ratio of each pixel to compared to a threshold
-    # Repopulate image by removing pixels that exceed the threshold -- From Jan Ilavsky's IGOR implementation.
+    # Repopulate image by removing pixels that exceed the threshold --
+    # From Jan Ilavsky's IGOR implementation.
     output = image * np.greater(threshold, diff_image).astype(
         int
-    ) + med_result * np.greater(
-        diff_image, threshold
-    )  #
+    ) + med_result * np.greater(diff_image, threshold)  #
     return output  # Return dezingered image and averaged image

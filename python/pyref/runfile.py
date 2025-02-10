@@ -22,10 +22,7 @@ def unique_filename(path: Path) -> Path:
     if "(" in stem and ")" in stem:
         base, num = stem.rsplit("(", 1)
         num = num.rstrip(")")
-        if num.isdigit():
-            num = int(num) + 1
-        else:
-            num = 1
+        num = int(num) + 1 if num.isdigit() else 1
     else:
         base = stem
         num = 1
@@ -198,7 +195,7 @@ def generate_runfile(
         Exposure Time - This column has no label in the run file
     """
     energies = ", ".join(df_stitches.columns)
-    save_path = Path(macro_folder) / f"{config["name"]}[{''.join(energies)}].txt"
+    save_path = Path(macro_folder) / f"{config['name']}[{''.join(energies)}].txt"
     # Generate a new name if the file allready exists
 
     df = []
@@ -246,9 +243,9 @@ def generate_runfile(
     # Construct the runfile
 
 
-def runfile(config: str | Path, data_path: str | Path = Path.cwd()) -> None:
+def runfile(config: str | Path, data_path: str | Path = Path(__file__)) -> None:
     """
-    Constructes the macro for the XRR experiment allong with saving the data.
+    Runfile macro for the XRR experiment allong with saving the data.
 
     Example
     -------
@@ -306,11 +303,11 @@ def runfile(config: str | Path, data_path: str | Path = Path.cwd()) -> None:
     df.write_csv(name, separator="\t")
     # remove the last newline, and the "" column name
     runfile_name = name
-    with open(runfile_name, "r") as f:
+    with runfile_name.open() as f:
         lines = f.readlines()
 
     lines[0] = lines[0].replace("\tExposure", "")  # Remove the 'Exposure' header
     lines[-1] = lines[-1].replace("\n", "")  # Remove the last carriage return
 
-    with open(runfile_name, "w") as f:
+    with runfile_name.open() as f:
         f.writelines(lines)

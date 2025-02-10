@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+import hvplot.polars  # noqa: F401
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
-import hvplot.polars  # noqa: F401
-from pathlib import Path
 import numpy as np
 import polars as pl
 from IPython.display import display
@@ -22,7 +22,7 @@ from pyref.image import (
 )
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue
-from pyref.utils import err_prop_div, weighted_mean, weighted_std, err_prop_mult
+from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -51,11 +51,7 @@ prior_columns = [
 ]
 final_columns = [
     "File Name",
-    "θ [deg]",
-    "I [arb. un.]",
-    "δI [arb. un.]",
-    "I₀ [arb. un.]",
-    "δI₀ [arb. un.]",
+    "EPU Polarization [deg]",
     "Beamline Energy [eV]",
     "Q [Å⁻¹]",
     "r [a. u.]",
@@ -97,10 +93,10 @@ class PrsoxrLoader:
     files : list
         List of .fits to be loaded. Include full filepaths
 
-        >>> #Recommended Usage
+        >>> # Recommended Usage
         >>> import pathlib
-        >>> path_s = pathlib.Path('../ALS/2020 Nov/MF114A/spol/250eV')
-        >>> files = list(path_s.glob('*fits')) # All .fits in path_s
+        >>> path_s = pathlib.Path("../ALS/2020 Nov/MF114A/spol/250eV")
+        >>> files = list(path_s.glob("*fits"))  # All .fits in path_s
 
         The newly created 'files' is now a list of filepaths to each reflectivity point.
 
@@ -169,8 +165,8 @@ class PrsoxrLoader:
     Print the loader to view variables that will be used in reduction. Update them
     using the attributes listed in this API.
 
-    >>> loader = PrsoxrLoader(files, name='MF114A_spol')
-    >>> print(loader) #Default values
+    >>> loader = PrsoxrLoader(files, name="MF114A_spol")
+    >>> print(loader)  # Default values
         Sample Name - MF114A
         Number of scans - 402
         ______________________________
@@ -210,7 +206,6 @@ class PrsoxrLoader:
         directory: Path,
         mask: np.ndarray | None = None,
     ):
-
         # Sample information
         # self.name: str = directory.stem  # Name of the series to be loaded
         self.path: str = Path(directory)  # Path to the data
@@ -264,9 +259,21 @@ class PrsoxrLoader:
 
     @property
     def name(self) -> str | list[str]:
+        """Name getter."""
         return (
             self.meta.filter(~pl.col("Sample Name").str.starts_with("Captured"))
             .select("Sample Name")
+            .unique()
+            .to_numpy()
+            .flatten()
+        )
+
+    @property
+    def scan_id(self) -> int | list[int]:
+        """Scan ID getter."""
+        return (
+            self.meta.filter(~pl.col("Sample Name").str.starts_with("Captured"))
+            .select("Scan ID")
             .unique()
             .to_numpy()
             .flatten()
@@ -395,7 +402,7 @@ class PrsoxrLoader:
                 "connectionstyle": "angle,angleA=0,angleB=90,rad=20",
             }
             props = f"direct beam = {db:.2f}\nbackground = {bg:.3f}\n"
-            props += f"Q = {meta["Q [Å⁻¹]"]:.3f}\nE= {meta["Beamline Energy [eV]"]:.1f}"
+            props += f"Q = {meta['Q [Å⁻¹]']:.3f}\nE= {meta['Beamline Energy [eV]']:.1f}"
             imax.annotate(
                 props,
                 xy=bs[::-1],
@@ -588,7 +595,7 @@ class PrsoxrLoader:
         stitch_dfs = []
         # group by the HOS and HES columns
         for i, (_, stitch) in enumerate(
-            lzf.collect(engine="gpu").group_by(
+            lzf.collect().group_by(
                 [
                     "Horizontal Exit Slit Size [um]",
                     "Higher Order Suppressor [mm]",
@@ -653,23 +660,25 @@ class PrsoxrLoader:
 
     def plot_data(self):
         """Plot Reflectivity data."""
-
         if self.refl is None:
             print("Process data prior to plotting it")
             return
 
-        refl = self.refl.filter(pl.col("Q [Å⁻¹]").gt(0.0))
+        refl = self.refl.filter(pl.col("Q [Å⁻¹]").gt(0.0) & pl.col("r [a. u.]").gt(0.0))
 
         p = refl.hvplot.scatter(
             x="Q [Å⁻¹]",
             y="r [a. u.]",
             by=["File Name", "Beamline Energy [eV]"],
             title="Reflectivity",
-            logy=True,
             height=600,
             width=1200,
             muted_alpha=0,
-        ).opts(legend_position="top_right")
+        ).opts(
+            legend_position="top_right",
+            logy=True,
+            xlim=(0, refl["Q [Å⁻¹]"].max() * 1.1),
+        )
         return p
 
 
@@ -799,4 +808,4 @@ def get_reletive_izero(
             pl.lit(energy).alias("Beamline Energy [eV]"),
         )
     )
-    return overlap.collect(engine="gpu")
+    return overlap.collect()

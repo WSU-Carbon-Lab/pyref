@@ -1,3 +1,6 @@
+"""Exceptions for the pyref package."""
+
+
 class UnknownPolarizationError(Exception):
     """Exception raised for unknown polarization values."""
 

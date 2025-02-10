@@ -30,7 +30,7 @@ dependencies = [
 description = "Blazingly fast X-ray reflectivity data analysis package"
 keywords = ["X-ray", "reflectivity", "data", "analysis"]
 license = {file = "LICENSE"}
-name = "pyref_staging"
+name = "pyref"
 readme = "README.md"
 requires-python = ">=3.12"
 version = "0.2.1"
@@ -106,3 +106,8 @@ version_scheme = "pep440"
 [build-system]
 build-backend = "maturin"
 requires = ["maturin>=1.0,<2.0"]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.9.4",
+]

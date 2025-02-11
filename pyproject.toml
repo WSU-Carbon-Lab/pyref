@@ -32,7 +32,7 @@ keywords = ["X-ray", "reflectivity", "data", "analysis"]
 license = {file = "LICENSE"}
 name = "pyref"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 version = "0.3.0"
 
 [tool.maturin]

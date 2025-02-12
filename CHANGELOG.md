@@ -1,3 +1,9 @@
+## v0.5.0 (2025-02-11)
+
+### Fix
+
+- workflow fix to remove cargo need
+
 ## v0.4.3 (2025-02-11)
 
 ### Fix

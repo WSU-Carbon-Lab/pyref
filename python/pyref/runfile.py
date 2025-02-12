@@ -4,13 +4,18 @@
 This module is used to generate a runfile for the XRR experiment at the ALS beamline
 """
 
+from __future__ import annotations
+
 import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
 import polars as pl
 import yaml
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def unique_filename(path: Path) -> Path:

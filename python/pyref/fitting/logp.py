@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from numpy import inf, pi, sqrt
+import numpy as np
 
 type Parameter = Literal["thick_rough", "birefringence", "delta"]
 
@@ -28,25 +28,19 @@ class LogpExtra:
                     rough_pars[i].vary or thick_pars[i].vary
                 ):  # Only constrain parameters that vary
                     interface_limit = (
-                        sqrt(2 * pi) * rough_pars[i].value / 2
+                        np.sqrt(2 * np.pi) * rough_pars[i].value / 2
                     )  # (rough_pars[i].value/(np.sqrt(2*np.pi)))**2
                     if float(thick_pars[i].value - interface_limit) < 0:
-                        return -inf
+                        return -np.inf
         return 0  ##If all the layers are within the constraint return 0
 
 
 def sort_pars(pars, str_check, vary=None, str_not=" "):
     """Sort parameters based on the string in the name."""
-    temp = []
-    num = len(pars)
-    for i in range(num):
-        if str_check in pars[i].name and str_not not in pars[i].name:
-            if vary is True:
-                if pars[i].vary is True:
-                    temp.append(pars[i])
-            elif vary is False:
-                if pars[i].vary is False:
-                    temp.append(pars[i])
-            else:
-                temp.append(pars[i])
-    return temp
+    return [
+        par
+        for par in pars
+        if str_check in par.name
+        and str_not not in par.name
+        and (vary is None or par.vary == vary)
+    ]

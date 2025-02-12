@@ -1,4 +1,3 @@
-// use numpy::PyArray2;
 use polars::{prelude::*, series::amortized_iter::*};
 use polars_core::{export::num::Pow, utils::align_chunks_binary};
 use pyo3::prelude::*;
@@ -11,6 +10,8 @@ use pyref_core::{
 
 #[global_allocator]
 static ALLOC: PolarsAllocator = PolarsAllocator::new();
+
+// ==================== Modeling XRR ====================
 
 /// This converts pyref_core structures to Python objects.
 ///

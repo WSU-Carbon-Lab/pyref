@@ -62,17 +62,16 @@ jupyter = ["jupyter", "notebook"] # Split out non-essential dependencies
 
 [tool.maturin]
 # Added ABI3 compatibility settings
-bindings = "pyo3"
-features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
-minimum-python-version = "3.9"
-# Generate universal2 wheels for macOS
-universal2 = true
-# Changed to generate wheels instead of sdist
-format = "wheel"
-module-name = "pyref"
-profile = "release"
-python-source = "python/"
-sdist-generate = "cargo"
+bindings = "pyo3" 
+features = ["pyo3/extension-module", "pyo3/generate-import-lib"] 
+format = ["wheel"] # Only build wheels, no sdist 
+minimum-python-version = "3.9" 
+module-name = "pyref" 
+profile = "release" 
+python-source = "python/" 
+sdist-generate = false # Disable sdist generation
+strip = true # Strip debug symbols to reduce binary size
+universal2 = true 
 
 [tool.ruff]
 exclude = [

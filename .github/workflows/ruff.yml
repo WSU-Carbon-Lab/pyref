@@ -1,59 +1,80 @@
-name: Python Chores
-
-on: [push, pull_request]
+name: Build and Publish
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
 
 jobs:
   format:
     name: Format
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Ruff Format
-      uses: chartboost/ruff-action@v1
-      with:
-        args: "format ./pyproject.toml"
+      - uses: actions/checkout@v4
+      - name: Ruff Format
+        uses: chartboost/ruff-action@v1
+        with:
+          args: "format ./pyproject.toml"
 
-  build-check:
+  build-wheels:
     needs: format
-    name: Build (${{ matrix.os }})
-
-    strategy:
-      matrix:
-          os: [ubuntu-latest, macos-latest, windows-latest]
-
-
+    name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    if: startsWith(github.event.head_commit.message, 'bump:')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            platform: manylinux_x86_64
+          - os: ubuntu-latest
+            platform: musllinux_x86_64
+          - os: macos-latest
+            platform: macosx_x86_64
+          - os: macos-latest
+            platform: macosx_arm64
+          - os: windows-latest
+            platform: win_amd64
 
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
 
-      - name: Install the project
-        run: uv sync --all-extras --dev
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform }}
+          args: --release --strip --compatibility manylinux_2_28_x86_64
+          sccache: true
+          manylinux: auto
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          path: target/wheels/*.whl
 
   publish:
-    needs: build-check
+    needs: build-wheels
     runs-on: ubuntu-latest
-
     if: startsWith(github.event.head_commit.message, 'bump:')
 
-
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v2
+      - uses: actions/download-artifact@v3
         with:
-          python-version: 3.9
-      - name: Maturin Build
-        uses: PyO3/maturin-action@v1
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          command: build
-          args: --release
-      - name: Publish
-        uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: "${{ secrets.PYPI_TOKEN }}"
-        with:
-          command: publish
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true

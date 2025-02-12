@@ -3,8 +3,7 @@ authors = [
   {name = "Harlan", email = "Harlan.Heilman@wsu.edu"},
 ]
 classifiers = [
-  # Added license classifier
-  "License :: OSI Approved :: MIT License", # Simplified implementation classifiers (PyPy incompatible with Rust extensions)
+  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
@@ -12,23 +11,12 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Rust",
   "Intended Audience :: Science/Research",
-  "Topic :: Scientific/Engineering :: Physics", # Added maturity classifier
+  "Topic :: Scientific/Engineering :: Physics",
   "Development Status :: 4 - Beta",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
 ]
-# Added URLs for documentation and source
-urls = {Documentation = "https://wsu-carbon-lab.github.io/pyref/", Source = "https://github.com/WSU-Carbon-Lab/pyref"}
-# Added maintainer information (optional but recommended)
-description = "Blazingly fast X-ray reflectivity data analysis package"
-keywords = ["X-ray", "reflectivity", "data", "analysis"]
-license = {file = "LICENSE"}
-maintainers = [
-  {name = "Harlan", email = "Harlan.Heilman@wsu.edu"},
-]
-name = "pyref"
-readme = "README.md"
-requires-python = ">=3.9"
-version = "0.4.3"
-# Added lower bound for Python version
 dependencies = [
   "periodictable",
   "numpy>=1.21.0",
@@ -46,6 +34,17 @@ dependencies = [
   "ipympl>=0.9.4",
   "hvplot>=0.11.2",
 ]
+description = "Blazingly fast X-ray reflectivity data analysis package"
+keywords = ["X-ray", "reflectivity", "data", "analysis"]
+license = {file = "LICENSE"}
+maintainers = [
+  {name = "Harlan", email = "Harlan.Heilman@wsu.edu"},
+]
+name = "pyref"
+readme = "README.md"
+requires-python = ">=3.9"
+urls = {Documentation = "https://wsu-carbon-lab.github.io/pyref/", Source = "https://github.com/WSU-Carbon-Lab/pyref"}
+version = "0.4.4"
 
 [project.optional-dependencies]
 dev = [
@@ -58,20 +57,23 @@ docs = [
   "sphinx>=7.0.0",
   "sphinx-rtd-theme>=1.0.0",
 ]
-jupyter = ["jupyter", "notebook"] # Split out non-essential dependencies
+jupyter = ["jupyter", "notebook"]
 
 [tool.maturin]
-# Added ABI3 compatibility settings
-bindings = "pyo3" 
-features = ["pyo3/extension-module", "pyo3/generate-import-lib"] 
-format = ["wheel"] # Only build wheels, no sdist 
-minimum-python-version = "3.9" 
-module-name = "pyref" 
-profile = "release" 
-python-source = "python/" 
-sdist-generate = false # Disable sdist generation
-strip = true # Strip debug symbols to reduce binary size
-universal2 = true 
+bindings = "pyo3"
+features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
+format = ["wheel"]
+minimum-python-version = "3.9"
+module-name = "pyref"
+profile = "release"
+python-source = "python/"
+sdist-generate = false
+strip = true
+universal2 = true
+
+[build-system]
+build-backend = "maturin"
+requires = ["maturin>=1.0,<2.0"]
 
 [tool.ruff]
 exclude = [
@@ -131,11 +133,12 @@ update_changelog_on_bump = true
 version_provider = "pep621"
 version_scheme = "pep440"
 
-[build-system]
-build-backend = "maturin"
-requires = ["maturin>=1.0,<2.0"]
-
 [dependency-groups]
 dev = [
   "ruff>=0.9.4",
 ]
+
+[package.metadata.maturin]
+compatibility = ["manylinux_2_28_x86_64", "musllinux_1_2_x86_64"]
+features = ["pyo3/extension-module"]
+python-source = "python"

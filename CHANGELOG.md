@@ -1,3 +1,9 @@
+## v0.4.0 (2025-02-11)
+
+### Feat
+
+- added fitting and xrr model
+
 ## v0.3.0 (2025-02-10)
 
 ### Feat

@@ -1,3 +1,9 @@
+## v0.4.1 (2025-02-11)
+
+### Fix
+
+- added refnx[all] deps. updated workflow
+
 ## v0.4.0 (2025-02-11)
 
 ### Feat

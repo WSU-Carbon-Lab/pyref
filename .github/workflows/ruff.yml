@@ -39,16 +39,13 @@ jobs:
 
     if: startsWith(github.event.head_commit.message, 'bump:')
 
-    strategy:
-      matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: 3.9
       - name: Maturin Build
         uses: PyO3/maturin-action@v1
         with:

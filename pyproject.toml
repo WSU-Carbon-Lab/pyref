@@ -14,7 +14,6 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Topic :: Scientific/Engineering :: Physics", # Added maturity classifier
   "Development Status :: 4 - Beta",
-  "Topic :: Scientific/Engineering :: Physics :: X-ray Analysis",
 ]
 # Added URLs for documentation and source
 urls = {Documentation = "https://wsu-carbon-lab.github.io/pyref/", Source = "https://github.com/WSU-Carbon-Lab/pyref"}

@@ -27,7 +27,7 @@ maintainers = [
 name = "pyref"
 readme = "README.md"
 requires-python = ">=3.9"
-version = "0.4.2"
+version = "0.4.3"
 # Added lower bound for Python version
 dependencies = [
   "periodictable",

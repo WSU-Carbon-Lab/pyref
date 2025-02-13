@@ -13,7 +13,7 @@ from refnx.analysis import Parameter, Parameters, possibly_create_parameter
 from refnx.reflect.interface import Erf, Step
 from refnx.reflect.structure import Component
 
-from pyref.fitting.reflectivity import PXR_reflectivity
+from pyref.fitting.reflectivity import reflectivity
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -25,7 +25,7 @@ hc = (speed_of_light * plank_constant) * 1e10  # ev*A
 tensor_index = ["xx", "yy", "zz"]  # Indexing for later definitions
 
 
-class PXR_Structure(UserList):
+class Structure(UserList):
     r"""
     Represents the interfacial Structure of a reflectometry sample.
 
@@ -72,7 +72,7 @@ class PXR_Structure(UserList):
 
     def __copy__(self):
         """Create a shallow copy of the structure."""
-        s = PXR_Structure(name=self.name)
+        s = Structure(name=self.name)
         s.data = self.data.copy()
         return s
 
@@ -109,7 +109,7 @@ class PXR_Structure(UserList):
         item: refnx.reflect.Component
             The component to be added.
         """
-        if isinstance(item, PXR_Scatterer):
+        if isinstance(item, Scatterer):
             self.append(item())
             return
 
@@ -170,9 +170,7 @@ class PXR_Structure(UserList):
         if not len(self):
             return None
 
-        if not (
-            isinstance(self.data[-1], PXR_Slab) and isinstance(self.data[0], PXR_Slab)
-        ):
+        if not (isinstance(self.data[-1], Slab) and isinstance(self.data[0], Slab)):
             e = "The first and last PXR_Components in a PXR_Structure need to be PXR_slabs"  # noqa: E501
             raise TypeError(e)
 
@@ -258,7 +256,7 @@ class PXR_Structure(UserList):
             (07/2021 Biaxial currently does not work)
 
         """
-        refl, tran, *components = PXR_reflectivity(
+        refl, tran, *components = reflectivity(
             q, self.slabs(), self.tensor(energy=energy), backend=backend
         )
         return refl[:, 1, 1], refl[:, 0, 0], components
@@ -305,8 +303,8 @@ class PXR_Structure(UserList):
         if (
             (slabs is None)
             or (len(slabs) < 2)
-            or (not isinstance(self.data[0], PXR_Slab))
-            or (not isinstance(self.data[-1], PXR_Slab))
+            or (not isinstance(self.data[0], Slab))
+            or (not isinstance(self.data[-1], Slab))
         ):
             e = "Structure requires fronting and backing Slabs in order to calculate."
             raise TypeError(e)
@@ -350,9 +348,9 @@ class PXR_Structure(UserList):
         # self |= other
         if isinstance(other, PXR_Component):
             self.append(other)
-        elif isinstance(other, PXR_Structure):
+        elif isinstance(other, Structure):
             self.extend(other.data)
-        elif isinstance(other, PXR_Scatterer):
+        elif isinstance(other, Scatterer):
             slab = other(0, 0)
             self.append(slab)
         else:
@@ -379,7 +377,7 @@ class PXR_Structure(UserList):
         ```
         """
         # c = self | other
-        p = PXR_Structure()
+        p = Structure()
         p |= self
         p |= other
         return p
@@ -545,7 +543,7 @@ class PXR_Structure(UserList):
         return fig, ax
 
 
-class PXR_Scatterer:
+class Scatterer:
     """
     Abstract base class for a material with a complex tensor index of refraction.
     """
@@ -592,7 +590,7 @@ class PXR_Scatterer:
         >>> slab = molecule(10, 3)
 
         """
-        return PXR_Slab(thick, self, rough, name=self.name)
+        return Slab(thick, self, rough, name=self.name)
 
     def __or__(self, other):
         """Combine scatterers."""
@@ -601,7 +599,7 @@ class PXR_Scatterer:
         return slab | other
 
 
-class PXR_SLD(PXR_Scatterer):
+class SLD(Scatterer):
     """
     Object representing freely varying complex tensor index of refraction of a material.
 
@@ -808,7 +806,7 @@ class PXR_SLD(PXR_Scatterer):
         return self._tensor
 
 
-class PXR_MaterialSLD(PXR_Scatterer):
+class MaterialSLD(Scatterer):
     """
     Object representing complex index of refraction of a chemical formula.
 
@@ -973,7 +971,7 @@ class PXR_MaterialSLD(PXR_Scatterer):
         return self._tensor
 
 
-class PXR_NexafsSLD(PXR_Scatterer):
+class NexafsSLD(Scatterer):
     """
     Object representing complex index of refraction based on experimental oocs.
 
@@ -1309,7 +1307,7 @@ class PXR_Component:
 
         """
         # c = self | other
-        p = PXR_Structure()
+        p = Structure()
         p |= self
         p |= other
         return p
@@ -1331,11 +1329,11 @@ class PXR_Component:
         # convert to integer, should raise an error if there's a problem
         n = operator.index(n)
         if n < 1:
-            return PXR_Structure()
+            return Structure()
         elif n == 1:
             return self
         else:
-            s = PXR_Structure()
+            s = Structure()
             s.extend([self] * n)
             return s
 
@@ -1399,7 +1397,7 @@ class PXR_Component:
         return 0
 
 
-class PXR_Slab(PXR_Component):
+class Slab(PXR_Component):
     """
     A slab component has with tensor index of refraction associated over its thickness.
 
@@ -1418,10 +1416,10 @@ class PXR_Slab(PXR_Component):
     def __init__(self, thick, sld, rough, name=""):
         super().__init__(name=name)
         self.thick = possibly_create_parameter(thick, name=f"{name}_thick")
-        if isinstance(sld, PXR_Scatterer):
+        if isinstance(sld, Scatterer):
             self.sld = sld
         else:
-            self.sld = PXR_SLD(sld)
+            self.sld = SLD(sld)
 
         self.rough = possibly_create_parameter(rough, name=f"{name}_rough")
 
@@ -1486,7 +1484,7 @@ class PXR_Slab(PXR_Component):
         return np.array([self.sld.tensor])
 
 
-class PXR_MixedMaterialSlab(PXR_Component):
+class MixedMaterialSlab(PXR_Component):
     """
     A slab component made of several components.
 
@@ -1531,10 +1529,10 @@ class PXR_MixedMaterialSlab(PXR_Component):
         self._vf_parameters = Parameters(name=f"{name} - volfracs")
 
         for i, (s, v) in enumerate(zip(sld_list, vf_list)):
-            if isinstance(s, PXR_Scatterer):
+            if isinstance(s, Scatterer):
                 self.sld.append(s)
             else:
-                self.sld.append(PXR_SLD(s))
+                self.sld.append(SLD(s))
 
             self._sld_parameters.append(self.sld[-1].parameters)
 
@@ -1624,7 +1622,7 @@ class PXR_MixedMaterialSlab(PXR_Component):
         return combinetensor  # self.sld.tensor
 
 
-class PXR_Stack(PXR_Component, UserList):
+class Stack(PXR_Component, UserList):
     r"""
     Stack of PXR_Components.
 
@@ -1690,7 +1688,7 @@ class PXR_Stack(PXR_Component, UserList):
             PXR_Component to be added to the PXR_Stack
 
         """
-        if isinstance(item, PXR_Scatterer):
+        if isinstance(item, Scatterer):
             self.append(item())
             return
 
@@ -1968,8 +1966,8 @@ if __name__ == "__main__":
     import pandas as pd
 
     ooc = pd.read_csv("/home/hduva/projects/pyref/optical_constants.csv")
-    si = PXR_MaterialSLD("Si")(0, 1.5)
-    znpc_slab = PXR_NexafsSLD(
+    si = MaterialSLD("Si")(0, 1.5)
+    znpc_slab = NexafsSLD(
         ooc,
         symmetry="uni",
         rotation=90,
@@ -1977,7 +1975,7 @@ if __name__ == "__main__":
         optical_constraints="none",
         energy=283.7,
     )(196.441, 7.216)
-    vac = PXR_MaterialSLD("", density=None)(0, 0)
+    vac = MaterialSLD("", density=None)(0, 0)
 
     struct = vac | znpc_slab | si
     struct.plot()

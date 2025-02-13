@@ -6,24 +6,24 @@ from refnx.analysis import CurveFitter, GlobalObjective, Objective, Transform
 from refnx.dataset import ReflectDataset
 
 from pyref.fitting.logp import LogpExtra
-from pyref.fitting.reflectivity import PXR_ReflectModel
-from pyref.fitting.structure import PXR_SLD, PXR_MaterialSLD, PXR_NexafsSLD
+from pyref.fitting.reflectivity import ReflectModel
+from pyref.fitting.structure import SLD, MaterialSLD, NexafsSLD
 
 demove = [(DEMove(sigma=1e-7), 0.95), (DEMove(sigma=1e-7), 0.05)]
 gmove = GaussianMove(1e-7)
 
 
 __all__ = [
-    "PXR_SLD",
+    "SLD",
     "CurveFitter",
     "DEMove",
     "GlobalObjective",
     "LogpExtra",
+    "MaterialSLD",
+    "NexafsSLD",
     "Objective",
-    "PXR_MaterialSLD",
-    "PXR_NexafsSLD",
-    "PXR_ReflectModel",
     "ReflectDataset",
+    "ReflectModel",
     "Transform",
     "demove",
     "gmove",

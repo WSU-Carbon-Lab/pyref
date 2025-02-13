@@ -15,7 +15,7 @@ from pyref.fitting.uniaxial_model import uniaxial_reflectivity
 _FWHM = 2 * np.sqrt(2 * np.log(2.0))
 
 
-class PXR_ReflectModel:
+class ReflectModel:
     r"""
     Reflectometry model for anisotropic interfaces.
 
@@ -317,7 +317,7 @@ class PXR_ReflectModel:
         else:
             qvals = x
 
-        refl, tran, *components = PXR_reflectivity(
+        refl, tran, *components = reflectivity(
             qvals + self.q_offset.value,
             self.structure.slabs(),
             self.structure.tensor(energy=self.energy),
@@ -394,7 +394,7 @@ class PXR_ReflectModel:
         return self._parameters
 
 
-def PXR_reflectivity(
+def reflectivity(
     q: np.ndarray,
     slabs: np.ndarray,
     tensor: np.ndarray,
@@ -511,7 +511,7 @@ def PXR_reflectivity(
 
     elif isinstance(dq, numbers.Real):
         dq = float(dq)
-        smear_refl, smear_tran, *components = _smeared_PXR_reflectivity(
+        smear_refl, smear_tran, *components = _smeared_reflectivity(
             q, slabs, tensor, energy, phi, dq, backend=backend
         )
 
@@ -520,7 +520,7 @@ def PXR_reflectivity(
     return None
 
 
-def _smeared_PXR_reflectivity(q, w, tensor, energy, phi, resolution, backend="uni"):
+def _smeared_reflectivity(q, w, tensor, energy, phi, resolution, backend="uni"):
     """
     Fast resolution smearing for constant dQ/Q.
 

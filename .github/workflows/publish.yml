@@ -80,6 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: read
 
     steps:
       - name: Download all artifacts
@@ -126,7 +127,8 @@ jobs:
         id: github-release
         uses: release-drafter/release-drafter@v6
         with:
-          name: PyRef ${{ steps.version.outputs.version }}
+          config-name: release-drafter-python.yml
+          name: pyref ${{ steps.version.outputs.version }}
           tag: v${{ steps.version.outputs.version }}
           version: ${{ steps.version.outputs.version }}
           prerelease: ${{ steps.version.outputs.is_prerelease }}

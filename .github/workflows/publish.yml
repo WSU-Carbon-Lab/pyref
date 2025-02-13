@@ -110,10 +110,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Get version from Cargo.toml
+      - name: Get version from pyproject.toml
         id: version
         run: |
-          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' Cargo.toml)
+          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' pyproject.toml)
           if [[ "$VERSION" == *"-"* ]]; then
             IS_PRERELEASE=true
           else

@@ -1,0 +1,41 @@
+_extends: pyref:.github/release-drafter.yml
+
+name-template: Python Pyref $RESOLVED_VERSION
+tag-template: $RESOLVED_VERSION
+tag-prefix: v
+
+include-labels:
+  - python
+
+version-resolver:
+  major:
+    labels:
+      - breaking
+      - breaking python
+  minor:
+    labels:
+      - performance
+      - enhancement
+  default: patch
+
+categories:
+  - title: 🏆 Highlights
+    labels: highlight
+  - title: 💥 Breaking changes
+    labels:
+      - breaking
+      - breaking python
+  - title: ⚠️ Deprecations
+    labels: deprecation
+  - title: 🚀 Performance improvements
+    labels: performance
+  - title: ✨ Enhancements
+    labels: enhancement
+  - title: 🐞 Bug fixes
+    labels: fix
+  - title: 📖 Documentation
+    labels: documentation
+  - title: 📦 Build system
+    labels: build
+  - title: 🛠️ Other improvements
+    labels: internal

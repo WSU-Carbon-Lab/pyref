@@ -1,3 +1,14 @@
+## v0.6.0 (2025-02-13)
+
+### Feat
+
+- added prototype fitting
+
+### Fix
+
+- **fitting**: rename to remove PXR_ subscript
+- **fitting**: add NexafsSLD to __all__
+
 ## v0.5.1 (2025-02-11)
 
 ### Fix

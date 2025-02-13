@@ -1,0 +1,19 @@
+name: Format
+on:
+  push
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: format
+        uses: chartboost/ruff-action@v1
+        with:
+          args: "format ./pyproject.toml"
+
+      - name: lint
+        uses: chartboost/ruff-action@v1
+        with:
+          args: "check --fix  ./pyproject.toml"

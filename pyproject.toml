@@ -80,6 +80,7 @@ exclude = [
   ".github",
   ".git",
   ".vscode",
+  ".venv",
   "docs",
   "src",
 ]

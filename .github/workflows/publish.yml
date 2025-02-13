@@ -127,7 +127,7 @@ jobs:
         id: github-release
         uses: release-drafter/release-drafter@v6
         with:
-          config-name: release-drafter-python.yml
+          config-name: release-drafter.yml
           name: pyref ${{ steps.version.outputs.version }}
           tag: v${{ steps.version.outputs.version }}
           version: ${{ steps.version.outputs.version }}

@@ -1,3 +1,9 @@
+## v0.6.2 (2025-02-13)
+
+### Fix
+
+- **fitting**: added df - refnx.ReflectDataset converter
+
 ## v0.6.1 (2025-02-13)
 
 ### Fix

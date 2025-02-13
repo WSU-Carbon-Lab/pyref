@@ -54,8 +54,8 @@ class PXR_ReflectModel:
     def __init__(
         self,
         structure,
-        energy=None,
-        pol="s",
+        energy: float | None = None,
+        pol: Literal["s", "p", "sp", "ps"] = "s",
         name="",
         *,
         scale=1,
@@ -78,6 +78,7 @@ class PXR_ReflectModel:
         self._bkg = possibly_create_parameter(bkg, name="bkg")
         # New model parameter q_offset : 10/21/2021
         self._q_offset = possibly_create_parameter(q_offset, name="q_offset")
+        self._theta_offset = possibly_create_parameter(0, name="theta_offset")
 
         # New model parameter en_offset : 10/21/2021
         self._en_offset = possibly_create_parameter(en_offset, name="en_offset")
@@ -187,6 +188,19 @@ class PXR_ReflectModel:
     @q_offset.setter
     def q_offset(self, value):
         self._q_offset.value = value
+
+    @property
+    def theta_offset(self):
+        r"""
+        :class:`refnx.analysis.Parameter`.
+
+          - offset in q-vector due to experimental error
+        """
+        return self._theta_offset
+
+    @theta_offset.setter
+    def theta_offset(self, value):
+        self._theta_offset.value = value
 
     @property
     def en_offset(self):
@@ -389,6 +403,7 @@ def PXR_reflectivity(
     scale: float = 1.0,
     bkg: float = 0.0,
     dq: float = 0.0,
+    theta_offset: float = 0.0,
     backend: Literal["uni", "bi"] = "uni",
 ):
     r"""
@@ -485,9 +500,13 @@ def PXR_reflectivity(
     # constant dq/q smearing
     if isinstance(dq, numbers.Real) and float(dq) == 0:
         if backend == "uni":
-            refl, tran, *components = uniaxial_reflectivity(q, slabs, tensor, energy)
+            refl, tran, *components = uniaxial_reflectivity(
+                q, slabs, tensor, energy, theta_offset
+            )
         else:
-            refl, tran, *components = uniaxial_reflectivity(q, slabs, tensor, energy)
+            refl, tran, *components = uniaxial_reflectivity(
+                q, slabs, tensor, energy, phi, theta_offset
+            )
         return (scale * refl + bkg), tran, components
 
     elif isinstance(dq, numbers.Real):

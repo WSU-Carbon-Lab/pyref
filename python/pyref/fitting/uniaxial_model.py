@@ -43,7 +43,7 @@ ep0 = 1.0 / (c**2 * mu0)
 TINY = np.finfo(float).eps
 
 
-def uniaxial_reflectivity(q, layers, tensor, energy):
+def uniaxial_reflectivity(q, layers, tensor, energy, theta_offset=0.0):
     """
     EMpy implementation of the uniaxial 4x4 matrix formalism.
 
@@ -111,7 +111,7 @@ def uniaxial_reflectivity(q, layers, tensor, energy):
 
     # freq = 2*np.pi * c/wls #Angular frequency
     theta_exp = np.zeros(numpnts, dtype=float)
-    theta_exp = np.pi / 2 - np.arcsin((flatq[:] / (2 * k0)).clip(-1, 1))
+    theta_exp = np.pi / 2 - np.arcsin((flatq[:] / (2 * k0)).clip(-1, 1)) + theta_offset
 
     ##Generate arrays of data for calculating transfer matrix
     ##Scalar values ~~

@@ -1,84 +1,151 @@
-name: Build and Publish
+name: Release Python
+
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Dry run
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.9'
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  format:
-    name: Format
+  create-sdist:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Ruff Format
-        uses: chartboost/ruff-action@v1
-        with:
-          args: "format ./pyproject.toml"
-
-  build-wheels:
-    needs: format
-    name: Build wheels on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
-        include:
-          - os: ubuntu-latest
-            platform: manylinux_x86_64
-          - os: ubuntu-latest
-            platform: musllinux_x86_64
-          - os: macos-latest
-            platform: macosx_x86_64
-          - os: macos-latest
-            platform: macosx_arm64
-          - os: windows-latest
-            platform: win_amd64
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build wheels
+      - name: Create source distribution
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform }}
-          args: --release --strip --compatibility manylinux_2_28_x86_64
-          sccache: true
+          command: sdist
+          args: >
+            --manifest-path ./Cargo.toml
+            --out dist
+          maturin-version: 1.7.4
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  build-wheels:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        architecture: [x86_64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: >
+            --release
+            --manifest-path ./Cargo.toml
+            --out dist
           manylinux: auto
+          maturin-version: 1.7.4
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.python-version }}
-          path: target/wheels/*.whl
-          retention-days: 5
+          name: wheel-${{ matrix.os }}
+          path: dist/*.whl
 
-  publish:
-    needs: build-wheels
+  publish-to-pypi:
+    needs: [create-sdist, build-wheels]
+    environment:
+      name: release-python
+      url: https://pypi.org/project/pyref
     runs-on: ubuntu-latest
-    if: startsWith(github.event.head_commit.message, 'bump:')
+    permissions:
+      id-token: write
 
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: wheels-*
           merge-multiple: true
 
       - name: Publish to PyPI
+        if: inputs.dry-run == false
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_TOKEN }}
-          skip-existing: true
+          verbose: true
+
+  publish-to-github:
+    needs: [create-sdist, build-wheels]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' Cargo.toml)
+          if [[ "$VERSION" == *"-"* ]]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub release
+        id: github-release
+        uses: release-drafter/release-drafter@v6
+        with:
+          name: PyRef ${{ steps.version.outputs.version }}
+          tag: v${{ steps.version.outputs.version }}
+          version: ${{ steps.version.outputs.version }}
+          prerelease: ${{ steps.version.outputs.is_prerelease }}
+          commitish: ${{ github.sha }}
+          disable-autolabeler: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts to GitHub release
+        if: inputs.dry-run == false
+        run: gh release upload $TAG $FILES --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.github-release.outputs.tag_name }}
+          FILES: dist/*
+
+      - name: Publish GitHub release
+        if: inputs.dry-run == false
+        run: gh release edit $TAG --draft=false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.github-release.outputs.tag_name }}

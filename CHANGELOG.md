@@ -1,3 +1,9 @@
+## v0.6.1 (2025-02-13)
+
+### Fix
+
+- **fitting**: added back fitter classes
+
 ## v0.6.0 (2025-02-13)
 
 ### Feat

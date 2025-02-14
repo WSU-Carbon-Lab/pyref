@@ -848,7 +848,7 @@ class MaterialSLD(Scatterer):
         if density is None:
             density = compound_density(formula)
         self.density = possibly_create_parameter(
-            density, name="{name}_rho", vary=True, bounds=(0, None)
+            density, name=f"{name}_rho", vary=True, bounds=(0, 5 * density)
         )
 
         self._energy = energy  # Store in eV for user interface
@@ -1030,10 +1030,10 @@ class NexafsSLD(Scatterer):
 
         # =========/ Core Parameters /=========
         self.density = possibly_create_parameter(
-            density, name=f"{name}_density", bounds=(0, None), vary=True
+            density, name=f"{name}_density", bounds=(0, 5 * density), vary=True
         )
         self.rotation = possibly_create_parameter(
-            rotation, name=f"{name}_rotation", vary=True
+            rotation, name=f"{name}_rotation", vary=True, bounds=(-np.pi, np.pi)
         )
 
         # =================/ Get optical constants for initial energy /================
@@ -1057,12 +1057,24 @@ class NexafsSLD(Scatterer):
         n = self._initial_tensor
 
         # =========/ Create Parameters /=========
-        self.xx = Parameter(n[0, 0].real, name=f"{name}_xx", vary=True)
-        self.ixx = Parameter(n[0, 0].imag, name=f"{name}_ixx", vary=True)
-        self.yy = Parameter(n[0, 0].real, name=f"{name}_yy", vary=True)
-        self.iyy = Parameter(n[0, 0].imag, name=f"{name}_iyy", vary=True)
-        self.zz = Parameter(n[1, 1].real, name=f"{name}_zz", vary=True)
-        self.izz = Parameter(n[1, 1].imag, name=f"{name}_izz", vary=True)
+        self.xx = Parameter(
+            n[0, 0].real, name=f"{name}_xx", vary=True, bounds=(-0.02, 0.02)
+        )
+        self.ixx = Parameter(
+            n[0, 0].imag, name=f"{name}_ixx", vary=True, bounds=(0, 0.02)
+        )
+        self.yy = Parameter(
+            n[0, 0].real, name=f"{name}_yy", vary=True, bounds=(-0.02, 0.02)
+        )
+        self.iyy = Parameter(
+            n[0, 0].imag, name=f"{name}_iyy", vary=True, bounds=(0, 0.02)
+        )
+        self.zz = Parameter(
+            n[1, 1].real, name=f"{name}_zz", vary=True, bounds=(-0.02, 0.02)
+        )
+        self.izz = Parameter(
+            n[1, 1].imag, name=f"{name}_izz", vary=True, bounds=(0, 0.02)
+        )
 
         self.delta = Parameter((2 * n_xx + n_zz) / 3, name=f"{name}_diso", vary=True)
         self.beta = Parameter((2 * n_ixx + n_izz) / 3, name=f"{name}_biso", vary=True)
@@ -1187,7 +1199,9 @@ class NexafsSLD(Scatterer):
                 # Constrain to match sign of predicted birefringence
                 # Set bounds
                 self.birefringence.bounds = (
-                    (-np.inf, 0) if self._initial_biref < 0 else (0, np.inf)
+                    (5 * self._initial_birefr, 0)
+                    if self._initial_biref < 0
+                    else (0, 5 * self._initial_biref)
                 )
                 # ensure density and rotation are fixed to reduce parameter space
                 self.density.setp(value=1, vary=False)
@@ -1211,7 +1225,9 @@ class NexafsSLD(Scatterer):
                 # Constrain to match sign of predicted dichroism
                 # Set bounds
                 self.dichroism.bounds = (
-                    (-np.inf, 0) if self._initial_dichro < 0 else (0, np.inf)
+                    (5 * self._initial_dichro, 0)
+                    if self._initial_dichro < 0
+                    else (0, 5 * self._initial_dichro)
                 )
                 # ensure density and rotation are fixed to reduce parameter space
                 self.density.setp(value=1, vary=False)
@@ -1219,7 +1235,7 @@ class NexafsSLD(Scatterer):
 
             case "all":
                 # constrain to match the optical model after rotation and density
-                self.density.bounds = (0, None)
+                self.density.bounds = (0, 10 * self.density.value)
                 self.rotation.bounds = (-np.pi, np.pi)
                 # ensure components are fixed
                 self.xx.value = False

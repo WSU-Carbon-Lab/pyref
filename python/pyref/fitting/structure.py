@@ -590,7 +590,10 @@ class Scatterer:
         >>> slab = molecule(10, 3)
 
         """
-        return Slab(thick, self, rough, name=self.name)
+        slab = Slab(thick, self, rough, name=self.name)
+        slab.thick.setp(vary=True, bounds=(0, 2 * thick))
+        slab.rough.setp(vary=True, bounds=(0, 2 * rough))
+        return slab
 
     def __or__(self, other):
         """Combine scatterers."""
@@ -1012,7 +1015,9 @@ class NexafsSLD(Scatterer):
         symmetry: Literal["uni",] = "uni",
         rotation=0,
         density=1.0,
-        optical_constraints: Literal["none", "biref", "dicrho", "all"] = "none",
+        optical_constraints: Literal[
+            "none", "biref", "dicrho", "biref-lite", "dichro-lite", "all"
+        ] = "none",
         energy=250.0,
         name="",
     ):
@@ -1198,12 +1203,22 @@ class NexafsSLD(Scatterer):
             case "biref-lite":
                 # Constrain to match sign of predicted birefringence
                 # Set bounds
-                self.birefringence.bounds = (
-                    (5 * self._initial_birefr, 0)
-                    if self._initial_birefr < 0
-                    else (0, 5 * self._initial_birefr)
+                self.xx.bounds = (
+                    (self.zz.value, 0.02)
+                    if self._initial_birefr >= 0
+                    else (
+                        -0.02,
+                        self.zz.value,
+                    )
                 )
-                # ensure density and rotation are fixed to reduce parameter space
+                self.zz.bounds = (
+                    (self.xx.value, 0.02)
+                    if self._initial_birefr <= 0
+                    else (
+                        -0.02,
+                        self.xx.value,
+                    )
+                )
                 self.density.setp(value=1, vary=False)
                 self.rotation.setp(value=0, vary=False)
 
@@ -1224,12 +1239,22 @@ class NexafsSLD(Scatterer):
             case "dichro-lite":
                 # Constrain to match sign of predicted dichroism
                 # Set bounds
-                self.dichroism.bounds = (
-                    (5 * self._initial_dichro, 0)
-                    if self._initial_dichro < 0
-                    else (0, 5 * self._initial_dichro)
+                self.ixx.bounds = (
+                    (self.izz.value, 0.02)
+                    if self._initial_dichro >= 0
+                    else (
+                        -0.02,
+                        self.izz.value,
+                    )
                 )
-                # ensure density and rotation are fixed to reduce parameter space
+                self.izz.bounds = (
+                    (self.ixx.value, 0.02)
+                    if self._initial_dichro <= 0
+                    else (
+                        -0.02,
+                        self.ixx.value,
+                    )
+                )
                 self.density.setp(value=1, vary=False)
                 self.rotation.setp(value=0, vary=False)
 
@@ -1986,21 +2011,21 @@ henke_densities = [
 
 
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt
     import pandas as pd
 
     ooc = pd.read_csv("/home/hduva/projects/pyref/optical_constants.csv")
-    si = MaterialSLD("Si")(0, 1.5)
+    si = MaterialSLD("Si", name="Si")(0, 1.5)
     znpc_slab = NexafsSLD(
         ooc,
         symmetry="uni",
         rotation=90,
         density=1.45,
-        optical_constraints="none",
+        optical_constraints="biref-lite",
         energy=283.7,
+        name="ZnPC",
     )(196.441, 7.216)
-    vac = MaterialSLD("", density=None)(0, 0)
+    vac = MaterialSLD("", density=None, name="Vac")(0, 0)
 
     struct = vac | znpc_slab | si
-    struct.plot()
-    plt.show()
+    struct.name = "ZnPC/Si"
+    print(struct.parameters)

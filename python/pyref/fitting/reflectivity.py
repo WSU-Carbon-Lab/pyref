@@ -122,7 +122,7 @@ class ReflectModel:
         return (
             "ReflectModel({_structure!r}, name={name!r},"
             " scale={_scale!r}, bkg={_bkg!r},"
-            " dq={_dq!r}, threads={threads},"
+            " dq={_dq!r}"
             " quad_order={quad_order}),"
             " q_offset={_q_offset!r}".format(**self.__dict__)
         )

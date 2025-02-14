@@ -72,7 +72,6 @@ class Fitter:
             steps,
             random_state=seed,
             nthin=thin,
-            skip_initial_state_check=True,
             nburn=burn,
         )
 

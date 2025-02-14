@@ -1200,8 +1200,8 @@ class NexafsSLD(Scatterer):
                 # Set bounds
                 self.birefringence.bounds = (
                     (5 * self._initial_birefr, 0)
-                    if self._initial_biref < 0
-                    else (0, 5 * self._initial_biref)
+                    if self._initial_bireff < 0
+                    else (0, 5 * self._initial_bireff)
                 )
                 # ensure density and rotation are fixed to reduce parameter space
                 self.density.setp(value=1, vary=False)

@@ -847,7 +847,9 @@ class MaterialSLD(Scatterer):
         self._compound = formula  # Keep a reference of the str object
         if density is None:
             density = compound_density(formula)
-        self.density = possibly_create_parameter(density, name="{name}_rho")
+        self.density = possibly_create_parameter(
+            density, name="{name}_rho", vary=True, bounds=(0, None)
+        )
 
         self._energy = energy  # Store in eV for user interface
         self._wavelength = (
@@ -1028,9 +1030,11 @@ class NexafsSLD(Scatterer):
 
         # =========/ Core Parameters /=========
         self.density = possibly_create_parameter(
-            density, name=f"{name}_density", bounds=(0, None)
+            density, name=f"{name}_density", bounds=(0, None), vary=True
         )
-        self.rotation = possibly_create_parameter(rotation, name=f"{name}_rotation")
+        self.rotation = possibly_create_parameter(
+            rotation, name=f"{name}_rotation", vary=True
+        )
 
         # =================/ Get optical constants for initial energy /================
         # Get initial optical constants from dataframe
@@ -1053,19 +1057,23 @@ class NexafsSLD(Scatterer):
         n = self._initial_tensor
 
         # =========/ Create Parameters /=========
-        self.xx = Parameter(n[0, 0].real, name=f"{name}_xx")
-        self.ixx = Parameter(n[0, 0].imag, name=f"{name}_ixx")
-        self.yy = Parameter(n[0, 0].real, name=f"{name}_yy")
-        self.iyy = Parameter(n[0, 0].imag, name=f"{name}_iyy")
-        self.zz = Parameter(n[1, 1].real, name=f"{name}_zz")
-        self.izz = Parameter(n[1, 1].imag, name=f"{name}_izz")
+        self.xx = Parameter(n[0, 0].real, name=f"{name}_xx", vary=True)
+        self.ixx = Parameter(n[0, 0].imag, name=f"{name}_ixx", vary=True)
+        self.yy = Parameter(n[0, 0].real, name=f"{name}_yy", vary=True)
+        self.iyy = Parameter(n[0, 0].imag, name=f"{name}_iyy", vary=True)
+        self.zz = Parameter(n[1, 1].real, name=f"{name}_zz", vary=True)
+        self.izz = Parameter(n[1, 1].imag, name=f"{name}_izz", vary=True)
 
-        self.delta = Parameter((2 * n_xx + n_zz) / 3, name=f"{name}_diso")
-        self.beta = Parameter((2 * n_ixx + n_izz) / 3, name=f"{name}_biso")
+        self.delta = Parameter((2 * n_xx + n_zz) / 3, name=f"{name}_diso", vary=True)
+        self.beta = Parameter((2 * n_ixx + n_izz) / 3, name=f"{name}_biso", vary=True)
 
         # birefringence/dichroism parameters
-        self.birefringence = Parameter(self._initial_birefr, name=f"{name}_biref")
-        self.dichroism = Parameter(self._initial_dichro, name=f"{name}_dichro")
+        self.birefringence = Parameter(
+            self._initial_birefr, name=f"{name}_biref", vary=True
+        )
+        self.dichroism = Parameter(
+            self._initial_dichro, name=f"{name}_dichro", vary=True
+        )
 
         # Add parameters to parameter set
         self._parameters.extend(

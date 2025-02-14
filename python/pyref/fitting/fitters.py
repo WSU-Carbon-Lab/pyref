@@ -55,7 +55,7 @@ class Fitter:
 
     def fit(
         self,
-        steps_per_param: int = 1000,
+        steps_per_param: int = 10,
         thin: int = 1,
         seed: int = 1,
         init: Literal["jitter", "prior"] = "jitter",
@@ -64,7 +64,6 @@ class Fitter:
     ):
         """Fit the reflectometry data."""
         steps = steps_per_param * self.n_params
-        burn = int(steps * self.burn_in)
 
         print(f"Reduced χ2 = {self.red_chisqr}")
         self.fitter.initialise(init, random_state=seed)
@@ -72,7 +71,6 @@ class Fitter:
             steps,
             random_state=seed,
             nthin=thin,
-            nburn=burn,
         )
 
         if show_output:
@@ -89,12 +87,9 @@ class Fitter:
         fig.show()
 
         # Plot residuals and model structure
-        self.obj.plot(resid=True)
+        self.obj.plot()
         plt.show()
         self.obj.model.structure.plot()
-
-        # Export results
-        self.export(f"{self.en}.pkl")
 
     def export(self, filename: str | None = None):
         """Export the fitter object to a pickle file."""

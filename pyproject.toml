@@ -135,7 +135,7 @@ version_provider = "pep621"
 version_scheme = "pep440"
 
 [tool.uv.sources]
-refnx = { git = "https://github.com/HarlanHeilman/refnx/" }
+refnx = { git = "https://github.com/HarlanHeilman/refnx" }
 
 [dependency-groups]
 dev = [

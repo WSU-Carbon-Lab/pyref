@@ -58,11 +58,14 @@ class ReflectModel:
         pol: Literal["s", "p", "sp", "ps"] = "s",
         name="",
         *,
-        scale=1,
+        scale_s=1,
+        scale_p=1,
         bkg=0,
         dq=0.0,
         q_offset=0.0,
         en_offset=0.0,
+        theta_offset_s=0.0,
+        theta_offset_p=0.0,
         phi=0,
         backend="uni",
     ):
@@ -74,9 +77,10 @@ class ReflectModel:
         self._pol = pol  # Output polarization
 
         # all reflectometry models have an optional scale factor and background
-        self._scale = possibly_create_parameter(scale, name="scale")
+        self._scale_s = possibly_create_parameter(scale_s, name="scale_s")
+        self._scale_p = possibly_create_parameter(scale_p, name="scale_p")
+
         self._bkg = possibly_create_parameter(bkg, name="bkg")
-        # New model parameter q_offset : 10/21/2021
         self._q_offset = possibly_create_parameter(q_offset, name="q_offset")
         self._theta_offset = possibly_create_parameter(0, name="theta_offset")
 
@@ -86,6 +90,14 @@ class ReflectModel:
         # we can optimize the resolution (but this is always overridden by
         # x_err if supplied. There is therefore possibly no dependence on it.
         self._dq = possibly_create_parameter(dq, name="dq - resolution")
+
+        # New model parameters for theta_offset
+        self._theta_offset_s = possibly_create_parameter(
+            theta_offset_s, name="theta_offset_s"
+        )
+        self._theta_offset_p = possibly_create_parameter(
+            theta_offset_p, name="theta_offset_p"
+        )
 
         self._structure = None
         self.structure = structure
@@ -148,7 +160,7 @@ class ReflectModel:
         self._dq.value = value
 
     @property
-    def scale(self):
+    def scale_s(self):
         r"""
 
         :class:`refnx.analysis.Parameter`.
@@ -157,11 +169,27 @@ class ReflectModel:
           added.
 
         """
-        return self._scale
+        return self._scale_s
 
-    @scale.setter
-    def scale(self, value):
-        self._scale.value = value
+    @scale_s.setter
+    def scale_s(self, value):
+        self._scale_s.value = value
+
+    @property
+    def scale_p(self):
+        r"""
+
+        :class:`refnx.analysis.Parameter`.
+
+          - all model values are multiplied by this value before the background is
+          added.
+
+        """
+        return self._scale_p
+
+    @scale_p.setter
+    def scale_p(self, value):
+        self._scale_p.value = value
 
     @property
     def bkg(self):
@@ -190,17 +218,30 @@ class ReflectModel:
         self._q_offset.value = value
 
     @property
-    def theta_offset(self):
+    def theta_offset_s(self):
         r"""
         :class:`refnx.analysis.Parameter`.
 
-          - offset in q-vector due to experimental error
+          - offset in theta for s-polarization due to experimental error
         """
-        return self._theta_offset
+        return self._theta_offset_s
 
-    @theta_offset.setter
-    def theta_offset(self, value):
-        self._theta_offset.value = value
+    @theta_offset_s.setter
+    def theta_offset_s(self, value):
+        self._theta_offset_s.value = value
+
+    @property
+    def theta_offset_p(self):
+        r"""
+        :class:`refnx.analysis.Parameter`.
+
+          - offset in theta for p-polarization due to experimental error
+        """
+        return self._theta_offset_p
+
+    @theta_offset_p.setter
+    def theta_offset_p(self, value):
+        self._theta_offset_p.value = value
 
     @property
     def en_offset(self):
@@ -314,7 +355,33 @@ class ReflectModel:
                 concat_loc + 50
             )  # 50 more points to make sure the interpolation works
             qvals = np.linspace(np.min(x), np.max(x), num_q)
+
+            # Convert q to theta for offset application
+            theta_s = (
+                np.arcsin(qvals_1 * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
+            )
+            theta_p = (
+                np.arcsin(qvals_2 * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
+            )
+
+            # Apply offsets
+            theta_s += self.theta_offset_s.value
+            theta_p += self.theta_offset_p.value
+
+            # Convert back to q
+            qvals_1 = 4 * np.pi * self.energy * np.sin(theta_s * np.pi / 180) / 12398.42
+            qvals_2 = 4 * np.pi * self.energy * np.sin(theta_p * np.pi / 180) / 12398.42
+            # For single polarization, apply appropriate offset
+        elif self.pol == "s":
+            theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
+            theta += self.theta_offset_s.value
+            qvals = 4 * np.pi * self.energy * np.sin(theta * np.pi / 180) / 12398.42
+        elif self.pol == "p":
+            theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
+            theta += self.theta_offset_p.value
+            qvals = 4 * np.pi * self.energy * np.sin(theta * np.pi / 180) / 12398.42
         else:
+            qvals = x
             qvals = x
 
         refl, tran, *components = reflectivity(
@@ -323,7 +390,8 @@ class ReflectModel:
             self.structure.tensor(energy=self.energy),
             self.energy,
             self.phi,
-            scale=self.scale.value,
+            scale_s=self.scale_s.value,
+            scale_p=self.scale_p.value,
             bkg=self.bkg.value,
             dq=x_err,
             backend=self.backend,
@@ -378,7 +446,18 @@ class ReflectModel:
     def structure(self, structure):
         self._structure = structure
         p = Parameters(name="instrument parameters")
-        p.extend([self.scale, self.bkg, self.dq, self.q_offset, self.en_offset])
+        p.extend(
+            [
+                self.scale_s,
+                self.scale_p,
+                self.bkg,
+                self.dq,
+                self.q_offset,
+                self.en_offset,
+                self.theta_offset_s,
+                self.theta_offset_p,
+            ]
+        )
 
         self._parameters = Parameters(name=self.name)
         self._parameters.extend([p, structure.parameters])
@@ -400,7 +479,8 @@ def reflectivity(
     tensor: np.ndarray,
     energy: float = 250.0,
     phi: float = 0,
-    scale: float = 1.0,
+    scale_s: float = 1.0,
+    scale_p: float = 1.0,
     bkg: float = 0.0,
     dq: float = 0.0,
     theta_offset: float = 0.0,
@@ -498,24 +578,28 @@ def reflectivity(
     ```
     """
     # constant dq/q smearing
-    if isinstance(dq, numbers.Real) and float(dq) == 0:
-        if backend == "uni":
-            refl, tran, *components = uniaxial_reflectivity(
-                q, slabs, tensor, energy, theta_offset
-            )
+    if isinstance(dq, numbers.Real):
+        if float(dq) == 0:
+            if backend == "uni":
+                refl, tran, *components = uniaxial_reflectivity(
+                    q, slabs, tensor, energy
+                )
+            else:
+                refl, tran, *components = uniaxial_reflectivity(
+                    q, slabs, tensor, energy, phi
+                )
+            # Scale s and p polarizations separately
+            refl[:, 0, 0] = scale_s * refl[:, 0, 0]
+            refl[:, 1, 1] = scale_p * refl[:, 1, 1]
+            return (refl + bkg), tran, components
         else:
-            refl, tran, *components = uniaxial_reflectivity(
-                q, slabs, tensor, energy, phi, theta_offset
+            smear_refl, smear_tran, *components = _smeared_reflectivity(
+                q, slabs, tensor, energy, phi, dq, backend=backend
             )
-        return (scale * refl + bkg), tran, components
-
-    elif isinstance(dq, numbers.Real):
-        dq = float(dq)
-        smear_refl, smear_tran, *components = _smeared_reflectivity(
-            q, slabs, tensor, energy, phi, dq, backend=backend
-        )
-
-        return [(scale * smear_refl + bkg), smear_tran, components]
+            # Scale s and p polarizations separately
+            smear_refl[:, 0, 0] = scale_s * smear_refl[:, 0, 0]
+            smear_refl[:, 1, 1] = scale_p * smear_refl[:, 1, 1]
+            return (smear_refl + bkg), smear_tran, components
 
     return None
 

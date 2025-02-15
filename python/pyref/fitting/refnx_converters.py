@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 from refnx.dataset import ReflectDataset
 
 if TYPE_CHECKING:
@@ -21,7 +22,10 @@ def to_reflect_dataset(
     for _, g in df.group_by(gb_energy):
         Q = g["Q"].to_numpy()
         R = g["r"].to_numpy()
+        # Calculate initial dR
         dR = 0.15 * R + 0.5e-6 * Q
+        # Ensure dR doesn't exceed 90% of R to keep R-dR positive
+        dR = np.minimum(dR, 0.9 * R)
         ds = ReflectDataset(data=(Q, R, dR))
         datasets.append(ds)
     if len(datasets) == 1:

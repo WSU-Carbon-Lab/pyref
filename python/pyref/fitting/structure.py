@@ -1012,7 +1012,7 @@ class NexafsSLD(Scatterer):
     def __init__(
         self,
         ooc: pd.DataFrame,
-        symmetry: Literal["uni",] = "uni",
+        symmetry: Literal["iso", "uni", "bi"] = "uni",
         rotation=0,
         density=1.0,
         optical_constraints: Literal[
@@ -1027,13 +1027,12 @@ class NexafsSLD(Scatterer):
             missing = [col for col in required_columns if col not in ooc.columns]
             e = f"Optical constants dataframe missing required columns: {missing}"
             raise ValueError(e)
+
         # =================/ Initialize /================
         self._parameters = Parameters(name=name)
-
-        # =========/ Get the Optical Constants /=========
         super().__init__(name=name)
 
-        # =========/ Core Parameters /=========
+        # ============/ Isotropic Parameters /===========
         self.density = possibly_create_parameter(
             density, name=f"{name}_density", bounds=(0, 5 * density), vary=True
         )
@@ -1041,8 +1040,7 @@ class NexafsSLD(Scatterer):
             rotation, name=f"{name}_rotation", vary=True, bounds=(-np.pi, np.pi)
         )
 
-        # =================/ Get optical constants for initial energy /================
-        # Get initial optical constants from dataframe
+        # ==/ Get optical constants for initial energy /==
         if energy in ooc["energy"].values:
             n_xx = np.array(ooc.loc[ooc["energy"] == energy]["n_xx"])
             n_ixx = np.array(ooc.loc[ooc["energy"] == energy]["n_ixx"])
@@ -1055,13 +1053,18 @@ class NexafsSLD(Scatterer):
             n_ixx = np.interp(energy, ooc["energy"], ooc["n_ixx"])
             n_zz = np.interp(energy, ooc["energy"], ooc["n_zz"])
             n_izz = np.interp(energy, ooc["energy"], ooc["n_izz"])
+
         # Store initial optical constants
         self._initial_tensor = np.diag([n_xx + n_ixx * 1j, n_zz + n_izz * 1j])
-        self._initial_birefr = n_xx - n_zz
-        self._initial_dichro = n_ixx - n_izz
+        self._initial_birefringence = n_xx - n_zz
+        self._initial_dichroism = n_ixx - n_izz
         n = self._initial_tensor
 
-        # =========/ Create Parameters /=========
+        # =========/ Create Tensor Parameters /=========================================
+        # Imaginary components must be positive to converve energy, and real components
+        # must be within a reasonable bounds of zero. They cannot be sharp, or go to
+        # infinity, so we set bounds to be reasonable.
+
         self.xx = Parameter(
             n[0, 0].real, name=f"{name}_xx", vary=True, bounds=(-0.02, 0.02)
         )
@@ -1081,39 +1084,48 @@ class NexafsSLD(Scatterer):
             n[1, 1].imag, name=f"{name}_izz", vary=True, bounds=(0, 0.02)
         )
 
-        self.delta = Parameter((2 * n_xx + n_zz) / 3, name=f"{name}_diso", vary=True)
-        self.beta = Parameter((2 * n_ixx + n_izz) / 3, name=f"{name}_biso", vary=True)
+        # =======================/ Isotropic Parameters /=========================
+        # these are not varied, but constrained to be computed from the tensor trace
+        # for now the tensor is constrained to be uniaxial
+        self.delta = Parameter((2 * n_xx + n_zz) / 3, name=f"{name}_diso")
+        self.beta = Parameter((2 * n_ixx + n_izz) / 3, name=f"{name}_biso")
 
-        # birefringence/dichroism parameters
+        # =======================/ Birefringence and Dichroism /=======================
+        # these parameters are also constrained to not vary, but to be computed from the
+        # tensor components.
         self.birefringence = Parameter(
-            self._initial_birefr, name=f"{name}_biref", vary=True
+            (self.xx - self.zz),
+            name=f"{name}_bire",
+            vary=None,
+            constraint=(self.xx - self.zz),
         )
         self.dichroism = Parameter(
-            self._initial_dichro, name=f"{name}_dichro", vary=True
-        )
-
-        # Add parameters to parameter set
-        self._parameters.extend(
-            [
-                self.density,
-                self.rotation,
-                self.delta,
-                self.beta,
-                self.xx,
-                self.ixx,
-                self.yy,
-                self.iyy,
-                self.zz,
-                self.izz,
-                self.birefringence,
-                self.dichroism,
-            ]
+            (self.ixx - self.izz),
+            name=f"{name}_dichro",
+            vary=None,
+            constraint=(self.ixx - self.izz),
         )
 
         # Set symmetry and optical constraints
         self._optical_constraints = None
-        self.symmetry = symmetry
+        self._symmetry = None
         self.optical_constraints = optical_constraints
+        self.symmetry = symmetry
+
+        # Add parameters to parameter set
+        self._parameters.extend(
+            [
+                Parameters(
+                    [self.density, self.rotation, self.delta, self.beta],
+                    name=f"{name}_iso",
+                ),
+                Parameters(
+                    [self.xx, self.ixx, self.zz, self.izz, self.yy, self.iyy],
+                    name=f"{name}_tensor",
+                ),
+                Parameters([self.birefringence, self.dichroism], name=f"{name}_aux"),
+            ]
+        )
 
     def __complex__(self):
         """Complex representation of the scatterer."""
@@ -1152,13 +1164,19 @@ class NexafsSLD(Scatterer):
         self._symmetry = symmetry
         match self._symmetry:
             case "iso":
-                self.yy.setp(self.xx, vary=None, constraint=self.xx)
-                self.iyy.setp(self.ixx, vary=None, constraint=self.ixx)
-                self.zz.setp(self.xx, vary=None, constraint=self.xx)
-                self.izz.setp(self.ixx, vary=None, constraint=self.ixx)
+                self.delta.setp(self.delta.value, vary=True, bounds=(-0.02, 0.02))
+                self.beta.setp(self.beta.value, vary=True, bounds=(0, 0.02))
+                self.xx.setp(self.delta.value, vary=None, constraint=self.delta)
+                self.ixx.setp(self.beta.value, vary=None, constraint=self.beta)
+                self.yy.setp(self.delta.value, vary=None, constraint=self.delta)
+                self.iyy.setp(self.beta.value, vary=None, constraint=self.beta)
+                self.zz.setp(self.delta.value, vary=None, constraint=self.delta)
+                self.izz.setp(self.beta.value, vary=None, constraint=self.beta)
+
             case "uni":
                 self.yy.setp(self.xx, vary=None, constraint=self.xx)
                 self.iyy.setp(self.ixx, vary=None, constraint=self.ixx)
+
             case "bi":
                 self.xx.setp(self.xx, vary=None, constraint=None)
                 self.ixx.setp(self.ixx, vary=None, constraint=None)
@@ -1176,27 +1194,28 @@ class NexafsSLD(Scatterer):
     def optical_constraints(self, value):
         """Update optical constraints."""
         self._optical_constraints = value
+        if self._symmetry == "iso":
+            return None
         match value:
             case "none":
-                # No constraints - tensor free to vary with symmetry constraints
-                # Reset any existing constraints
-                self.xx.setp(self.xx, constraint=None)
-                self.ixx.setp(self.ixx, constraint=None)
-                self.zz.setp(self.zz, constraint=None)
-                self.izz.setp(self.izz, constraint=None)
-                # ensure density and rotation are fixed to reduce parameter space
+                # No constraints - tensor components are free to vary with no
+                # restrictions outside of symmetry constraints.
+                # ensure density and rotation are fixed to prevent overfitting
                 self.density.setp(value=1, vary=False)
                 self.rotation.setp(value=0, vary=False)
 
             case "biref":
-                # Constrain to match sign of predicted birefringence
-                # Set constraints to match initial birefringence
-                self.birefringence.constraint = self._initial_biref
-                self.dichroism.constraint = None
-                self.xx.setp(
-                    self.zz, vary=None, constraint=(self.xx.value + self._initial_biref)
+                # Birefringence constraint - birefringence is fixed to match the
+                # intial optical model, the other components are free to vary. XX
+                # optical constants vary freely, but zz are constrained.
+                self.birefringence.constraint = self._initial_birefringence
+                self.zz.setp(
+                    self.zz,
+                    vary=None,
+                    constraint=(self.xx - self._initial_birefringence),
                 )
-                # ensure density and rotation are fixed to reduce parameter space
+
+                # ensure density and rotation are fixed to prevent overfitting
                 self.density.setp(value=1, vary=False)
                 self.rotation.setp(value=0, vary=False)
 
@@ -1205,7 +1224,7 @@ class NexafsSLD(Scatterer):
                 # Set bounds
                 self.xx.bounds = (
                     (self.zz.value, 0.02)
-                    if self._initial_birefr >= 0
+                    if self._initial_birefringence >= 0
                     else (
                         -0.02,
                         self.zz.value,
@@ -1213,26 +1232,28 @@ class NexafsSLD(Scatterer):
                 )
                 self.zz.bounds = (
                     (self.xx.value, 0.02)
-                    if self._initial_birefr <= 0
+                    if self._initial_birefringence <= 0
                     else (
                         -0.02,
                         self.xx.value,
                     )
                 )
+
+                # ensure density and rotation are fixed to prevent overfitting
                 self.density.setp(value=1, vary=False)
                 self.rotation.setp(value=0, vary=False)
 
             case "dichro":
                 # Constrain to match sign of predicted dichroism
                 # Set constraints to match initial dichroism
-                self.birefringence.constraint = None
-                self.dichroism.constraint = self._initial_dichro
-                self.ixx.setp(
+                self.dichroism.constraint = self._initial_dichroism
+                self.izz.setp(
                     self.izz,
                     vary=None,
-                    constraint=(self.ixx.value + self._initial_dichro),
+                    constraint=(self.ixx - self._initial_dichroism),
                 )
-                # ensure density and rotation are fixed to reduce parameter space
+
+                # ensure density and rotation are fixed to prevent overfitting
                 self.density.setp(value=1, vary=False)
                 self.rotation.setp(value=0, vary=False)
 
@@ -1241,7 +1262,7 @@ class NexafsSLD(Scatterer):
                 # Set bounds
                 self.ixx.bounds = (
                     (self.izz.value, 0.02)
-                    if self._initial_dichro >= 0
+                    if self._initial_dichroism >= 0
                     else (
                         -0.02,
                         self.izz.value,
@@ -1249,12 +1270,14 @@ class NexafsSLD(Scatterer):
                 )
                 self.izz.bounds = (
                     (self.ixx.value, 0.02)
-                    if self._initial_dichro <= 0
+                    if self._initial_dichroism <= 0
                     else (
                         -0.02,
                         self.ixx.value,
                     )
                 )
+
+                # ensure density and rotation are fixed to prevent overfitting
                 self.density.setp(value=1, vary=False)
                 self.rotation.setp(value=0, vary=False)
 
@@ -1262,13 +1285,14 @@ class NexafsSLD(Scatterer):
                 # constrain to match the optical model after rotation and density
                 self.density.bounds = (0, 10 * self.density.value)
                 self.rotation.bounds = (-np.pi, np.pi)
+
                 # ensure components are fixed
-                self.xx.value = False
-                self.ixx.value = False
-                self.yy.value = False
-                self.iyy.value = False
-                self.zz.value = False
-                self.izz.value = False
+                self.xx.setp(value=self.xx.value, vary=False)
+                self.ixx.setp(value=self.ixx.value, vary=False)
+                self.yy.setp(value=self.yy.value, vary=False)
+                self.iyy.setp(value=self.iyy.value, vary=False)
+                self.zz.setp(value=self.zz.value, vary=False)
+                self.izz.setp(value=self.izz.value, vary=False)
 
     @property
     def tensor(self):  #
@@ -1473,9 +1497,8 @@ class Slab(PXR_Component):
         self.rough = possibly_create_parameter(rough, name=f"{name}_rough")
 
         p = Parameters(name=self.name)
-        p.extend([self.thick])
+        p.extend([Parameters([self.thick, self.rough], name=f"{name}_slab")])
         p.extend(self.sld.parameters)
-        p.extend([self.rough])
 
         self._parameters = p
 

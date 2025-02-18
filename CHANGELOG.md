@@ -1,3 +1,16 @@
+## v0.6.3 (2025-02-17)
+
+### Fix
+
+- updated NexafsSLD to UniTensorSLD
+- fixed constraints to avoid corruption
+- proper fit constraints
+- typo
+- typo
+- constraints properly applied at instantiation
+- initial state check change
+- remove legacy skip_initial_state_check
+
 ## v0.6.2 (2025-02-13)
 
 ### Fix

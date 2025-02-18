@@ -3,10 +3,10 @@
 from refnx.analysis import CurveFitter, GlobalObjective, Objective, Transform
 from refnx.dataset import ReflectDataset
 
-from pyref.fitting.fitters import Fitter, LogpExtra, MultiEnergyFitter
+from pyref.fitting.fitters import Fitter, LogpExtra
 from pyref.fitting.reflectivity import ReflectModel
 from pyref.fitting.refnx_converters import to_reflect_dataset
-from pyref.fitting.structure import SLD, MaterialSLD, NexafsSLD
+from pyref.fitting.structure import SLD, MaterialSLD, UniTensorSLD
 
 __all__ = [
     "SLD",
@@ -15,8 +15,7 @@ __all__ = [
     "GlobalObjective",
     "LogpExtra",
     "MaterialSLD",
-    "MultiEnergyFitter",
-    "NexafsSLD",
+    "UniTensorSLD",
     "Objective",
     "ReflectDataset",
     "ReflectModel",

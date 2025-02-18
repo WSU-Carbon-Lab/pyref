@@ -33,9 +33,8 @@ class Fitter:
     def __post_init__(self):
         """Initialise the fitter object."""
         self.move = [
-            (DEMove(sigma=1e-7), 0.50),
+            (DEMove(sigma=1e-7), 0.90),
             (DEMove(sigma=1e-7, gamma0=1), 0.1),
-            (GaussianMove(1e-7), 0.4),
         ]
         self._n_walkers = self.walkers_per_param * len(self.obj.varying_parameters())
         self._init_fitter()
@@ -53,6 +52,13 @@ class Fitter:
         """Reduced chi-squared value."""
         return self.obj.chisqr() / self.n_params
 
+    @cached_property
+    def log_likelihood(self):
+        """Calculate the log-likelihood."""
+        chisqr = self.obj.chisqr()
+        # Assuming Gaussian errors, the log-likelihood is proportional to -0.5 * chisqr
+        return -0.5 * chisqr
+
     def fit(
         self,
         steps_per_param: int = 10,
@@ -65,13 +71,36 @@ class Fitter:
         """Fit the reflectometry data."""
         steps = steps_per_param * self.n_params
 
-        print(f"Reduced χ2 = {self.red_chisqr}")
         self.fitter.initialise(init, random_state=seed)
         self.chain = self.fitter.sample(
             steps,
             random_state=seed,
             nthin=thin,
         )
+
+        print(f"Reduced χ2 = {self.red_chisqr}")
+        print(f"Log-likelihood = {self.log_likelihood}")  # Add log-likelihood output
+
+        if self.red_chisqr > 1.5:
+            self.move = [
+                (DEMove(sigma=1e-7), 0.90),
+            ]
+            self._init_fitter()
+            self.chain = self.fitter.sample(
+                steps,
+                random_state=seed,
+                nthin=thin,
+            )
+        else:
+            self.move = [
+                (GaussianMove(1e-7)),
+            ]
+            self._init_fitter()
+            self.chain = self.fitter.sample(
+                steps,
+                random_state=seed,
+                nthin=thin,
+            )
 
         if show_output:
             self.show_output()
@@ -99,37 +128,6 @@ class Fitter:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         with filepath.open("wb") as f:
             pkl.dump(self, f)
-
-
-@dataclass
-class MultiEnergyFitter(Fitter):
-    """Fitter class for multiple energy reflectometry data."""
-
-    obj: list[Objective | GlobalObjective]
-    en: list[float]
-
-    def fit_obj(self, n: int, N: int = 1, fitter=None, *, reset: bool = False) -> None:
-        """Fit a single objective from the list."""
-        if fitter is None:
-            fitter = Fitter(obj=self.obj[n], en=str(self.en[n]))
-            fitter.fit(init="jitter", steps_per_param=20 * N)
-
-        if reset:
-            fitter._init_fitter()
-
-        fitter.fit(init="jitter", steps_per_param=5 * N)
-        if fitter.red_chisqr > 1 and N < 4:
-            print(f"Red χ2 = {fitter.red_chisqr}. Refitting with {N + 1}x walkers")
-            N += 2
-            self.fit_obj(n, N, fitter, reset)
-        else:
-            fitter.show_output()
-            fitter.export(f"{self.obj[n].model.name}.pkl")
-
-    def fit(self, N: int = 1) -> None:
-        """Fit all objectives in the list."""
-        for i in range(len(self.obj)):
-            self.fit_obj(i, N)
 
 
 class LogpExtra:

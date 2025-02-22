@@ -2,132 +2,153 @@
 
 from __future__ import annotations
 
-import pickle as pkl
-from dataclasses import dataclass
-from functools import cached_property
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 from refnx._lib.emcee.moves.de import DEMove
 from refnx._lib.emcee.moves.gaussian import GaussianMove
-from refnx.analysis import CurveFitter
+from refnx.analysis import Objective
 
 if TYPE_CHECKING:
-    from refnx.analysis import GlobalObjective, Objective
+    from pyref.fitting import ReflectDataset, XrayReflectDataset
 
 demove = [(DEMove(sigma=1e-7), 0.95), (DEMove(sigma=1e-7, gamma0=1), 0.05)]
 gmove = GaussianMove(1e-7)
 
 
-@dataclass
-class Fitter:
-    """Fitter class for reflectometry data."""
+class AnisotropyObjective(Objective):
+    """Objective for including an extra weight for anisotropy data."""
 
-    obj: Objective | GlobalObjective
-    en: str
-    walkers_per_param: int = 10
-    burn_in: float = 0.1
-
-    def __post_init__(self):
-        """Initialise the fitter object."""
-        self.move = [
-            (DEMove(sigma=1e-7), 0.90),
-            (DEMove(sigma=1e-7, gamma0=1), 0.1),
-        ]
-        self._n_walkers = self.walkers_per_param * len(self.obj.varying_parameters())
-        self._init_fitter()
-
-    def _init_fitter(self):
-        self.fitter = CurveFitter(self.obj, nwalkers=self._n_walkers, moves=self.move)
-
-    @property
-    def n_params(self):
-        """Number of parameters in the model."""
-        return len(self.obj.data.data[0]) - len(self.obj.varying_parameters())
-
-    @cached_property
-    def red_chisqr(self):
-        """Reduced chi-squared value."""
-        return self.obj.chisqr() / self.n_params
-
-    @cached_property
-    def log_likelihood(self):
-        """Calculate the log-likelihood."""
-        chisqr = self.obj.chisqr()
-        # Assuming Gaussian errors, the log-likelihood is proportional to -0.5 * chisqr
-        return -0.5 * chisqr
-
-    def fit(
-        self,
-        steps_per_param: int = 10,
-        thin: int = 1,
-        seed: int = 1,
-        init: Literal["jitter", "prior"] = "jitter",
-        *,
-        show_output: bool = False,
+    def __init__(
+        self, model: XrayReflectDataset, data: ReflectDataset, logp_extra=None, **kwargs
     ):
-        """Fit the reflectometry data."""
-        steps = steps_per_param * self.n_params
+        super().__init__(model, data, logp_extra=logp_extra, **kwargs)
 
-        self.fitter.initialise(init, random_state=seed)
-        self.chain = self.fitter.sample(
-            steps,
-            random_state=seed,
-            nthin=thin,
-        )
+    # ----------/ Custom Log-Posterior /----------
+    def logl(self, pvals=None):
+        """
+        Calculate the log-likelhood of the system.
 
-        print(f"Reduced χ2 = {self.red_chisqr}")
-        print(f"Log-likelihood = {self.log_likelihood}")  # Add log-likelihood output
+        The major component of the log-likelhood probability is from the data.
+        Extra potential terms are added on from the Model, `self.model.logp`,
+        and the user specifiable `logp_extra` function.
 
-        if self.red_chisqr > 1.5:
-            self.move = [
-                (DEMove(sigma=1e-7), 0.90),
-            ]
-            self._init_fitter()
-            self.chain = self.fitter.sample(
-                steps,
-                random_state=seed,
-                nthin=thin,
+        Parameters
+        ----------
+        pvals : array-like or refnx.analysis.Parameters
+            values for the varying or entire set of parameters
+
+        Returns
+        -------
+        logl : float
+            log-likelihood probability
+
+        Notes
+        -----
+        The log-likelihood is calculated as:
+
+        .. code-block:: python
+
+            logl = -0.5 * np.sum(((y - model) / s_n) ** 2 + np.log(2 * pi * s_n**2))
+            logp += self.model.logp()
+            logp += self.logp_extra(self.model, self.data)
+
+        where
+
+        .. code-block:: python
+
+            s_n**2 = y_err**2 + exp(2 * lnsigma) * model**2
+
+        """
+        ll = super().logl(pvals=pvals)
+        model_anisotropy = self.model.anisotropy(self.data.x)[1]
+        data_anisotropy = self.data.anisotropy.y
+        ll += -np.sum((model_anisotropy - data_anisotropy) ** 2)
+        return ll
+
+    # ----------/ Custom Plotting /----------
+    def plot(
+        self,
+        samples=0,
+        pvals=None,
+        data=None,
+        model=None,
+        ax=None,
+        ax_anisotropy=None,
+        **kwargs,
+    ):
+        """Plot function that includes anisotropy information."""
+        if ax is None:
+            import matplotlib.pyplot as plt
+
+            fig, axs = plt.subplots(
+                nrows=2,
+                sharex=False,
+                figsize=(8, 6),
+                gridspec_kw={"height_ratios": [3, 1]},
+            )
+            ax = axs[0]
+            ax_anisotropy = axs[1]
+
+        y, y_err, model = self._data_transform(model=self.generative())
+        if self.weighted:
+            ax.errorbar(
+                self.data.x,
+                y,
+                y_err,
+                label=self.data.name,
+                marker="o",
+                color="C0",
+                ms=3,
+                lw=0,
+                elinewidth=2,
+                capsize=2,
             )
         else:
-            self.move = [
-                (GaussianMove(1e-7)),
-            ]
-            self._init_fitter()
-            self.chain = self.fitter.sample(
-                steps,
-                random_state=seed,
-                nthin=thin,
+            ax.plot(self.data.x, y, label=self.data.name)
+
+        if samples > 0:
+            # Get a number of chains, chosen randomly, set the objective,
+            # and plot the model.
+            models = []
+            for curve in self._generate_generative_mcmc(ngen=samples):
+                _, _, model = self._data_transform(model=curve)
+                models.append(model)
+            models = np.array(models)
+            # find the max and min of the models and fill between them
+            ax.fill_between(
+                self.data.x,
+                np.percentile(models, 16, axis=0),
+                np.percentile(models, 84, axis=0),
+                color="C1",
+                alpha=0.5,
             )
+            ax.fill_between(
+                self.data.x,
+                np.percentile(models, 2.5, axis=0),
+                np.percentile(models, 97.5, axis=0),
+                color="C1",
+                alpha=0.2,
+            )
+        # add the fit
+        ax.plot(self.data.x, model, color="C1", label="fit", zorder=20, **kwargs)
 
-        if show_output:
-            self.show_output()
+        ax_anisotropy.set_ylabel("Anisotropy")
 
-    def show_output(self):
-        """Display fitting results and save to file."""
-        print(rf"Reduced χ2 = {self.red_chisqr}")
-        print(self.obj.varying_parameters())
+        ax_anisotropy.plot(
+            *self.model.anisotropy(self.data.x), color="C3", label="model"
+        )
+        ax_anisotropy.plot(
+            self.data.anisotropy.x, self.data.anisotropy.y, color="C2", label="data"
+        )
 
-        # Plot log posterior
-        fig, ax = plt.subplots()
-        ax.plot(-self.fitter.logpost)
-        fig.show()
+        ax.set_ylabel("Reflectivity")
+        ax.legend()
+        ax_anisotropy.legend()
+        ax_anisotropy.axhline(0, color="k", ls="--", lw=0.5)
+        ax_anisotropy.set_xlabel(r"$q (\AA^{-1})$")
 
-        # Plot residuals and model structure
-        self.obj.plot()
-        plt.show()
-        self.obj.model.structure.plot()
-
-    def export(self, filename: str | None = None):
-        """Export the fitter object to a pickle file."""
-        if filename is None:
-            filename = f"{self.en}.pkl"
-        filepath = Path(filename)
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-        with filepath.open("wb") as f:
-            pkl.dump(self, f)
+        return ax, ax_anisotropy
 
 
 class LogpExtra:

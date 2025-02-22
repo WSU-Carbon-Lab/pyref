@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections import UserList
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 import periodictable as pt
@@ -464,7 +464,6 @@ class Structure(UserList):
 
         if ax is None:
             _, ax = plt.subplots()
-
 
         if samples > 0:
             saved_params = np.array(params)
@@ -1005,12 +1004,12 @@ class UniTensorSLD(Scatterer):
     --------
     ```python
     # Load optical constants from a file
-    ooc = pd.read_csv('ooc.csv')
+    ooc = pd.read_csv("ooc.csv")
     # Create a uniaxial scatterer
     interface = UniTensorSLD(
-        ooc, density=1.45, rotation=2*np.pi, energy=250.0, name='ZnPc'
+        ooc, density=1.45, rotation=2 * np.pi, energy=250.0, name="ZnPc"
     )
-    bulk = UniTensorSLD(ooc, density=1.45, rotation=0.0, energy=250.0, name='ZnPc')
+    bulk = UniTensorSLD(ooc, density=1.45, rotation=0.0, energy=250.0, name="ZnPc")
     ```
 
     """
@@ -1063,7 +1062,7 @@ class UniTensorSLD(Scatterer):
 
     def __complex__(self):
         """Complex representation of the scatterer."""
-        sldc =  (2*self.tensor[0,0]+ self.tensor[1,1])/3
+        sldc = (2 * self.tensor[0, 0] + self.tensor[1, 1]) / 3
         return sldc
 
     def __repr__(self):
@@ -1806,8 +1805,8 @@ henke_densities = [
 
 
 if __name__ == "__main__":
-    import pandas as pd
     import matplotlib.pyplot as plt
+    import pandas as pd
 
     ooc = pd.read_csv("C:/Users/hduva/.projects/pyref/optical_constants.csv")
     si = MaterialSLD("Si", name="Si")(0, 1.5)

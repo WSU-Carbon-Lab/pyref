@@ -3,16 +3,149 @@
 from __future__ import annotations
 
 import numbers
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
+import matplotlib.pyplot as plt
 import numpy as np
 from refnx.analysis import Parameters, possibly_create_parameter
+from refnx.dataset import ReflectDataset
 from scipy.interpolate import splev, splrep
 
 from pyref.fitting.uniaxial_model import uniaxial_reflectivity
 
+if TYPE_CHECKING:
+    import polars as pl
+
 # some definitions for resolution smearing
 _FWHM = 2 * np.sqrt(2 * np.log(2.0))
+
+
+class XrayReflectDataset(ReflectDataset):
+    """Overload of the ReflectDataset class from refnx."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        diff = np.diff(self.x)
+        # locate where diff is less than 0 and find that index
+        idx = np.where(diff < 0)[0] + 1
+        if len(idx) > 0:
+            self.s = ReflectDataset(
+                (self.x[: idx[0]], self.y[: idx[0]], self.y_err[: idx[0]])
+            )
+            self.p = ReflectDataset(
+                (self.x[idx[0] :], self.y[idx[0] :], self.y_err[idx[0] :])
+            )
+        else:
+            self.s = ReflectDataset((self.x, self.y, self.y_err))
+            self.p = ReflectDataset((self.x, self.y, self.y_err))
+
+        # calculate the anisotropic ratio in the overlaping region
+        q_min = np.max([self.s.x.min(), self.p.x.min()])
+        q_max = np.min([self.s.x.max(), self.p.x.max()])
+        q_common = np.linspace(q_min, q_max, 100)
+
+        # Interpolate both s and p polarized data onto common q points
+        r_s_interp = np.interp(q_common, self.s.x, self.s.y)
+        r_p_interp = np.interp(q_common, self.p.x, self.p.y)
+
+        _anisotropy = (r_p_interp - r_s_interp) / (r_p_interp + r_s_interp)
+        self.anisotropy = ReflectDataset((q_common, _anisotropy))
+
+    def plot(self, ax=None, ax_anisotropy=None, **kwargs):
+        """Plot the reflectivity and anisotropy data."""
+        if ax is None:
+            fig, axs = plt.subplots(
+                nrows=2,
+                sharex=True,
+                figsize=(8, 6),
+                gridspec_kw={"height_ratios": [3, 1]},
+            )
+            ax = axs[0]
+            ax_anisotropy = axs[1]
+
+        if self.s.y[3] != self.p.y[3]:
+            # Plot s and p separately
+            ax.errorbar(
+                self.s.x,
+                self.s.y,
+                self.s.y_err,
+                label=f"{self.name} s-pol",
+                marker="o",
+                color="C0",
+                ms=3,
+                lw=0,
+                elinewidth=1,
+                capsize=1,
+                ecolor="k",
+            )
+            ax.errorbar(
+                self.p.x,
+                self.p.y,
+                self.p.y_err,
+                label=f"{self.name} p-pol",
+                marker="o",
+                color="C1",
+                ms=3,
+                lw=0,
+                elinewidth=1,
+                capsize=1,
+                ecolor="k",
+            )
+        else:
+            # Plot together if same x values
+            ax.errorbar(
+                self.x,
+                self.y,
+                self.y_err,
+                label=self.name,
+                marker="o",
+                color="C0",
+                ms=3,
+                lw=0,
+                elinewidth=1,
+                capsize=1,
+                ecolor="k",
+            )
+
+        ax_anisotropy.plot(
+            self.anisotropy.x,
+            self.anisotropy.y,
+            label=f"{self.name} anisotropy" if self.name else "anisotropy",
+            marker="o",
+            markersize=3,
+            lw=0,
+            color="C2",
+        )
+        ax_anisotropy.axhline(
+            0,
+            color=plt.rcParams["axes.edgecolor"],
+            ls="-",
+            lw=plt.rcParams["axes.linewidth"],
+        )
+
+        ax.set_yscale("log")
+        ax_anisotropy.set_xlabel(r"$q (\AA^{-1})$")
+        ax.set_ylabel(r"$R$")
+        plt.legend()
+        return ax, ax_anisotropy
+
+
+def to_reflect_dataset(
+    df: pl.DataFrame, *, overwrite_err: bool = True
+) -> XrayReflectDataset:
+    """Convert a pandas dataframe to a ReflectDataset object."""
+    if not overwrite_err:
+        e = "overwrite_err=False is not implemented yet."
+        raise NotImplementedError(e)
+    Q = df["Q"].to_numpy()
+    R = df["r"].to_numpy()
+    # Calculate initial dR
+    dR = 0.15 * R + 0.3e-6 * Q
+    # Ensure dR doesn't exceed 90% of R to keep R-dR positive
+    dR = np.minimum(dR, 0.9 * R)
+    ds = XrayReflectDataset(data=(Q, R, dR))
+    return ds
 
 
 class ReflectModel:
@@ -315,26 +448,7 @@ class ReflectModel:
     def phi(self, phi):
         self._phi = phi
 
-    def model(self, x, p=None, x_err=None):
-        r"""
-        Calculate the reflectivity of this model.
-
-        Parameters
-        ----------
-        x : float or np.ndarray
-            q or E values for the calculation.
-            specifiy self.qval to be any value to fit energy-space
-        p : refnx.analysis.Parameters, optional
-            parameters required to calculate the model
-        x_err : np.ndarray
-            dq resolution smearing values for the dataset being considered.
-
-        Returns
-        -------
-        reflectivity : np.ndarray
-            Calculated reflectivity. Output is dependent on `self.pol`
-
-        """
+    def _model(self, x, p=None, x_err=None):
         if p is not None:
             self.parameters.pvals = np.array(p)
 
@@ -396,6 +510,31 @@ class ReflectModel:
             dq=x_err,
             backend=self.backend,
         )
+
+        return qvals, qvals_1, qvals_2, refl, tran, components
+
+    def model(self, x, p=None, x_err=None):
+        r"""
+        Calculate the reflectivity of this model.
+
+        Parameters
+        ----------
+        x : float or np.ndarray
+            q or E values for the calculation.
+            specifiy self.qval to be any value to fit energy-space
+        p : refnx.analysis.Parameters, optional
+            parameters required to calculate the model
+        x_err : np.ndarray
+            dq resolution smearing values for the dataset being considered.
+
+        Returns
+        -------
+        reflectivity : np.ndarray
+            Calculated reflectivity. Output is dependent on `self.pol`
+
+        """
+        qvals, qvals_1, qvals_2, refl, tran, components = self._model(x, p, x_err)
+
         # Return result based on desired polarization:
 
         if self.pol == "s":
@@ -416,6 +555,20 @@ class ReflectModel:
             output = 0
 
         return output
+
+    def anisotropy(self, x, p=None, x_err=None):
+        """Calculate the anisotropy of the model."""
+        q_vals, qvals_1, qvals_2, refl, tran, components = self._model(x, p, x_err)
+
+        q_min = np.max([qvals_1.min(), qvals_2.min()])
+        q_max = np.min([qvals_1.max(), qvals_2.max()])
+
+        q_common = np.linspace(q_min, q_max, 100)
+
+        r_s = np.interp(q_common, q_vals, refl[:, 1, 1])
+        r_p = np.interp(q_common, q_vals, refl[:, 0, 0])
+
+        return q_common, (r_p - r_s) / (r_p + r_s)
 
     def logp(self):
         r"""

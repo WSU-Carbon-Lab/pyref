@@ -1,3 +1,9 @@
+## v0.7.0 (2025-02-21)
+
+### Feat
+
+- added anisotropic ratio as an extra condition on the log likelyhood
+
 ## v0.6.3 (2025-02-17)
 
 ### Fix

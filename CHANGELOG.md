@@ -1,3 +1,9 @@
+## v0.7.1 (2025-02-24)
+
+### Fix
+
+- **fitting**: added passthough for error updates in model. added custom scale of the anisotropic ratio to xrr
+
 ## v0.7.0 (2025-02-21)
 
 ### Feat

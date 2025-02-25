@@ -43,7 +43,7 @@ class XrayReflectDataset(ReflectDataset):
         # calculate the anisotropic ratio in the overlaping region
         q_min = np.max([self.s.x.min(), self.p.x.min()])
         q_max = np.min([self.s.x.max(), self.p.x.max()])
-        q_common = np.linspace(q_min, q_max, 100)
+        q_common = np.linspace(q_min, q_max, max(len(self.s.x), len(self.p.x)))
 
         # Interpolate both s and p polarized data onto common q points
         r_s_interp = np.interp(q_common, self.s.x, self.s.y)

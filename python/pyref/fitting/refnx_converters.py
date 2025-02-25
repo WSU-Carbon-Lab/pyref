@@ -5,32 +5,30 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-from refnx.dataset import ReflectDataset
+
+from pyref.fitting.reflectivity import XrayReflectDataset
 
 if TYPE_CHECKING:
     import polars as pl
 
 
 def to_reflect_dataset(
-    df: pl.DataFrame, *, gb_energy="Beamline Energy [eV]", overwrite_err: bool = True
-) -> ReflectDataset | list[ReflectDataset]:
+    df: pl.DataFrame,
+    *,
+    r_percent=0.05,
+    q_percent=0.5e-6,
+    gb_energy="Beamline Energy [eV]",
+    overwrite_err: bool = True,
+) -> XrayReflectDataset:
     """Convert a pandas dataframe to a ReflectDataset object."""
-    if not overwrite_err:
-        e = "overwrite_err=False is not implemented yet."
-        raise NotImplementedError(e)
-    datasets = []
-    for _, g in df.group_by(gb_energy):
-        Q = g["Q"].to_numpy()
-        R = g["r"].to_numpy()
-        # Calculate initial dR
-        dR = 0.15 * R + 0.5e-6 * Q
-        # Ensure dR doesn't exceed 90% of R to keep R-dR positive
-        dR = np.minimum(dR, 0.9 * R)
-        ds = ReflectDataset(data=(Q, R, dR))
-        datasets.append(ds)
-    if len(datasets) == 1:
-        return datasets[0]
-    return datasets
+    Q = df["Q"].to_numpy()
+    R = df["r"].to_numpy()
+    # Calculate initial dR
+    dR = r_percent * R + q_percent * Q
+    # Ensure dR doesn't exceed 90% of R to keep R-dR positive
+    dR = np.minimum(dR, 0.9 * R)
+    ds = XrayReflectDataset(data=(Q, R, dR))
+    return ds
 
 
 if __name__ == "__main__":

@@ -20,9 +20,15 @@ class AnisotropyObjective(Objective):
     """Objective for including an extra weight for anisotropy data."""
 
     def __init__(
-        self, model: XrayReflectDataset, data: ReflectDataset, logp_extra=None, **kwargs
+        self,
+        model: XrayReflectDataset,
+        data: ReflectDataset,
+        logp_extra=None,
+        logl_anisotropy_scale=1,
+        **kwargs,
     ):
         super().__init__(model, data, logp_extra=logp_extra, **kwargs)
+        self.logl_anisotropy_scale = logl_anisotropy_scale
 
     # ----------/ Custom Log-Posterior /----------
     def logl(self, pvals=None):
@@ -63,7 +69,9 @@ class AnisotropyObjective(Objective):
         ll = super().logl(pvals=pvals)
         model_anisotropy = self.model.anisotropy(self.data.x)[1]
         data_anisotropy = self.data.anisotropy.y
-        ll += -np.sum((model_anisotropy - data_anisotropy) ** 2)
+        ll += -self.logl_anisotropy_scale * np.sum(
+            (model_anisotropy - data_anisotropy) ** 2
+        )
         return ll
 
     # ----------/ Custom Plotting /----------

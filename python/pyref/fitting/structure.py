@@ -1052,7 +1052,7 @@ class UniTensorSLD(Scatterer):
         # ============/ Optical Constants /===========
         self.energy = energy
         self.energy_offset = possibly_create_parameter(
-            energy_offset, name=f"{name}_enOffset", vary=True, bounds=(-0.02, 0.02)
+            energy_offset, name=f"{name}_enOffset", vary=True, bounds=(-0.01, 0.01)
         )
 
         self.n_xx = interp1d(ooc["energy"], ooc["n_xx"])

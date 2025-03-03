@@ -12,6 +12,7 @@ import periodictable.xsf as xsf
 from refnx.analysis import Parameter, Parameters, possibly_create_parameter
 from refnx.reflect.interface import Erf, Step
 from refnx.reflect.structure import Component
+from scipy.interpolate import interp1d
 
 from pyref.fitting.reflectivity import reflectivity
 
@@ -23,6 +24,11 @@ plank_constant = 4.135667697e-15  # ev*s
 hc = (speed_of_light * plank_constant) * 1e10  # ev*A
 
 tensor_index = ["xx", "yy", "zz"]  # Indexing for later definitions
+
+# azimuthal rotations for averaging
+t90 = np.pi / 2
+t180 = np.pi
+t270 = 3 * np.pi / 2
 
 
 class Structure(UserList):
@@ -997,6 +1003,8 @@ class UniTensorSLD(Scatterer):
         Mass density scaling factor (g/cm^3)
     energy : float
         Initial energy for optical constant lookup (eV)
+    energy_offset : float or Parameter
+        Energy offset for optical constant lookup (eV)
     name : str
         Name of material
 
@@ -1020,6 +1028,7 @@ class UniTensorSLD(Scatterer):
         rotation=0,
         density=1.0,
         energy=250.0,
+        energy_offset=0,
         name="",
     ):
         # =================/ Input Validation /================
@@ -1040,22 +1049,16 @@ class UniTensorSLD(Scatterer):
         self.rotation = possibly_create_parameter(
             rotation, name=f"{name}_rotation", vary=True, bounds=(-np.pi, np.pi)
         )
+        # ============/ Optical Constants /===========
+        self.energy = energy
+        self.energy_offset = possibly_create_parameter(
+            energy_offset, name=f"{name}_enOffset", vary=True, bounds=(-0.02, 0.02)
+        )
 
-        # ==/ Get optical constants for initial energy /==
-        if energy in ooc["energy"].values:
-            n_xx = np.array(ooc.loc[ooc["energy"] == energy]["n_xx"])
-            n_ixx = np.array(ooc.loc[ooc["energy"] == energy]["n_ixx"])
-            n_zz = np.array(ooc.loc[ooc["energy"] == energy]["n_zz"])
-            n_izz = np.array(ooc.loc[ooc["energy"] == energy]["n_izz"])
-
-        else:
-            n_xx = np.interp(energy, ooc["energy"], ooc["n_xx"])
-            n_ixx = np.interp(energy, ooc["energy"], ooc["n_ixx"])
-            n_zz = np.interp(energy, ooc["energy"], ooc["n_zz"])
-            n_izz = np.interp(energy, ooc["energy"], ooc["n_izz"])
-
-        # Store initial optical constants
-        self.n = np.diag([n_xx + n_ixx * 1j, n_zz + n_izz * 1j])
+        self.n_xx = interp1d(ooc["energy"], ooc["n_xx"])
+        self.n_ixx = interp1d(ooc["energy"], ooc["n_ixx"])
+        self.n_zz = interp1d(ooc["energy"], ooc["n_zz"])
+        self.n_izz = interp1d(ooc["energy"], ooc["n_izz"])
 
         # Add parameters to parameter set
         self._parameters.extend([self.density, self.rotation])
@@ -1073,12 +1076,28 @@ class UniTensorSLD(Scatterer):
         )
 
     @property
+    def n(self):
+        """
+        Optical constants of the material.
+
+        Returns
+        -------
+            n : np.ndarray
+                Optical constants of the material.
+        """
+        e = self.energy + self.energy_offset.value
+        return np.diag(
+            [
+                self.n_xx(e) + self.n_ixx(e) * 1j,
+                self.n_xx(e) + self.n_ixx(e) * 1j,
+                self.n_zz(e) + self.n_izz(e) * 1j,
+            ]
+        )
+
+    @property
     def parameters(self):
         """
-        :class:`refnx.analysis.Parameters`.
-
-        associated with this component
-
+        Output the parameters associated with this component.
         """
         self._parameters.name = self.name
         return self._parameters
@@ -1093,18 +1112,28 @@ class UniTensorSLD(Scatterer):
             out : np.ndarray (3x3)
                 complex tensor index of refraction
         """
-        R = np.array(
-            [
-                [np.cos(self.rotation.value), -np.sin(self.rotation.value)],
-                [np.sin(self.rotation.value), np.cos(self.rotation.value)],
-            ]
+        n = self.density.value * self.n
+        # R = np.array(
+        #     [
+        #         [np.cos(self.rotation.value), -np.sin(self.rotation.value)],
+        #         [np.sin(self.rotation.value), np.cos(self.rotation.value)],
+        #     ]
+        # )
+        # n = R @ np.array([[n[0, 0], 0], [0, n[2, 2]]]) @ R.T
+        # n_o = n[0, 0]
+        # n_e = n[1, 1]
+        n_o = (
+            n[0, 0] * (1 + np.square(np.cos(self.rotation.value)))
+            + n[2, 2] * np.square(np.sin(self.rotation.value)) / 2
         )
-        n = self.density.value * (R @ self.n @ R.T)
+        n_e = n[0, 0] * np.square(np.cos(self.rotation.value)) + n[2, 2] * np.square(
+            np.sin(self.rotation.value)
+        )
         self._tensor = np.array(
             [
-                [n[0, 0], 0, 0],
-                [0, n[0, 0], 0],
-                [0, 0, n[1, 1]],
+                [n_o, 0, 0],
+                [0, n_o, 0],
+                [0, 0, n_e],
             ],
             dtype=complex,
         )

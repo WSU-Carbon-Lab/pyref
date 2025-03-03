@@ -28,8 +28,8 @@ class AnisotropyObjective(Objective):
         **kwargs,
     ):
         super().__init__(model, data, logp_extra=logp_extra, **kwargs)
-        q_min = np.max([self.s.x.min(), self.p.x.min()])
-        q_max = np.min([self.s.x.max(), self.p.x.max()])
+        q_min = np.max([self.data.s.x.min(), self.data.p.x.min()])
+        q_max = np.min([self.data.s.x.max(), self.data.p.x.max()])
         self.qcomon = np.linspace(q_min, q_max, max(len(self.s.x), len(self.p.x)))
         self.ll_scale = ll_scale
 

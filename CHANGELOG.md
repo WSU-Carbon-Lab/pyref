@@ -1,3 +1,10 @@
+## v0.7.3 (2025-03-03)
+
+### Fix
+
+- **fitting**: added energy offset to parameters
+- **fitting**: model construction for s or p pol is now allowed
+
 ## v0.7.2 (2025-03-02)
 
 ### Fix

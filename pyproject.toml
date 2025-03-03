@@ -44,7 +44,7 @@ name = "pyref"
 readme = "README.md"
 requires-python = ">=3.9"
 urls = {Documentation = "https://wsu-carbon-lab.github.io/pyref/", Source = "https://github.com/WSU-Carbon-Lab/pyref"}
-version = "0.7.2"
+version = "0.7.3"
 
 [project.optional-dependencies]
 dev = [

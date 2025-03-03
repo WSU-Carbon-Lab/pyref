@@ -24,9 +24,14 @@ class AnisotropyObjective(Objective):
         model: XrayReflectDataset,
         data: ReflectDataset,
         logp_extra=None,
+        ll_scale: float | None = 1.0,
         **kwargs,
     ):
         super().__init__(model, data, logp_extra=logp_extra, **kwargs)
+        q_min = np.max([self.s.x.min(), self.p.x.min()])
+        q_max = np.min([self.s.x.max(), self.p.x.max()])
+        self.qcomon = np.linspace(q_min, q_max, max(len(self.s.x), len(self.p.x)))
+        self.ll_scale = ll_scale
 
     # ----------/ Custom Log-Posterior /----------
     def logl(self, pvals=None):
@@ -65,11 +70,9 @@ class AnisotropyObjective(Objective):
 
         """
         ll = super().logl(pvals=pvals)
-        model_anisotropy = self.model.anisotropy(self.data.x)[1]
+        model_anisotropy = self.model.anisotropy(self.qcomon)[1]
         data_anisotropy = self.data.anisotropy.y
-        ll += .5*np.sum(
-            (model_anisotropy - data_anisotropy) ** 2
-        )
+        ll += 0.5 * np.sum((model_anisotropy - data_anisotropy) ** 2) * self.ll_scale
         return ll
 
     # ----------/ Custom Plotting /----------

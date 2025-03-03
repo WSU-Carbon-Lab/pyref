@@ -1,3 +1,11 @@
+## v0.7.2 (2025-03-02)
+
+### Fix
+
+- **fitting**: update range of errors
+- **fitting**: rollback changes to rotation for now. Larger issue than previously thought
+- **fitting**: updates rotation matrix to apply 3x3 rotations instead of 2x2
+
 ## v0.7.1 (2025-02-24)
 
 ### Fix

@@ -30,7 +30,9 @@ class AnisotropyObjective(Objective):
         super().__init__(model, data, logp_extra=logp_extra, **kwargs)
         q_min = np.max([self.data.s.x.min(), self.data.p.x.min()])
         q_max = np.min([self.data.s.x.max(), self.data.p.x.max()])
-        self.qcomon = np.linspace(q_min, q_max, max(len(self.s.x), len(self.p.x)))
+        self.qcomon = np.linspace(
+            q_min, q_max, max(len(self.data.s.x), len(self.data.p.x))
+        )
         self.ll_scale = ll_scale
 
     # ----------/ Custom Log-Posterior /----------

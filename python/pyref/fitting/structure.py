@@ -1113,22 +1113,24 @@ class UniTensorSLD(Scatterer):
                 complex tensor index of refraction
         """
         n = self.density.value * self.n
-        # R = np.array(
-        #     [
-        #         [np.cos(self.rotation.value), -np.sin(self.rotation.value)],
-        #         [np.sin(self.rotation.value), np.cos(self.rotation.value)],
-        #     ]
+        c = np.cos(self.rotation.value)
+        s = np.sin(self.rotation.value)
+        R = np.array(
+            [
+                [c, -s],
+                [s, c],
+            ]
+        )
+        n = R @ np.array([[n[0, 0], 0], [0, n[2, 2]]]) @ R.T
+        n_o = n[0, 0]
+        n_e = n[1, 1]
+        # n_o = (
+        #     n[0, 0] * (1 + np.square(np.cos(self.rotation.value)))
+        #     + n[2, 2] * np.square(np.sin(self.rotation.value)) / 2
         # )
-        # n = R @ np.array([[n[0, 0], 0], [0, n[2, 2]]]) @ R.T
-        # n_o = n[0, 0]
-        # n_e = n[1, 1]
-        n_o = (
-            n[0, 0] * (1 + np.square(np.cos(self.rotation.value)))
-            + n[2, 2] * np.square(np.sin(self.rotation.value)) / 2
-        )
-        n_e = n[0, 0] * np.square(np.cos(self.rotation.value)) + n[2, 2] * np.square(
-            np.sin(self.rotation.value)
-        )
+        # n_e = n[0, 0] * np.square(np.cos(self.rotation.value)) + n[2, 2] * np.square(
+        #     np.sin(self.rotation.value)
+        # )
         self._tensor = np.array(
             [
                 [n_o, 0, 0],

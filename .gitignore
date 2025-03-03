@@ -12,6 +12,7 @@ __pycache__/
 
 # data
 test/
+*.csv
 
 # Distribution / packaging
 .Python

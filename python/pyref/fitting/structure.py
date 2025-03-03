@@ -364,7 +364,7 @@ class Structure(UserList):
 
         return self
 
-    def __or__(self, other):
+    def __or__(self, other: Structure | Component | SLD) -> Structure:
         """
         Build a structure by `OR`'ing Structures/Components/SLDs.
 
@@ -504,11 +504,11 @@ class Structure(UserList):
             label="δzz",
             linestyle=":",
         )
-        ax.plot(zed, np.imag(iso), color="C1", zorder=20, label="β", linewidth=0.9)
+        ax.plot(zed, np.imag(iso), color="C2", zorder=20, label="β", linewidth=0.9)
         ax.plot(
             zed,
             np.imag(prof[:, 0]),
-            color="C1",
+            color="C2",
             zorder=10,
             label="βxx",
             linestyle="--",
@@ -516,7 +516,7 @@ class Structure(UserList):
         ax.plot(
             zed,
             np.imag(prof[:, 2]),
-            color="C1",
+            color="C2",
             zorder=10,
             label="βzz",
             linestyle=":",
@@ -528,13 +528,13 @@ class Structure(UserList):
         if difference:
             axr = ax.twinx()
             dichroism = prof[:, 0].real - prof[:, 2].real
-            axr.plot(zed, dichroism, color="salmon", zorder=20)
+            axr.plot(zed, dichroism, color="C1", zorder=20)
             axr.fill_between(
-                zed, dichroism, color="salmon", alpha=0.5, zorder=20, label="δxx - δzz"
+                zed, dichroism, color="C1", alpha=0.5, zorder=20, label="δxx - δzz"
             )
-            axr.set_ylabel("δxx - δzz", color="salmon")
-            axr.tick_params(axis="y", labelcolor="salmon", color="salmon")
-            axr.spines["right"].set_color("salmon")
+            axr.set_ylabel("δxx - δzz")
+            axr.tick_params(axis="y", labelcolor="C1", color="C1")
+            axr.spines["right"].set_color("C1")
             axr.set_ylim(ax.get_ylim())
             axr.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
             axr.legend()
@@ -567,7 +567,7 @@ class Scatterer:
         """Parameters."""
         raise NotImplementedError
 
-    def __call__(self, thick=0, rough=0):
+    def __call__(self, thick=0, rough=0) -> Structure:
         """
         Create a :class:`PXR_Slab`.
 
@@ -597,7 +597,7 @@ class Scatterer:
         slab.rough.setp(vary=True, bounds=(0, 2 * rough))
         return slab
 
-    def __or__(self, other):
+    def __or__(self, other) -> Structure:
         """Combine scatterers."""
         # c = self | other
         slab = self()
@@ -1061,7 +1061,7 @@ class UniTensorSLD(Scatterer):
         self.n_izz = interp1d(ooc["energy"], ooc["n_izz"])
 
         # Add parameters to parameter set
-        self._parameters.extend([self.density, self.rotation])
+        self._parameters.extend([self.density, self.rotation, self.energy_offset])
 
     def __complex__(self):
         """Complex representation of the scatterer."""
@@ -1070,10 +1070,7 @@ class UniTensorSLD(Scatterer):
 
     def __repr__(self):
         """Representation of the scatterer."""
-        return (
-            "Isotropic Index of Refraction = ([{delta!r}, {beta!r}],"
-            " name={name!r})".format(**self.__dict__)
-        )
+        return "Index of Refraction = ({n!r}, name={name!r})".format(**self.__dict__)
 
     @property
     def n(self):
@@ -1838,6 +1835,9 @@ henke_densities = [
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import pandas as pd
+    import seaborn as sns
+
+    sns.set_palette("blend:#00829c,#ff9d8d", n_colors=3)
 
     ooc = pd.read_csv("C:/Users/hduva/.projects/pyref/optical_constants.csv")
     si = MaterialSLD("Si", name="Si")(0, 1.5)
@@ -1862,9 +1862,11 @@ if __name__ == "__main__":
         rotation=np.pi / 2,
         density=1.45,
         energy=283.7,
+        energy_offset=0,
         name="ZnPC",
     )(196.441, 7.216)
 
     struct = vac | znpc_slab | si
-    struct.plot(ax=ax[1])
+    struct.plot(ax=ax[1], difference=True)
+    print(struct)
     plt.show()

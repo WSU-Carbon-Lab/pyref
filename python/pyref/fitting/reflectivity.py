@@ -490,13 +490,19 @@ class ReflectModel:
             theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
             theta += self.theta_offset_s.value
             qvals = 4 * np.pi * self.energy * np.sin(theta * np.pi / 180) / 12398.42
+            qvals_1 = qvals
+            qvals_2 = qvals
         elif self.pol == "p":
             theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
             theta += self.theta_offset_p.value
             qvals = 4 * np.pi * self.energy * np.sin(theta * np.pi / 180) / 12398.42
+            qvals_1 = qvals
+            qvals_2 = qvals
         else:
             qvals = x
             qvals = x
+            qvals_1 = x
+            qvals_2 = x
 
         refl, tran, *components = reflectivity(
             qvals + self.q_offset.value,

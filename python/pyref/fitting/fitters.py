@@ -67,7 +67,7 @@ class AnisotropyObjective(Objective):
 
         """
         ll = super().logl(pvals=pvals)
-        model_anisotropy = self.model.anisotropy(self.data.anisotropy.x)[1]
+        model_anisotropy = self.model.anisotropy(self.data.anisotropy.x)
         data_anisotropy = self.data.anisotropy.y
         ll += 0.5 * np.sum((model_anisotropy - data_anisotropy) ** 2) * self.ll_scale
         return ll

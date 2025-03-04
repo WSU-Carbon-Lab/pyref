@@ -566,15 +566,10 @@ class ReflectModel:
         """Calculate the anisotropy of the model."""
         q_vals, qvals_1, qvals_2, refl, tran, components = self._model(x, p, x_err)
 
-        q_min = np.max([qvals_1.min(), qvals_2.min()])
-        q_max = np.min([qvals_1.max(), qvals_2.max()])
+        r_s = np.interp(x, q_vals, refl[:, 1, 1])
+        r_p = np.interp(x, q_vals, refl[:, 0, 0])
 
-        q_common = np.linspace(q_min, q_max, 100)
-
-        r_s = np.interp(q_common, q_vals, refl[:, 1, 1])
-        r_p = np.interp(q_common, q_vals, refl[:, 0, 0])
-
-        return q_common, (r_p - r_s) / (r_p + r_s)
+        return (r_p - r_s) / (r_p + r_s)
 
     def logp(self):
         r"""

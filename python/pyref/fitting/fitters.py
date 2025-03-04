@@ -142,7 +142,10 @@ class AnisotropyObjective(Objective):
         ax_anisotropy.set_ylabel("Anisotropy")
 
         ax_anisotropy.plot(
-            *self.model.anisotropy(self.data.x), color="C3", label="model"
+            self.data.anisotropy.x,
+            self.model.anisotropy(self.data.anisotropy.x),
+            color="C3",
+            label="model",
         )
         ax_anisotropy.plot(
             self.data.anisotropy.x, self.data.anisotropy.y, color="C2", label="data"
@@ -151,7 +154,7 @@ class AnisotropyObjective(Objective):
         ax.set_ylabel("Reflectivity")
         ax.legend()
         ax_anisotropy.legend()
-        ax_anisotropy.axhline(0, color="k", ls="--", lw=0.5)
+        ax_anisotropy.axhline(0, color="k", ls="-", lw=plt.rcParams["axes.linewidth"])
         ax_anisotropy.set_xlabel(r"$q (\AA^{-1})$")
 
         return ax, ax_anisotropy

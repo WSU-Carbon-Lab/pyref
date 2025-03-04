@@ -536,9 +536,6 @@ class Structure(UserList):
             axr.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
             axr.legend()
         ax.legend()
-
-        plt.legend()
-
         return ax
 
 

@@ -651,57 +651,81 @@ class SLD(Scatterer):
     >>> self.izz.setp(self.ixx, vary=None, constraint=self.ixx)
     """
 
-    def __init__(self, value, symmetry="uni", name="", en_offset=0):
-        super().__init__(name=name)
-        self.imag = Parameter(0, name=f"{name}_isld")
-        self._tensor = None
+    def __init__(
+        self,
+        value: np.ndarray | pd.DataFrame | float | complex | None = None,
+        symmetry="uni",
+        name="",
+        energy=None,
+    ):
+        """Initialize SLD object.
 
-        # Figure out if the input is valid
-        if isinstance(
-            value, np.ndarray
-        ):  # Make sure the input is an array with 3 elements
-            if value.shape == (
-                3,
-            ):  # 3 element array, assume structure ['xx', 'yy', 'zz']
+        Parameters
+        ----------
+        value : array-like, DataFrame or scalar
+            Can be:
+            - DataFrame with columns ['energy', 'n_xx', 'n_ixx', 'n_zz', 'n_izz']
+            - ndarray of shape (2,) or (3,) or (3,3) containing complex indices
+            - scalar value for isotropic index
+        symmetry : str
+            'iso', 'uni' or 'bi' for symmetry constraints
+        name : str
+            Name of the SLD
+        energy : float, optional
+            Energy in eV to evaluate optical constants if value is DataFrame
+        """
+        super().__init__(name=name)
+
+        # If value is DataFrame, interpolate at specified energy
+        if isinstance(value, pd.DataFrame):
+            if not energy:
+                e = "Must specify energy when passing DataFrame"
+                raise ValueError(e)
+
+            required_cols = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
+            if not all(col in value.columns for col in required_cols):
+                e = f"DataFrame must contain columns: {required_cols}"
+                raise ValueError(e)
+
+            en_col = value["energy"].to_numpy()
+            n_xx = value["n_xx"].to_numpy()
+            n_zz = value["n_zz"].to_numpy()
+            n_ixx = value["n_ixx"].to_numpy()
+            n_izz = value["n_izz"].to_numpy()
+
+            n_xx = np.interp(energy, en_col, n_xx)
+            n_zz = np.interp(energy, en_col, n_zz)
+            n_ixx = np.interp(energy, en_col, n_ixx)
+            n_izz = np.interp(energy, en_col, n_izz)
+
+            value = np.array([n_xx + 1j * n_ixx, n_xx + 1j * n_ixx, n_zz + 1j * n_izz])
+
+        # Handle ndarray input
+        elif isinstance(value, np.ndarray):
+            if value.shape == (3,):
                 pass
-                # Great choice
-            elif value.shape == (
-                2,
-            ):  # 2 element array, assume structure ['xx', 'zz'] (uniaxial)
-                temp_val = (
-                    np.ones(3) * value[0]
-                )  # Make a 3-element array and fill it with 'xx'
-                temp_val[2] = value[1]  # Append the last element as 'zz'
-                value = temp_val  # Reset value
-            elif value.shape == (
-                3,
-                3,
-            ):  # 3x3 element array, assume diagonal is ['xx', 'yy', 'zz']
-                value = value.diagonal()  # Just take the inner 3 elements
-        elif isinstance(
-            value, (int, float, complex)
-        ):  # If the value is a scalar, convert it into an array for later use.
+            elif value.shape == (2,):
+                temp_val = np.ones(3) * value[0]
+                temp_val[2] = value[1]
+                value = temp_val
+            elif value.shape == (3, 3):
+                value = value.diagonal()
+            else:
+                e = "Array must have shape (2,), (3,) or (3,3)"
+                raise ValueError(e)
+
+        # Handle scalar input
+        elif isinstance(value, (int, float, complex)):
             value = value * np.ones(3)
         else:
-            # No input was given
-            print("Please input valid index of refraction")
-            print("Suggested format: np.ndarray shape: (3, )")
+            e = "Input must be DataFrame, array or scalar"
+            raise TypeError(e)
 
-        # Build parameters from given tensor
-        self._parameters = Parameters(
-            name=name
-        )  # Generate the parameters for the tensor object
-        self.delta = Parameter(
-            np.average(value).real, name=f"{name}_diso"
-        )  # create parameter for the 'isotropic' version of the given delta
-        self.beta = Parameter(
-            np.average(value).imag, name=f"{name}_biso"
-        )  # create parameter for the 'isotropic' version of the given beta
-        # Create parameters for individual tensor components.
-        # Each element of the tensor becomes its own fit parameter within the PXR
-        # machinary
-        # All tensors are assumed diagonal in the substrate frame
-        # See documentation for recommended parameter constraints
+        # Create parameters
+        self._parameters = Parameters(name=name)
+        self.delta = Parameter(np.average(value).real, name=f"{name}_diso")
+        self.beta = Parameter(np.average(value).imag, name=f"{name}_biso")
+
         self.xx = Parameter(value[0].real, name=f"{name}_{tensor_index[0]}")
         self.ixx = Parameter(value[0].imag, name=f"{name}_i{tensor_index[0]}")
         self.yy = Parameter(value[1].real, name=f"{name}_{tensor_index[1]}")
@@ -711,18 +735,15 @@ class SLD(Scatterer):
 
         self.birefringence = Parameter(
             (self.xx.value - self.zz.value), name=f"{name}_bire"
-        )  # Useful parameters to use as constraints
+        )
         self.dichroism = Parameter(
             (self.ixx.value - self.izz.value), name=f"{name}_dichro"
-        )  # Defined in terms of xx and zz
-
-        self.en_offset = Parameter((en_offset), name=f"{name}_enOffset")
+        )
 
         self._parameters.extend(
             [
                 self.delta,
                 self.beta,
-                self.en_offset,
                 self.xx,
                 self.ixx,
                 self.yy,
@@ -758,9 +779,6 @@ class SLD(Scatterer):
         """
         self._parameters.name = self.name
         return self._parameters
-        # p = Parameters(name=self.name)
-        # p.extend([self.real, self.imag])
-        # return p
 
     @property
     def symmetry(self):
@@ -1051,7 +1069,7 @@ class UniTensorSLD(Scatterer):
         )
         # ============/ Optical Constants /===========
         self.energy = energy
-        self.energy_offset = possibly_create_parameter(
+        self._energy_offset = possibly_create_parameter(
             energy_offset, name=f"{name}_enOffset", vary=True, bounds=(-0.01, 0.01)
         )
 
@@ -1071,6 +1089,22 @@ class UniTensorSLD(Scatterer):
     def __repr__(self):
         """Representation of the scatterer."""
         return "Index of Refraction = ({n!r}, name={name!r})".format(**self.__dict__)
+
+    @property
+    def energy_offset(self):
+        """
+        Energy offset for optical constant lookup.
+
+        Returns
+        -------
+            energy_offset : float
+                Energy offset for optical constant lookup.
+        """
+        return self._energy_offset
+
+    @energy_offset.setter
+    def energy_offset(self, energy_offset):
+        self._energy_offset.value = energy_offset
 
     @property
     def n(self):

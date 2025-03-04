@@ -10,7 +10,7 @@ from refnx._lib.emcee.moves.gaussian import GaussianMove
 from refnx.analysis import Objective
 
 if TYPE_CHECKING:
-    from pyref.fitting import ReflectDataset, XrayReflectDataset
+    from pyref.fitting import ReflectModel, XrayReflectDataset
 
 demove = [(DEMove(sigma=1e-7), 0.95), (DEMove(sigma=1e-7, gamma0=1), 0.05)]
 gmove = GaussianMove(1e-7)
@@ -21,18 +21,13 @@ class AnisotropyObjective(Objective):
 
     def __init__(
         self,
-        model: XrayReflectDataset,
-        data: ReflectDataset,
+        model: ReflectModel,
+        data: XrayReflectDataset,
         logp_extra=None,
         ll_scale: float | None = 1.0,
         **kwargs,
     ):
         super().__init__(model, data, logp_extra=logp_extra, **kwargs)
-        q_min = np.max([self.data.s.x.min(), self.data.p.x.min()])
-        q_max = np.min([self.data.s.x.max(), self.data.p.x.max()])
-        self.qcomon = np.linspace(
-            q_min, q_max, max(len(self.data.s.x), len(self.data.p.x))
-        )
         self.ll_scale = ll_scale
 
     # ----------/ Custom Log-Posterior /----------
@@ -72,7 +67,7 @@ class AnisotropyObjective(Objective):
 
         """
         ll = super().logl(pvals=pvals)
-        model_anisotropy = self.model.anisotropy(self.qcomon)[1]
+        model_anisotropy = self.model.anisotropy(self.data.anisotropy.x)[1]
         data_anisotropy = self.data.anisotropy.y
         ll += 0.5 * np.sum((model_anisotropy - data_anisotropy) ** 2) * self.ll_scale
         return ll

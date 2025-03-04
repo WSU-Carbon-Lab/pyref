@@ -50,7 +50,7 @@ class XrayReflectDataset(ReflectDataset):
         r_p_interp = np.interp(q_common, self.p.x, self.p.y)
 
         _anisotropy = (r_p_interp - r_s_interp) / (r_p_interp + r_s_interp)
-        self.anisotropy = ReflectDataset((q_common, _anisotropy))
+        self.anisotropy = ReflectDataset((self.q_common, _anisotropy))
 
     def plot(self, ax=None, ax_anisotropy=None, **kwargs):
         """Plot the reflectivity and anisotropy data."""

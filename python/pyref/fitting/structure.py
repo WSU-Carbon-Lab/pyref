@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import operator
 from collections import UserList
-from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 import periodictable as pt
 import periodictable.xsf as xsf
 from refnx.analysis import Parameter, Parameters, possibly_create_parameter
@@ -15,9 +15,6 @@ from refnx.reflect.structure import Component
 from scipy.interpolate import interp1d
 
 from pyref.fitting.reflectivity import reflectivity
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 speed_of_light = 299792458  # m/s
 plank_constant = 4.135667697e-15  # ev*s

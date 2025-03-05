@@ -171,7 +171,7 @@ class AnisotropyObjective(Objective):
         return ax, ax_anisotropy
 
 
-class CurveFitter(CurveFitter):
+class Fitter(CurveFitter):
     """Overload the CurveFitter class to include custom sampling."""
 
     def __init__(self, objective, nwalkers=200, ntemps=1, first_step=0.1, **kwargs):

@@ -182,9 +182,8 @@ class Fitter(CurveFitter):
         **mcmc_kws: dict[Any],
     ) -> None:
         nparams = len(objective.varying_parameters())
-        print(nparams)
         if nwalkers is None:
-            nwalkers = 2 * nparams
+            nwalkers = max(2 * nparams, 200)
         elif nwalkers < 2 * nparams:
             import warnings
 

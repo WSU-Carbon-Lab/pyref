@@ -1,3 +1,20 @@
+## v0.7.4 (2025-03-04)
+
+### Fix
+
+- **fitting**: interpolate error fix
+- **fitting**: anisotropy fix
+- **fitting**: upated model anisotropy to be correctly evaluated
+- **plotting**: updated plot to fix anisotropy plot
+- moved from typechecking block
+- **fitting**: updated how offsets are handled
+- **fitting**: finally?
+- **fitting**: again .. lets see
+- **fitting**: fixed anisotropy len ... maybe...lets see
+- **fitting**: update to qcomon
+- **fitting**: fixed qcomon calculation
+- **fitting**: fixed issue with array size mixmatch inanisotropy
+
 ## v0.7.3 (2025-03-03)
 
 ### Fix

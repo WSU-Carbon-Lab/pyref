@@ -489,7 +489,8 @@ class ReflectModel:
             # Convert back to q
             qvals_1 = 4 * np.pi * self.energy * np.sin(theta_s * np.pi / 180) / 12398.42
             qvals_2 = 4 * np.pi * self.energy * np.sin(theta_p * np.pi / 180) / 12398.42
-            qvals = np.concatenate(np.min(x), np.max(x), num_q)
+            x = np.concatenate([qvals_1, qvals_2])
+            qvals = np.linspace(np.min(x), np.max(x), num_q)
         elif self.pol == "s":
             theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
             theta += self.theta_offset_s.value

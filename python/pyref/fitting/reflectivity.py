@@ -560,10 +560,10 @@ class ReflectModel:
 
     def anisotropy(self, x, p=None, x_err=None):
         """Calculate the anisotropy of the model."""
-        q_vals, qvals_1, qvals_2, refl, tran, components = self._model(x, p, x_err)
+        qvals, qvals_1, qvals_2, refl, tran, components = self._model(x, p, x_err)
 
-        r_s = np.interp(x, qvals_1, refl[:, 1, 1])
-        r_p = np.interp(x, qvals_2, refl[:, 0, 0])
+        r_s = np.interp(x, qvals, refl[:, 1, 1])
+        r_p = np.interp(x, qvals, refl[:, 0, 0])
 
         return (r_p - r_s) / (r_p + r_s)
 

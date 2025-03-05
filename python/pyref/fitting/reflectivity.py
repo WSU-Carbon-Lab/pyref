@@ -456,19 +456,23 @@ class ReflectModel:
             # fallback to what this object was constructed with
             x_err = float(self.dq)
 
-        # Multipol fitting is currently done through concatenating
-        # s- and p-pol together.
-        # A temp x-data set is used to calculate the model based on the q-range
+        model_input = {
+            "slabs": self.structure.slabs(),
+            "tensor": self.structure.tensor(energy=self.energy),
+            "energy": self.energy,
+            "phi": self.phi,
+            "scale_s": self.scale_s.value,
+            "scale_p": self.scale_p.value,
+            "bkg": self.bkg.value,
+            "dq": x_err,
+            "backend": self.backend,
+        }
+
         if self.pol == "sp" or self.pol == "ps":
-            concat_loc = np.argmax(
-                np.abs(np.diff(x))
-            )  # Location where the q-range swaps for high s-pol to low p-pol
+            concat_loc = np.argmax(np.abs(np.diff(x)))
             qvals_1 = x[: concat_loc + 1]  # Split inputs for later
             qvals_2 = x[concat_loc + 1 :]  # Split inputs for later
-            num_q = (
-                concat_loc + 50
-            )  # 50 more points to make sure the interpolation works
-            qvals = np.linspace(np.min(x), np.max(x), num_q)
+            num_q = concat_loc + 50
 
             # Convert q to theta for offset application
             theta_s = (
@@ -485,7 +489,7 @@ class ReflectModel:
             # Convert back to q
             qvals_1 = 4 * np.pi * self.energy * np.sin(theta_s * np.pi / 180) / 12398.42
             qvals_2 = 4 * np.pi * self.energy * np.sin(theta_p * np.pi / 180) / 12398.42
-            # For single polarization, apply appropriate offset
+            qvals = np.concatenate(np.min(x), np.max(x), num_q)
         elif self.pol == "s":
             theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
             theta += self.theta_offset_s.value
@@ -500,21 +504,12 @@ class ReflectModel:
             qvals_2 = qvals
         else:
             qvals = x
-            qvals = x
             qvals_1 = x
             qvals_2 = x
 
         refl, tran, *components = reflectivity(
             qvals + self.q_offset.value,
-            self.structure.slabs(),
-            self.structure.tensor(energy=self.energy),
-            self.energy,
-            self.phi,
-            scale_s=self.scale_s.value,
-            scale_p=self.scale_p.value,
-            bkg=self.bkg.value,
-            dq=x_err,
-            backend=self.backend,
+            **model_input,
         )
 
         return qvals, qvals_1, qvals_2, refl, tran, components
@@ -566,8 +561,8 @@ class ReflectModel:
         """Calculate the anisotropy of the model."""
         q_vals, qvals_1, qvals_2, refl, tran, components = self._model(x, p, x_err)
 
-        r_s = np.interp(x, q_vals, refl[:, 1, 1])
-        r_p = np.interp(x, q_vals, refl[:, 0, 0])
+        r_s = np.interp(x, qvals_1, refl[:, 1, 1])
+        r_p = np.interp(x, qvals_2, refl[:, 0, 0])
 
         return (r_p - r_s) / (r_p + r_s)
 

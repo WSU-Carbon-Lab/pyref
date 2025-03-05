@@ -175,13 +175,17 @@ class Fitter(CurveFitter):
     """Overload the CurveFitter class to include custom sampling."""
 
     def __init__(
+        self,
         objective: Any,
         nwalkers: int | None = None,
         ntemps: int = -1,
         **mcmc_kws: dict[Any],
     ) -> None:
         nparams = len(objective.varying_parameters())
-        if nwalkers < 2 * nparams or nwalkers is None:
+        print(nparams)
+        if nwalkers is None:
+            nwalkers = 2 * nparams
+        elif nwalkers < 2 * nparams:
             import warnings
 
             nwalkers = 2 * nparams

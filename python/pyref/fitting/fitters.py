@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from refnx._lib import (
@@ -174,10 +174,23 @@ class AnisotropyObjective(Objective):
 class Fitter(CurveFitter):
     """Overload the CurveFitter class to include custom sampling."""
 
-    def __init__(self, objective, nwalkers=200, ntemps=1, first_step=0.1, **kwargs):
-        super().__init__(
-            objective, nwalkers=nwalkers, ntemps=ntemps, first_step=first_step, **kwargs
-        )
+    def __init__(
+        objective: Any,
+        nwalkers: int | None = None,
+        ntemps: int = -1,
+        **mcmc_kws: dict[Any],
+    ) -> None:
+        nparams = len(objective.varying_parameters())
+        if nwalkers < 2 * nparams or nwalkers is None:
+            import warnings
+
+            nwalkers = 2 * nparams
+            warnings.warn(
+                f"Number of walkers should be at least 2 * nparams. "
+                f"Setting nwalkers = {nwalkers}",
+                stacklevel=2,
+            )
+        super().__init__(objective, nwalkers, ntemps, **mcmc_kws)
 
     def sample(
         self,

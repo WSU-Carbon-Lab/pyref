@@ -1114,7 +1114,6 @@ class UniTensorSLD(Scatterer):
         return np.diag(
             [
                 self.n_xx(e) + self.n_ixx(e) * 1j,
-                self.n_xx(e) + self.n_ixx(e) * 1j,
                 self.n_zz(e) + self.n_izz(e) * 1j,
             ]
         )
@@ -1138,24 +1137,12 @@ class UniTensorSLD(Scatterer):
                 complex tensor index of refraction
         """
         n = self.density.value * self.n
-        c = np.cos(self.rotation.value)
-        s = np.sin(self.rotation.value)
-        R = np.array(
-            [
-                [c, -s],
-                [s, c],
-            ]
-        )
-        n = R @ np.array([[n[0, 0], 0], [0, n[2, 2]]]) @ R.T
-        n_o = n[0, 0]
-        n_e = n[1, 1]
-        # n_o = (
-        #     n[0, 0] * (1 + np.square(np.cos(self.rotation.value)))
-        #     + n[2, 2] * np.square(np.sin(self.rotation.value)) / 2
-        # )
-        # n_e = n[0, 0] * np.square(np.cos(self.rotation.value)) + n[2, 2] * np.square(
-        #     np.sin(self.rotation.value)
-        # )
+        cos_squared = np.square(np.cos(self.rotation.value))
+        sin_squared = 1 - cos_squared
+
+        n_o = 0.5 * n[0, 0] * (1 + cos_squared) + 0.5 * n[1, 1] * sin_squared
+        n_e = n[0, 0] * cos_squared + n[1, 1] * sin_squared
+
         self._tensor = np.array(
             [
                 [n_o, 0, 0],
@@ -1867,7 +1854,7 @@ if __name__ == "__main__":
 
     sns.set_palette("blend:#00829c,#ff9d8d", n_colors=3)
 
-    ooc = pd.read_csv("C:/Users/hduva/.projects/pyref/optical_constants.csv")
+    ooc = pd.read_csv("~/projects/pyref/optical_constants.csv")
     si = MaterialSLD("Si", name="Si")(0, 1.5)
 
     fig, ax = plt.subplots(2, 1, figsize=(6, 8))

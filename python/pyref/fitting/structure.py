@@ -1140,8 +1140,8 @@ class UniTensorSLD(Scatterer):
         cos_squared = np.square(np.cos(self.rotation.value))
         sin_squared = 1 - cos_squared
 
-        n_o = 0.5 * n[0, 0] * (1 + cos_squared) + 0.5 * n[1, 1] * sin_squared
-        n_e = n[0, 0] * cos_squared + n[1, 1] * sin_squared
+        n_o = (n[0, 0] * (1 + cos_squared) + n[1, 1] * sin_squared) / 2
+        n_e = n[0, 0] * sin_squared + n[1, 1] * cos_squared
 
         self._tensor = np.array(
             [
@@ -1857,7 +1857,9 @@ if __name__ == "__main__":
     ooc = pd.read_csv("~/projects/pyref/optical_constants.csv")
     si = MaterialSLD("Si", name="Si")(0, 1.5)
 
-    fig, ax = plt.subplots(2, 1, figsize=(6, 8))
+    fig, ax = plt.subplots(
+        1, 2, figsize=(8, 2), sharey=True, gridspec_kw={"wspace": 0.1}
+    )
 
     znpc_slab = UniTensorSLD(
         ooc,
@@ -1877,11 +1879,10 @@ if __name__ == "__main__":
         rotation=np.pi / 2,
         density=1.45,
         energy=283.7,
-        energy_offset=0,
         name="ZnPC",
     )(196.441, 7.216)
 
     struct = vac | znpc_slab | si
-    struct.plot(ax=ax[1], difference=True)
+    struct.plot(ax=ax[1])
     print(struct)
     plt.show()

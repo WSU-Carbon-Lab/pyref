@@ -1595,7 +1595,7 @@ class Stack(PXR_Component, UserList):
         if not len(self):
             return None
 
-        repeats = int(round(abs(self.repeats.value)))
+        repeats = round(abs(self.repeats.value))
 
         slabs = np.concatenate([c.slabs(structure=self) for c in self.components])
 
@@ -1616,7 +1616,7 @@ class Stack(PXR_Component, UserList):
         if not len(self):
             return None
 
-        repeats = int(round(abs(self.repeats.value)))
+        repeats = round(abs(self.repeats.value))
 
         tensor = np.concatenate(
             [c.tensor(energy=energy) for c in self.components], axis=0

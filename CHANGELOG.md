@@ -1,3 +1,20 @@
+## v0.8.0 (2025-04-07)
+
+### Feat
+
+- **fitting**: added improved fitting routines
+
+### Fix
+
+- **formatting**: updated ruff version
+- **formatting**: fixed formatting
+- **fitting**: extrodinary component fixed
+- **fitting**: updated rotations to include the correct tensor rotation calculation
+- added default curve fitting walker number
+- added self refference to fix curve fitter instantiation
+- **fitting**: moved curve fitter object from refnx to pyref
+- fixed build
+
 ## v0.7.4 (2025-03-04)
 
 ### Fix

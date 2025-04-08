@@ -1550,7 +1550,7 @@ class Stack(PXR_Component, UserList):
         s = []
         s.append("{:=>80}".format(""))
 
-        s.append(f"Stack start: {int(round(abs(self.repeats.value)))} repeats")
+        s.append(f"Stack start: {round(abs(self.repeats.value))} repeats")
         for component in self:
             s.append(str(component))
         s.append("Stack finish")

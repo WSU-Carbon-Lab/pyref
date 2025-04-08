@@ -1852,10 +1852,14 @@ if __name__ == "__main__":
     import pandas as pd
     import seaborn as sns
 
+    from pyref.fitting import AnisotropyObjective
+    from pyref.fitting.reflectivity import ReflectModel
+    from pyref.fitting.refnx_converters import XrayReflectDataset
+
     sns.set_palette("blend:#00829c,#ff9d8d", n_colors=3)
 
-    ooc = pd.read_csv("~/projects/pyref/optical_constants.csv")
-    si = MaterialSLD("Si", name="Si")(0, 1.5)
+    ooc = pd.read_csv("~/.projects/pyref/optical_constants.csv")
+    si = MaterialSLD("Si", name="Si", energy=283.7)(0, 1.5)
 
     fig, ax = plt.subplots(
         1, 2, figsize=(8, 2), sharey=True, gridspec_kw={"wspace": 0.1}
@@ -1885,4 +1889,19 @@ if __name__ == "__main__":
     struct = vac | znpc_slab | si
     struct.plot(ax=ax[1])
     print(struct)
+    plt.show()
+
+    # Plot a model
+    models = ReflectModel(struct, name="ZnPC/Si", energy=283.7, pol="s")
+    modelp = ReflectModel(struct, name="ZnPC/Si", energy=283.7, pol="p")
+    model = ReflectModel(struct, name="ZnPC/Si", energy=283.7, pol="sp")
+
+    q = np.linspace(0.01, 0.1, 100)
+    datas = models(q)
+    datap = modelp(q)
+    xraydata = XrayReflectDataset.from_arrays(
+        x_s=q, y_s=datas, x_p=q, y_p=datap, name="ZnPC/Si"
+    )
+    obj = AnisotropyObjective(model, xraydata, name="ZnPC/Si")
+    ax, ax_ani = obj.plot()
     plt.show()

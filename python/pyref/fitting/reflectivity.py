@@ -25,7 +25,10 @@ class XrayReflectDataset(ReflectDataset):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._initialize_polarizations()
 
+    def _initialize_polarizations(self):
+        """Initialize s and p polarization datasets and calculate anisotropy."""
         diff = np.diff(self.x)
         # locate where diff is less than 0 and find that index
         idx = np.where(diff < 0)[0] + 1
@@ -52,6 +55,91 @@ class XrayReflectDataset(ReflectDataset):
         _anisotropy = (r_p_interp - r_s_interp) / (r_p_interp + r_s_interp)
         self.anisotropy = ReflectDataset((q_common, _anisotropy))
 
+    @classmethod
+    def from_arrays(
+        cls,
+        x_s=None,
+        y_s=None,
+        y_err_s=None,
+        x_p=None,
+        y_p=None,
+        y_err_p=None,
+        name=None,
+    ):
+        """
+        Create an XrayReflectDataset directly from arrays of s and p polarization data.
+
+        Parameters
+        ----------
+        x_s : np.ndarray
+            q values for s-polarization
+        y_s : np.ndarray
+            reflectivity values for s-polarization
+        y_err_s : np.ndarray
+            errors for s-polarization reflectivity
+        x_p : np.ndarray
+            q values for p-polarization
+        y_p : np.ndarray
+            reflectivity values for p-polarization
+        y_err_p : np.ndarray
+            errors for p-polarization reflectivity
+        name : str, optional
+            Name for the dataset
+
+        Returns
+        -------
+        dataset : XrayReflectDataset
+            The combined dataset with s and p polarization data
+        """
+        # Handle case where only s-polarization is provided
+        if x_p is None:
+            dataset = cls(data=(x_s, y_s, y_err_s), name=name)
+            return dataset
+
+        # Handle case where only p-polarization is provided
+        if x_s is None:
+            dataset = cls(data=(x_p, y_p, y_err_p), name=name)
+            return dataset
+
+        # Default to empty arrays if not provided
+        if y_err_s is None:
+            y_err_s = np.zeros_like(y_s)
+        if y_err_p is None:
+            y_err_p = np.zeros_like(y_p)
+
+        # Combine s and p polarization data
+        x_combined = np.concatenate([x_s, x_p])
+        y_combined = np.concatenate([y_s, y_p])
+        y_err_combined = np.concatenate([y_err_s, y_err_p])
+
+        # Sort by x value if s and p overlap
+        if np.any(x_s > x_p[0]):
+            sort_idx = np.argsort(x_combined)
+            x_combined = x_combined[sort_idx]
+            y_combined = y_combined[sort_idx]
+            y_err_combined = y_err_combined[sort_idx]
+
+        # Create the dataset
+        dataset = cls(data=(x_combined, y_combined, y_err_combined), name=name)
+
+        # Override automatic polarization detection if we're manually specifying them
+        dataset.s = ReflectDataset((x_s, y_s, y_err_s))
+        dataset.p = ReflectDataset((x_p, y_p, y_err_p))
+
+        # Recalculate anisotropy
+        q_min = np.max([dataset.s.x.min(), dataset.p.x.min()])
+        q_max = np.min([dataset.s.x.max(), dataset.p.x.max()])
+        q_common = np.linspace(q_min, q_max, max(len(dataset.s.x), len(dataset.p.x)))
+
+        # Interpolate both s and p polarized data onto common q points
+        r_s_interp = np.interp(q_common, dataset.s.x, dataset.s.y)
+        r_p_interp = np.interp(q_common, dataset.p.x, dataset.p.y)
+
+        _anisotropy = (r_p_interp - r_s_interp) / (r_p_interp + r_s_interp)
+        dataset.anisotropy = ReflectDataset((q_common, _anisotropy))
+
+        return dataset
+
     def plot(self, ax=None, ax_anisotropy=None, **kwargs):
         """Plot the reflectivity and anisotropy data."""
         if ax is None:
@@ -62,7 +150,14 @@ class XrayReflectDataset(ReflectDataset):
                 gridspec_kw={"height_ratios": [3, 1]},
             )
             ax = axs[0]
-            ax_anisotropy = axs[1]
+            if ax_anisotropy is None:
+                ax_anisotropy = axs[1]
+
+        elif ax_anisotropy is None:
+            # If only ax was provided but not ax_anisotropy
+            fig = ax.figure
+            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0)
+            ax_anisotropy = fig.add_subplot(gs[1], sharex=ax)
 
         if self.s.y[3] != self.p.y[3]:
             # Plot s and p separately
@@ -449,13 +544,40 @@ class ReflectModel:
         self._phi = phi
 
     def _model(self, x, p=None, x_err=None):
+        """
+        Calculate the reflectivity model internals.
+
+        This internal method handles parameter updates, q-vector adjustments,
+        and theta offset corrections before calculating reflectivity.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            q values for the calculation.
+        p : refnx.analysis.Parameters, optional
+            parameters required to calculate the model
+        x_err : np.ndarray or float
+            dq resolution smearing values for the dataset being considered.
+
+        Returns
+        -------
+        tuple
+            (qvals, qvals_1, qvals_2, refl, tran, components)
+            - qvals: q values used for calculation
+            - qvals_1, qvals_2: q values for first and second polarization
+            - refl: reflectivity matrix
+            - tran: transmission matrix
+            - components: additional calculation components
+        """
+        # Update parameters if provided
         if p is not None:
             self.parameters.pvals = np.array(p)
 
+        # Use object's dq if x_err is not provided
         if x_err is None:
-            # fallback to what this object was constructed with
             x_err = float(self.dq)
 
+        # Prepare common model parameters
         model_input = {
             "slabs": self.structure.slabs(),
             "tensor": self.structure.tensor(energy=self.energy),
@@ -468,46 +590,54 @@ class ReflectModel:
             "backend": self.backend,
         }
 
-        if self.pol == "sp" or self.pol == "ps":
+        # Wavelength in Angstroms
+        wavelength = 12398.42 / self.energy
+
+        # Handle polarization-specific adjustments
+        if self.pol in ("sp", "ps"):
+            # Find where q values split by detecting largest gap
             concat_loc = np.argmax(np.abs(np.diff(x)))
-            qvals_1 = x[: concat_loc + 1]  # Split inputs for later
-            qvals_2 = x[concat_loc + 1 :]  # Split inputs for later
-            num_q = concat_loc + 50
+            qvals_1 = x[: concat_loc + 1]
+            qvals_2 = x[concat_loc + 1 :]
+            num_q = max(
+                len(x), concat_loc + 50
+            )  # Ensure sufficient points for interpolation
 
-            # Convert q to theta for offset application
-            theta_s = (
-                np.arcsin(qvals_1 * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
-            )
-            theta_p = (
-                np.arcsin(qvals_2 * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
-            )
+            # Convert q to theta (in degrees)
+            theta_s = np.arcsin(qvals_1 * wavelength / (4 * np.pi)) * 180 / np.pi
+            theta_p = np.arcsin(qvals_2 * wavelength / (4 * np.pi)) * 180 / np.pi
 
-            # Apply offsets
+            # Apply polarization-specific angle offsets
             theta_s += self.theta_offset_s.value
             theta_p += self.theta_offset_p.value
 
             # Convert back to q
-            qvals_1 = 4 * np.pi * self.energy * np.sin(theta_s * np.pi / 180) / 12398.42
-            qvals_2 = 4 * np.pi * self.energy * np.sin(theta_p * np.pi / 180) / 12398.42
+            qvals_1 = (4 * np.pi / wavelength) * np.sin(theta_s * np.pi / 180)
+            qvals_2 = (4 * np.pi / wavelength) * np.sin(theta_p * np.pi / 180)
+
+            # Create array for calculation and output
             x = np.concatenate([qvals_1, qvals_2])
             qvals = np.linspace(np.min(x), np.max(x), num_q)
-        elif self.pol == "s":
-            theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
-            theta += self.theta_offset_s.value
-            qvals = 4 * np.pi * self.energy * np.sin(theta * np.pi / 180) / 12398.42
-            qvals_1 = qvals
-            qvals_2 = qvals
-        elif self.pol == "p":
-            theta = np.arcsin(x * 12398.42 / (4 * np.pi * self.energy)) * 180 / np.pi
-            theta += self.theta_offset_p.value
-            qvals = 4 * np.pi * self.energy * np.sin(theta * np.pi / 180) / 12398.42
-            qvals_1 = qvals
-            qvals_2 = qvals
-        else:
-            qvals = x
-            qvals_1 = x
-            qvals_2 = x
 
+        elif self.pol == "s":
+            # Convert to theta, apply s-polarization offset, convert back to q
+            theta = np.arcsin(x * wavelength / (4 * np.pi)) * 180 / np.pi
+            theta += self.theta_offset_s.value
+            qvals = (4 * np.pi / wavelength) * np.sin(theta * np.pi / 180)
+            qvals_1 = qvals_2 = qvals
+
+        elif self.pol == "p":
+            # Convert to theta, apply p-polarization offset, convert back to q
+            theta = np.arcsin(x * wavelength / (4 * np.pi)) * 180 / np.pi
+            theta += self.theta_offset_p.value
+            qvals = (4 * np.pi / wavelength) * np.sin(theta * np.pi / 180)
+            qvals_1 = qvals_2 = qvals
+
+        else:
+            # No polarization specified, use raw q values
+            qvals = qvals_1 = qvals_2 = x
+
+        # Apply q offset and calculate reflectivity
         refl, tran, *components = reflectivity(
             qvals + self.q_offset.value,
             **model_input,
@@ -559,13 +689,43 @@ class ReflectModel:
         return output
 
     def anisotropy(self, x, p=None, x_err=None):
-        """Calculate the anisotropy of the model."""
-        qvals, qvals_1, qvals_2, refl, tran, components = self._model(x, p, x_err)
+        """
+        Calculate the anisotropy of the model.
 
-        r_s = np.interp(x, qvals, refl[:, 1, 1])
-        r_p = np.interp(x, qvals, refl[:, 0, 0])
+        Properly accounts for theta offsets between s and p polarizations.
+        """
+        # Wavelength in Angstroms
+        wavelength = 12398.42 / self.energy
 
-        return (r_p - r_s) / (r_p + r_s)
+        # Convert x (q) to theta (in degrees)
+        theta = np.arcsin(x * wavelength / (4 * np.pi)) * 180 / np.pi
+
+        # Apply polarization-specific angle offsets
+        theta_s = theta + self.theta_offset_s.value
+        theta_p = theta + self.theta_offset_p.value
+
+        # Convert back to q
+        q_s = (4 * np.pi / wavelength) * np.sin(theta_s * np.pi / 180)
+        q_p = (4 * np.pi / wavelength) * np.sin(theta_p * np.pi / 180)
+
+        # Calculate reflectivity for both polarizations with their respective offsets
+        old_pol = self.pol  # Save current polarization setting
+
+        # Calculate s-polarization
+        self.pol = "s"
+        r_s = self.model(q_s, p)
+
+        # Calculate p-polarization
+        self.pol = "p"
+        r_p = self.model(q_p, p)
+
+        # Restore original polarization
+        self.pol = old_pol
+
+        # Calculate anisotropy
+        anisotropy = (r_p - r_s) / (r_p + r_s)
+
+        return anisotropy
 
     def logp(self):
         r"""
@@ -633,7 +793,6 @@ def reflectivity(
     scale_p: float = 1.0,
     bkg: float = 0.0,
     dq: float = 0.0,
-    theta_offset: float = 0.0,
     backend: Literal["uni", "bi"] = "uni",
 ):
     r"""

@@ -416,6 +416,12 @@ class Fitter(CurveFitter):
     @property
     def chain(self) -> np.ndarray:
         """Get the chain from the sampler."""
+        # Only use backend if it exists and is storing results
+        if hasattr(self, "backend") and self.backend is not None:
+            try:
+                return self.backend.get_chain()
+            except Exception:
+                pass  # Fallback to sampler chain if backend is not storing
         if hasattr(self.sampler, "get_chain"):
             chain = self.sampler.get_chain()
             if chain is None:

@@ -361,7 +361,7 @@ class Fitter(CurveFitter):
         callback=None,
         verbose=True,
         pool=-1,
-        **sampler_kws,
+        skip_check=False,
     ):
         """
         Performs sampling from the objective.
@@ -478,7 +478,7 @@ class Fitter(CurveFitter):
 
         # Passthough sampler_kws to the sampler.sample method outside of the
         # parallelisation context.
-        sampler_kws = {} if sampler_kws is None else sampler_kws
+        sampler_kws = {}
         sampler_args = getargspec(self.sampler.sample).args
 
         # update sampler_kws with the sampler_args from instantiated Fitter.
@@ -489,7 +489,8 @@ class Fitter(CurveFitter):
             sampler_kws["thin_by"] = nthin
             sampler_kws.pop("thin", 0)
 
-        sampler_kws.update({"iterations": steps, "thin": nthin})
+        sampler_kws.update(m={"iterations": steps, "thin": nthin})
+        sampler_kws.update(m={"skip_initial_state_check": skip_check})
 
         # using context manager means we kill off zombie pool objects
         # but does mean that the pool has to be specified each time.

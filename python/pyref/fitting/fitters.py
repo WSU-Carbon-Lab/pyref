@@ -352,7 +352,7 @@ class Fitter(CurveFitter):
             )
         super().__init__(objective, nwalkers, ntemps, **mcmc_kws)
 
-        def sample(
+    def sample(
         self,
         steps,
         nthin=1,
@@ -362,158 +362,158 @@ class Fitter(CurveFitter):
         verbose=True,
         pool=-1,
         **sampler_kws,
-        ):
-            """
-            Performs sampling from the objective.
+    ):
+        """
+        Performs sampling from the objective.
 
-            Parameters
-            ----------
-            steps : int
-            Collect `steps` samples into the chain. The sampler will run a
-            total of `steps * nthin` moves.
-            nthin : int, optional
-            Each chain sample is separated by `nthin` iterations.
-            random_state : {None, int, `np.random.RandomState`, `np.random.Generator`}
-            If performing MCMC with `ntemps == -1`:
+        Parameters
+        ----------
+        steps : int
+        Collect `steps` samples into the chain. The sampler will run a
+        total of `steps * nthin` moves.
+        nthin : int, optional
+        Each chain sample is separated by `nthin` iterations.
+        random_state : {None, int, `np.random.RandomState`, `np.random.Generator`}
+        If performing MCMC with `ntemps == -1`:
 
-            - If `random_state` is not specified the `~np.random.RandomState`
-              singleton is used.
-            - If `random_state` is an int, a new ``RandomState`` instance is
-              used, seeded with `random_state`.
-            - If `random_state` is already a ``RandomState`` instance, then
-              that object is used.
+        - If `random_state` is not specified the `~np.random.RandomState`
+          singleton is used.
+        - If `random_state` is an int, a new ``RandomState`` instance is
+          used, seeded with `random_state`.
+        - If `random_state` is already a ``RandomState`` instance, then
+          that object is used.
 
-            If using parallel tempering then random number generation is
-            controlled by ``np.random.default_rng(random_state)``
+        If using parallel tempering then random number generation is
+        controlled by ``np.random.default_rng(random_state)``
 
-            Specify `random_state` for repeatable minimizations.
-            f : file-like or str
-            File to incrementally save chain progress to. Each row in the file
-            is a flattened array of size `(nwalkers, ndim)` or
-            `(ntemps, nwalkers, ndim)`. There are `steps` rows in the
-            file.
-            callback : callable
-            callback function to be called at each iteration step. Has the
-            signature `callback(coords, logprob)`.
-            verbose : bool, optional
-            Gives updates on the sampling progress
-            pool : int or map-like object, optional
-            If `pool` is an `int` then it specifies the number of threads to
-            use for parallelization. If `pool == -1`, then all CPU's are used.
-            If pool is a map-like callable that follows the same calling
-            sequence as the built-in map function, then this pool is used for
-            parallelisation.
+        Specify `random_state` for repeatable minimizations.
+        f : file-like or str
+        File to incrementally save chain progress to. Each row in the file
+        is a flattened array of size `(nwalkers, ndim)` or
+        `(ntemps, nwalkers, ndim)`. There are `steps` rows in the
+        file.
+        callback : callable
+        callback function to be called at each iteration step. Has the
+        signature `callback(coords, logprob)`.
+        verbose : bool, optional
+        Gives updates on the sampling progress
+        pool : int or map-like object, optional
+        If `pool` is an `int` then it specifies the number of threads to
+        use for parallelization. If `pool == -1`, then all CPU's are used.
+        If pool is a map-like callable that follows the same calling
+        sequence as the built-in map function, then this pool is used for
+        parallelisation.
 
-            sampler_kws : dict
-            Keywords to pass to the sampler.sample method. Please see the corresponding
-            method :meth:`emcee.EnsembleSampler.sample` or
-            :meth:`ptemcee.sampler.Sampler.sample` for more information.
+        sampler_kws : dict
+        Keywords to pass to the sampler.sample method. Please see the corresponding
+        method :meth:`emcee.EnsembleSampler.sample` or
+        :meth:`ptemcee.sampler.Sampler.sample` for more information.
 
-            Notes
-            -----
-            Please see :class:`emcee.EnsembleSampler` for its detailed behaviour.
+        Notes
+        -----
+        Please see :class:`emcee.EnsembleSampler` for its detailed behaviour.
 
-            >>> # we'll burn the first 500 steps
-            >>> fitter.sample(500)
-            >>> # after you've run those, then discard them by resetting the
-            >>> # sampler.
-            >>> fitter.sampler.reset()
-            >>> # Now collect 40 steps, each step separated by 50 sampler
-            >>> # generations.
-            >>> fitter.sample(40, nthin=50)
+        >>> # we'll burn the first 500 steps
+        >>> fitter.sample(500)
+        >>> # after you've run those, then discard them by resetting the
+        >>> # sampler.
+        >>> fitter.sampler.reset()
+        >>> # Now collect 40 steps, each step separated by 50 sampler
+        >>> # generations.
+        >>> fitter.sample(40, nthin=50)
 
-            One can also burn and thin in `Curvefitter.process_chain`.
-            """  # noqa: D401
-            self._check_vars_unchanged()
+        One can also burn and thin in `Curvefitter.process_chain`.
+        """  # noqa: D401
+        self._check_vars_unchanged()
 
-            # setup a random number generator
-            # want Generator for ptemcee
-            if self._ntemps == -1:
-                rng = check_random_state(random_state)
-                # require rng to be a RandomState
-                if isinstance(random_state, np.random.Generator):
-                    rng = np.random.RandomState()
-            else:
-                rng = np.random.default_rng(random_state)
+        # setup a random number generator
+        # want Generator for ptemcee
+        if self._ntemps == -1:
+            rng = check_random_state(random_state)
+            # require rng to be a RandomState
+            if isinstance(random_state, np.random.Generator):
+                rng = np.random.RandomState()
+        else:
+            rng = np.random.default_rng(random_state)
 
-            if self._state is None:
-                self.initialise(random_state=rng)
+        if self._state is None:
+            self.initialise(random_state=rng)
 
-            # for saving progress to file
-            def _callback_wrapper(state, h=None):
-                if callback is not None:
-                    callback(state.coords, state.log_prob)
+        # for saving progress to file
+        def _callback_wrapper(state, h=None):
+            if callback is not None:
+                callback(state.coords, state.log_prob)
 
-                if h is not None:
-                    h.write(" ".join(map(str, state.coords.ravel())))
-                    h.write("\n")
+            if h is not None:
+                h.write(" ".join(map(str, state.coords.ravel())))
+                h.write("\n")
 
-            # remove chains from each of the parameters because they slow down
-            # pickling but only if they are parameter objects.
-            flat_params = f_unique(flatten(self.objective.parameters))
-            flat_params = [param for param in flat_params if is_parameter(param)]
-            # zero out all the old parameter stderrs
-            for param in flat_params:
-                param.stderr = None
-                param.chain = None
+        # remove chains from each of the parameters because they slow down
+        # pickling but only if they are parameter objects.
+        flat_params = f_unique(flatten(self.objective.parameters))
+        flat_params = [param for param in flat_params if is_parameter(param)]
+        # zero out all the old parameter stderrs
+        for param in flat_params:
+            param.stderr = None
+            param.chain = None
 
-            # make sure the checkpoint file exists
-            if f is not None:
-                with possibly_open_file(f, "w") as h:
-                    # write the shape of each step of the chain
-                    h.write("# ")
-                    shape = self._state.coords.shape
-                    h.write(", ".join(map(str, shape)))
-                    h.write("\n")
+        # make sure the checkpoint file exists
+        if f is not None:
+            with possibly_open_file(f, "w") as h:
+                # write the shape of each step of the chain
+                h.write("# ")
+                shape = self._state.coords.shape
+                h.write(", ".join(map(str, shape)))
+                h.write("\n")
 
-            # set the random state of the sampler
-            # normally one could give this as an argument to the sample method
-            # but PTSampler didn't historically accept that...
-            if self._ntemps == -1 and isinstance(rng, np.random.RandomState):
-                rstate0 = rng.get_state()
-                self._state.random_state = rstate0
-                self.sampler.random_state = rstate0
-            elif self._ntemps > 0:
-                self._state.random_state = rng.bit_generator.state
+        # set the random state of the sampler
+        # normally one could give this as an argument to the sample method
+        # but PTSampler didn't historically accept that...
+        if self._ntemps == -1 and isinstance(rng, np.random.RandomState):
+            rstate0 = rng.get_state()
+            self._state.random_state = rstate0
+            self.sampler.random_state = rstate0
+        elif self._ntemps > 0:
+            self._state.random_state = rng.bit_generator.state
 
-            # Passthough sampler_kws to the sampler.sample method outside of the
-            # parallelisation context.
-            sampler_kws = {} if sampler_kws is None else sampler_kws
-            sampler_args = getargspec(self.sampler.sample).args
+        # Passthough sampler_kws to the sampler.sample method outside of the
+        # parallelisation context.
+        sampler_kws = {} if sampler_kws is None else sampler_kws
+        sampler_args = getargspec(self.sampler.sample).args
 
-            # update sampler_kws with the sampler_args from instantiated Fitter.
-            if "progress" in sampler_args and verbose:
-                sampler_kws["progress"] = True
-                verbose = False
-            if "thin_by" in sampler_kws:
-                sampler_kws["thin_by"] = nthin
-                sampler_kws.pop("thin", 0)
+        # update sampler_kws with the sampler_args from instantiated Fitter.
+        if "progress" in sampler_args and verbose:
+            sampler_kws["progress"] = True
+            verbose = False
+        if "thin_by" in sampler_kws:
+            sampler_kws["thin_by"] = nthin
+            sampler_kws.pop("thin", 0)
 
-            sampler_kws.update({"iterations": steps, "thin": nthin})
+        sampler_kws.update({"iterations": steps, "thin": nthin})
 
-            # using context manager means we kill off zombie pool objects
-            # but does mean that the pool has to be specified each time.
-            with MapWrapper(pool) as g, possibly_open_file(f, "a") as h:
-                # if you're not creating more than 1 thread, then don't bother with
-                # a pool.
-                if isinstance(self.sampler, emcee.EnsembleSampler):
-                    if pool == 1:
-                        self.sampler.pool = None
-                    else:
-                        self.sampler.pool = g
-                else:
-                    sampler_kws["mapper"] = g
-
-                # perform the sampling
-                for state in self.sampler.sample(self._state, **sampler_kws):
-                    self._state = state
-                    _callback_wrapper(state, h=h)
-
+        # using context manager means we kill off zombie pool objects
+        # but does mean that the pool has to be specified each time.
+        with MapWrapper(pool) as g, possibly_open_file(f, "a") as h:
+            # if you're not creating more than 1 thread, then don't bother with
+            # a pool.
             if isinstance(self.sampler, emcee.EnsembleSampler):
-                self.sampler.pool = None
+                if pool == 1:
+                    self.sampler.pool = None
+                else:
+                    self.sampler.pool = g
+            else:
+                sampler_kws["mapper"] = g
 
-            # sets parameter value and stderr
-            return process_chain(self.objective, self.chain)
+            # perform the sampling
+            for state in self.sampler.sample(self._state, **sampler_kws):
+                self._state = state
+                _callback_wrapper(state, h=h)
+
+        if isinstance(self.sampler, emcee.EnsembleSampler):
+            self.sampler.pool = None
+
+        # sets parameter value and stderr
+        return process_chain(self.objective, self.chain)
 
     @property
     def chain(self) -> np.ndarray:

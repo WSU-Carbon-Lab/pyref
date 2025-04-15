@@ -399,6 +399,10 @@ class Fitter(CurveFitter):
 
         sampler_kws = sampler_kws or {}
 
+        # Ensure pool is not None for MapWrapper
+        if pool is None:
+            pool = -1
+
         with MapWrapper(pool):
             for state in self.sampler.sample(
                 self._state, iterations=steps, thin=nthin, **sampler_kws
@@ -502,10 +506,7 @@ def _run_sampler(fitter, pool, sampler_kws, h, callback):
     """
     # if you're not creating more than 1 thread, then don't bother with a pool
     if isinstance(fitter.sampler, emcee.EnsembleSampler):
-        if pool == 1:
-            fitter.sampler.pool = None
-        else:
-            fitter.sampler.pool = pool
+        fitter.sampler.pool = pool
 
         # For emcee backend
         for state in fitter.sampler.sample(fitter._state, **sampler_kws):

@@ -489,8 +489,8 @@ class Fitter(CurveFitter):
             sampler_kws["thin_by"] = nthin
             sampler_kws.pop("thin", 0)
 
-        sampler_kws.update(m={"iterations": steps, "thin": nthin})
-        sampler_kws.update(m={"skip_initial_state_check": skip_check})
+        sampler_kws.update({"iterations": steps, "thin": nthin})
+        sampler_kws.update({"skip_initial_state_check": skip_check})
 
         # using context manager means we kill off zombie pool objects
         # but does mean that the pool has to be specified each time.
@@ -519,20 +519,11 @@ class Fitter(CurveFitter):
     @property
     def chain(self) -> np.ndarray:
         """Get the chain from the sampler."""
-        # Only use backend if it exists and is storing results
-        if hasattr(self, "backend") and self.backend is not None:
-            try:
-                return self.backend.get_chain()
-            except Exception:
-                pass  # Fallback to sampler chain if backend is not storing
-        if hasattr(self.sampler, "get_chain"):
-            chain = self.sampler.get_chain()
-            if chain is None:
-                msg = "Sampler chain is not available."
-                raise ValueError(msg)
-            return chain
-        msg = "Sampler does not support get_chain."
-        raise ValueError(msg)
+        chain = self.sampler.get_chain()
+        if chain is None:
+            msg = "Sampler chain is not available."
+            raise ValueError(msg)
+        return chain
 
     def to_arviz(self, burn: int = 0, thin: int = 1) -> arviz.InferenceData:
         """

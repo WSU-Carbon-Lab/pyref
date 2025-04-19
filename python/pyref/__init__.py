@@ -82,7 +82,6 @@ from pyref.pyref import py_read_experiment
 from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std
 
 __all__ = [
-    "ImageProcs",
     "InteractiveImageMasker",
     "PrsoxrLoader",
     "err_prop_div",

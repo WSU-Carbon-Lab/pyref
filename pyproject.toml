@@ -34,6 +34,7 @@ dependencies = [
   "hvplot>=0.11.2",
   "refnx[all]>=0.1.52",
   "seaborn>=0.13.2",
+  "astropy>=6.0.1",
 ]
 description = "Blazingly fast X-ray reflectivity data analysis package"
 keywords = ["X-ray", "reflectivity", "data", "analysis"]

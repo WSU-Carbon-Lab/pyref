@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0 (2025-04-21)
+
+### Feat
+
+- **io**: updated io operatioins
+
 ## v0.3.59 (2025-01-23)
 
 ### Fix

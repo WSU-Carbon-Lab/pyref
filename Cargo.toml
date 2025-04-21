@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 astrors-fork = "0.1.10"
 chrono = "0.4.39"
+glob-match = "0.2.1"
 ndarray = "0.15.6"
 physical_constants = "0.5.0"
 polars = {version = "0.45.1", features = ["fmt", "dtype-u16", "lazy", "dtype-struct", "dtype-array", "dtype-datetime", "round_series"]}

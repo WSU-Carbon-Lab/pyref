@@ -3,7 +3,6 @@ use astrors_fork::io::hdus::{
     primaryhdu::PrimaryHDU,
 };
 use ndarray::{ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
-use polars::export::chrono::NaiveDateTime;
 use polars::prelude::*;
 use std::ops::Mul;
 
@@ -66,43 +65,43 @@ pub fn col_from_array(
 pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {
     let h = physical_constants::PLANCK_CONSTANT_IN_EV_PER_HZ;
     let c = physical_constants::SPEED_OF_LIGHT_IN_VACUUM * 1e10;
+
     // Calculate lambda and q values in angstrom
     let lz = lzf
-        .sort(["Sample Name"], Default::default())
-        .sort(["Scan ID"], Default::default())
-        .sort(["Frame Number"], Default::default())
+        // Sort by date first (primary sorting key)
+        .sort(["date"], Default::default())
+        // File name as fallback sorting key
+        .sort(["file_name"], Default::default())
         .with_columns(&[
-            col("EXPOSURE [s]").round(3).alias("EXPOSURE [s]"),
-            col("Higher Order Suppressor [mm]")
+            col("exposure").round(3).alias("exposure"),
+            col("higher_order_suppressor")
                 .round(2)
-                .alias("Higher Order Suppressor [mm]"),
-            col("Horizontal Exit Slit Size [um]")
+                .alias("higher_order_suppressor"),
+            col("horizontal_exit_slit_size")
                 .round(1)
-                .alias("Horizontal Exit Slit Size [um]"),
-            col("Beamline Energy [eV]")
-                .round(1)
-                .alias("Beamline Energy [eV]"),
+                .alias("horizontal_exit_slit_size"),
+            col("beamline_energy").round(1).alias("beamline_energy"),
         ])
         .with_column(
-            col("Beamline Energy [eV]")
+            col("beamline_energy")
                 .pow(-1)
                 .mul(lit(h * c))
-                .alias("Lambda [Å]"),
+                .alias("lambda"),
         );
 
     let angle_offset = lz
         .clone()
-        .filter(col("Sample Theta [deg]").eq(0.0))
+        .filter(col("sample_theta").eq(0.0))
         .last()
-        .select(&[col("CCD Theta [deg]"), col("Sample Theta [deg]")])
+        .select(&[col("ccd_theta"), col("sample_theta")])
         .with_column(
-            as_struct(vec![col("Sample Theta [deg]"), col("CCD Theta [deg]")])
+            as_struct(vec![col("sample_theta"), col("ccd_theta")])
                 .map(
                     move |s| {
                         let struc = s.struct_()?;
-                        let th_series = struc.field_by_name("Sample Theta [deg]")?;
+                        let th_series = struc.field_by_name("sample_theta")?;
                         let theta = th_series.f64()?;
-                        let ccd_th_series = struc.field_by_name("CCD Theta [deg]")?;
+                        let ccd_th_series = struc.field_by_name("ccd_theta")?;
                         let ccd_theta = ccd_th_series.f64()?;
                         let out: Float64Chunked = theta
                             .into_iter()
@@ -118,26 +117,27 @@ pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {
                     },
                     GetOutput::from_type(DataType::Float64),
                 )
-                .alias("Theta Offset [deg]"),
+                .alias("theta_offset"),
         )
-        .select(&[col("Theta Offset [deg]")])
+        .select(&[col("theta_offset")])
         .collect()
         .unwrap()
         .get(0)
         .unwrap()[0]
         .try_extract::<f64>()
-        .unwrap();
+        .unwrap_or(0.0); // Add default value if extraction fails
+
     // get the row cor
     let lz = lz
-        .with_column(lit(angle_offset).alias("Theta Offset [deg]"))
+        .with_column(lit(angle_offset).alias("theta_offset"))
         .with_column(
-            as_struct(vec![col("Sample Theta [deg]"), col("Lambda [Å]")])
+            as_struct(vec![col("sample_theta"), col("lambda")])
                 .map(
                     move |s| {
                         let struc = s.struct_()?;
-                        let th_series = struc.field_by_name("Sample Theta [deg]")?;
+                        let th_series = struc.field_by_name("sample_theta")?;
                         let theta = th_series.f64()?;
-                        let lam_series = struc.field_by_name("Lambda [Å]")?;
+                        let lam_series = struc.field_by_name("lambda")?;
                         let lam = lam_series.f64()?;
 
                         let out: Float64Chunked = theta
@@ -153,9 +153,9 @@ pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {
                     },
                     GetOutput::from_type(DataType::Float64),
                 )
-                .alias("Q [Å⁻¹]"),
+                .alias("q"),
         );
-    lz.collect().unwrap()
+    lz.collect().unwrap_or_else(|_| DataFrame::empty())
 }
 
 //
@@ -172,7 +172,7 @@ pub fn process_image(img: &ImageHDU) -> Result<Vec<Column>, FitsLoaderError> {
     match &img.data {
         ImageData::I16(image) => {
             let data = image.map(|&x| i64::from(x as i64 + bzero));
-            Ok(vec![col_from_array("Raw".into(), data.clone()).unwrap()])
+            Ok(vec![col_from_array("raw".into(), data.clone()).unwrap()])
         }
         _ => Err(FitsLoaderError::UnsupportedImageData),
     }
@@ -183,91 +183,114 @@ pub fn process_metadata(
     keys: &Vec<HeaderValue>,
 ) -> Result<Vec<Column>, FitsLoaderError> {
     if keys.is_empty() {
+        // If no specific keys are requested, return all header values
         Ok(hdu
             .header
             .iter()
             .map(|card| {
                 let name = card.keyword.as_str();
                 let value = card.value.as_float().unwrap_or(0.0);
-                Column::new(name.into(), &[value])
+                // Convert to snake_case without units
+                let clean_name = to_snake_case(name);
+                Column::new(clean_name.into(), &[value])
             })
             .collect())
     } else {
-        keys.iter()
-            .map(|key| {
-                let val = hdu
-                    .header
-                    .get_card(key.hdu())
-                    .ok_or_else(|| FitsLoaderError::MissingHeaderKey(key.hdu().to_string()))?
-                    .value
-                    .as_float()
-                    .ok_or_else(|| {
-                        FitsLoaderError::Other(format!("Value for {} is not a float", key.hdu()))
-                    })?;
-                Ok(Column::new(key.name().into(), &[val]))
-            })
-            .collect()
+        // Process each requested header key
+        let mut columns = Vec::new();
+
+        for key in keys {
+            // Special handling for Beamline Energy
+            if key.hdu() == "Beamline Energy" {
+                // First try to get "Beamline Energy"
+                if let Some(card) = hdu.header.get_card(key.hdu()) {
+                    if let Some(val) = card.value.as_float() {
+                        columns.push(Column::new(key.snake_case_name().into(), &[val]));
+                        continue;
+                    }
+                }
+
+                // Then fall  backto "Beamline Energy Goal" if "Beamline Energy" is not present
+                if let Some(card) = hdu.header.get_card("Beamline Energy Goal") {
+                    if let Some(val) = card.value.as_float() {
+                        columns.push(Column::new(key.snake_case_name().into(), &[val]));
+                        continue;
+                    }
+                }
+
+                // If neither value is available, use a default
+                columns.push(Column::new(key.snake_case_name().into(), &[0.0]));
+                continue;
+            }
+
+            // Special handling for Date header (it's a string value, not a float)
+            if key.hdu() == "DATE" {
+                if let Some(card) = hdu.header.get_card(key.hdu()) {
+                    let val = card.value.to_string();
+                    columns.push(Column::new(key.snake_case_name().into(), &[val]));
+                    continue;
+                }
+                // If DATE is not present, use a default empty string
+                columns.push(Column::new(key.snake_case_name().into(), &["".to_string()]));
+                continue;
+            }
+
+            // For other headers, don't fail if they're missing
+            let val = match hdu.header.get_card(key.hdu()) {
+                Some(card) => card.value.as_float().unwrap_or(1.0),
+                None => 0.0, // Default value for missing headers
+            };
+
+            // Use the snake_case name from the enum
+            columns.push(Column::new(key.snake_case_name().into(), &[val]));
+        }
+
+        Ok(columns)
     }
 }
 
-pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
-    let ts = path
-        .metadata()
-        .unwrap()
-        .modified()
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+/// Convert a header name to snake_case without units
+fn to_snake_case(name: &str) -> String {
+    // First, remove any units in square brackets
+    let name_without_units = name.split(" [").next().unwrap_or(name);
 
-    let ts = NaiveDateTime::from_timestamp(ts as i64, 0);
+    // Then convert to snake_case
+    let mut result = String::new();
+    let mut previous_was_uppercase = false;
 
-    let file_name = path.file_stem().unwrap().to_str().unwrap_or("");
-
-    let filename_segments = file_name.split('-');
-
-    let frame = filename_segments
-        .clone()
-        .last()
-        .unwrap()
-        .parse::<u32>()
-        .unwrap_or(0);
-
-    let remaining = filename_segments
-        .clone()
-        .take(filename_segments.clone().count() - 1)
-        .collect::<String>();
-
-    if remaining.is_empty() {
-        return vec![
-            Column::new("Scan ID".into(), vec![0]),
-            Column::new("Sample Name".into(), vec![""]),
-            Column::new("Frame Number".into(), vec![0]),
-            Column::new("Timestamp".into(), vec![ts]),
-        ];
+    for (i, c) in name_without_units.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 && !previous_was_uppercase {
+                result.push('_');
+            }
+            result.push(c.to_lowercase().next().unwrap());
+            previous_was_uppercase = true;
+        } else if c.is_lowercase() {
+            result.push(c);
+            previous_was_uppercase = false;
+        } else if c.is_whitespace() {
+            result.push('_');
+            previous_was_uppercase = false;
+        } else if c.is_alphanumeric() {
+            result.push(c);
+            previous_was_uppercase = false;
+        }
     }
 
-    let scan_id = remaining
-        .chars()
-        .rev()
-        .take(5)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
+    result.to_lowercase()
+}
 
-    let sample_name = remaining
-        .chars()
-        .take(remaining.len() - 5)
-        .collect::<String>()
-        .trim_end_matches(|c| c == '-' || c == '_')
-        .to_string();
+pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
+    // Extract just the file name without extension
+    let file_name = path
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap_or("")
+        .split(" ")
+        .next()
+        .unwrap_or("");
 
-    vec![
-        Column::new("File Name".into(), vec![remaining]),
-        Column::new("Scan ID".into(), vec![scan_id]),
-        Column::new("Sample Name".into(), vec![sample_name]),
-        Column::new("Frame Number".into(), vec![frame]),
-        Column::new("Timestamp".into(), vec![ts]),
-    ]
+    // Just return the file name directly, without extracting frame numbers or scan IDs
+    vec![Column::new("file_name".into(), vec![file_name])]
 }

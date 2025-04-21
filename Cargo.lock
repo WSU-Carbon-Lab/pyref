@@ -77,9 +77,9 @@ checksum = "bf7d0a018de4f6aa429b9d33d69edf69072b1c5b1cb8d3e4a5f7ef898fc3eb76"
 
 [[package]]
 name = "astrors-fork"
-version = "0.1.13"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6cbc5af5bd32da750d217c6bed15cc1dd301d0333dcc74cd254409d746233e4"
+checksum = "7a6f4fe3a3341b0b3985258974f5c5d145cc8f8871ca2ef6f1de4156fb6a14fb"
 dependencies = [
  "byteorder",
  "cc",
@@ -555,6 +555,12 @@ name = "glob"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
+
+[[package]]
+name = "glob-match"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9985c9503b412198aa4197559e9a318524ebc4519c229bfa05a535828c950b9d"
 
 [[package]]
 name = "hashbrown"
@@ -1563,10 +1569,11 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.58"
+version = "0.3.59"
 dependencies = [
  "astrors-fork",
  "chrono",
+ "glob-match",
  "ndarray",
  "physical_constants",
  "polars",

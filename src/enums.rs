@@ -20,7 +20,7 @@ impl ExperimentType {
 
     /// Retrieves the relevant header keys for the experiment type.
     pub fn get_keys(&self) -> Vec<HeaderValue> {
-        match self {
+        let mut keys = match self {
             ExperimentType::Xrr => vec![
                 HeaderValue::SampleTheta,
                 HeaderValue::CCDTheta,
@@ -33,7 +33,11 @@ impl ExperimentType {
             ],
             ExperimentType::Xrs => vec![HeaderValue::BeamlineEnergy],
             ExperimentType::Other => vec![],
-        }
+        };
+
+        // Always include the Date header for all experiment types
+        keys.push(HeaderValue::Date);
+        keys
     }
 
     /// Retrieves the header names for display purposes.
@@ -65,6 +69,7 @@ pub enum HeaderValue {
     HorizontalExitSlitSize,
     HigherOrderSuppressor,
     Exposure,
+    Date,
 }
 
 impl HeaderValue {
@@ -79,6 +84,7 @@ impl HeaderValue {
             HeaderValue::HorizontalExitSlitSize => "[um]",
             HeaderValue::HigherOrderSuppressor => "[mm]",
             HeaderValue::Exposure => "[s]",
+            HeaderValue::Date => "",
         }
     }
 
@@ -93,6 +99,7 @@ impl HeaderValue {
             HeaderValue::HorizontalExitSlitSize => "Horizontal Exit Slit Size",
             HeaderValue::HigherOrderSuppressor => "Higher Order Suppressor",
             HeaderValue::Exposure => "EXPOSURE",
+            HeaderValue::Date => "DATE",
         }
     }
 
@@ -107,6 +114,22 @@ impl HeaderValue {
             HeaderValue::HorizontalExitSlitSize => "Horizontal Exit Slit Size [um]",
             HeaderValue::HigherOrderSuppressor => "Higher Order Suppressor [mm]",
             HeaderValue::Exposure => "EXPOSURE [s]",
+            HeaderValue::Date => "DATE",
+        }
+    }
+
+    /// Returns the snake_case name without units.
+    pub fn snake_case_name(&self) -> &str {
+        match self {
+            HeaderValue::SampleTheta => "sample_theta",
+            HeaderValue::CCDTheta => "ccd_theta",
+            HeaderValue::BeamlineEnergy => "beamline_energy",
+            HeaderValue::BeamCurrent => "beam_current",
+            HeaderValue::EPUPolarization => "epu_polarization",
+            HeaderValue::HorizontalExitSlitSize => "horizontal_exit_slit_size",
+            HeaderValue::HigherOrderSuppressor => "higher_order_suppressor",
+            HeaderValue::Exposure => "exposure",
+            HeaderValue::Date => "date",
         }
     }
 }

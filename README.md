@@ -11,6 +11,8 @@ crate. It provides a simple interface to access CCD data in FITS files and conve
 - Process specific selections of FITS files
 - Automatic calculation of important derived values (Q, Lambda, etc.)
 - Support for different experiment types (XRR, XRS)
+- Automatic inclusion of DATE header for chronological sorting
+- Simplified file name handling
 
 ## Usage
 
@@ -70,7 +72,7 @@ fn main() {
 
 ## Header Values
 
-Each experiment type automatically extracts the relevant header values:
+Each experiment type automatically extracts the relevant header values, plus standard headers:
 
 ```rust
 // XRR headers
@@ -84,7 +86,14 @@ ExperimentType::Xrr => vec![
     "Higher Order Suppressor [mm]",
     "EXPOSURE [s]",
 ]
+
+// Standard headers always included for all experiment types
+"DATE" // Date/time information from the FITS header
 ```
+
+## File Name Handling
+
+The library now extracts only the base file name from the path without parsing frame numbers or scan IDs. This simplifies file handling and makes it more robust.
 
 ## Calculated Values
 
@@ -93,3 +102,10 @@ The library automatically calculates:
 - Wavelength (Lambda) in Angstroms
 - Momentum transfer (Q) in inverse Angstroms
 - Theta offset for calibration
+
+## Sorting
+
+Output DataFrames are automatically sorted by:
+
+1. Date (from the DATE header)
+2. File name (as fallback sorting key)

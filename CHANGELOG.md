@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1 (2025-05-01)
+
+### Fix
+
+- rename other experiment type to all type
+
 ## v0.4.0 (2025-04-21)
 
 ### Feat

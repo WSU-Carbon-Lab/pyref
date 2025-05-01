@@ -191,8 +191,8 @@ pub fn process_metadata(
                 let name = card.keyword.as_str();
                 let value = card.value.as_float().unwrap_or(0.0);
                 // Convert to snake_case without units
-                // let clean_name = to_snake_case(name);
-                Column::new(name.into(), &[value])
+                let clean_name = to_snake_case(name);
+                Column::new(clean_name.into(), &[value])
             })
             .collect())
     } else {
@@ -205,7 +205,7 @@ pub fn process_metadata(
                 // First try to get "Beamline Energy"
                 if let Some(card) = hdu.header.get_card(key.hdu()) {
                     if let Some(val) = card.value.as_float() {
-                        columns.push(Column::new(key.name().into(), &[val]));
+                        columns.push(Column::new(key.snake_case_name().into(), &[val]));
                         continue;
                     }
                 }
@@ -213,13 +213,13 @@ pub fn process_metadata(
                 // Then fall  backto "Beamline Energy Goal" if "Beamline Energy" is not present
                 if let Some(card) = hdu.header.get_card("Beamline Energy Goal") {
                     if let Some(val) = card.value.as_float() {
-                        columns.push(Column::new(key.name().into(), &[val]));
+                        columns.push(Column::new(key.snake_case_name().into(), &[val]));
                         continue;
                     }
                 }
 
                 // If neither value is available, use a default
-                columns.push(Column::new(key.name().into(), &[0.0]));
+                columns.push(Column::new(key.snake_case_name().into(), &[0.0]));
                 continue;
             }
 
@@ -227,11 +227,11 @@ pub fn process_metadata(
             if key.hdu() == "DATE" {
                 if let Some(card) = hdu.header.get_card(key.hdu()) {
                     let val = card.value.to_string();
-                    columns.push(Column::new(key.name().into(), &[val]));
+                    columns.push(Column::new(key.snake_case_name().into(), &[val]));
                     continue;
                 }
                 // If DATE is not present, use a default empty string
-                columns.push(Column::new(key.name().into(), &["".to_string()]));
+                columns.push(Column::new(key.snake_case_name().into(), &["".to_string()]));
                 continue;
             }
 
@@ -242,7 +242,7 @@ pub fn process_metadata(
             };
 
             // Use the snake_case name from the enum
-            columns.push(Column::new(key.name().into(), &[val]));
+            columns.push(Column::new(key.snake_case_name().into(), &[val]));
         }
 
         Ok(columns)
@@ -250,35 +250,35 @@ pub fn process_metadata(
 }
 
 /// Convert a header name to snake_case without units
-// fn to_snake_case(name: &str) -> String {
-//     // First, remove any units in square brackets
-//     let name_without_units = name.split(" [").next().unwrap_or(name);
+fn to_snake_case(name: &str) -> String {
+    // First, remove any units in square brackets
+    let name_without_units = name.split(" [").next().unwrap_or(name);
 
-//     // Then convert to snake_case
-//     let mut result = String::new();
-//     let mut previous_was_uppercase = false;
+    // Then convert to snake_case
+    let mut result = String::new();
+    let mut previous_was_uppercase = false;
 
-//     for (i, c) in name_without_units.chars().enumerate() {
-//         if c.is_uppercase() {
-//             if i > 0 && !previous_was_uppercase {
-//                 result.push('_');
-//             }
-//             result.push(c.to_lowercase().next().unwrap());
-//             previous_was_uppercase = true;
-//         } else if c.is_lowercase() {
-//             result.push(c);
-//             previous_was_uppercase = false;
-//         } else if c.is_whitespace() {
-//             result.push('_');
-//             previous_was_uppercase = false;
-//         } else if c.is_alphanumeric() {
-//             result.push(c);
-//             previous_was_uppercase = false;
-//         }
-//     }
+    for (i, c) in name_without_units.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 && !previous_was_uppercase {
+                result.push('_');
+            }
+            result.push(c.to_lowercase().next().unwrap());
+            previous_was_uppercase = true;
+        } else if c.is_lowercase() {
+            result.push(c);
+            previous_was_uppercase = false;
+        } else if c.is_whitespace() {
+            result.push('_');
+            previous_was_uppercase = false;
+        } else if c.is_alphanumeric() {
+            result.push(c);
+            previous_was_uppercase = false;
+        }
+    }
 
-//     result.to_lowercase()
-// }
+    result.to_lowercase()
+}
 
 pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
     // Extract just the file name without extension

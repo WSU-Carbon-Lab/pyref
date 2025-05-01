@@ -2,7 +2,7 @@
 pub enum ExperimentType {
     Xrr,
     Xrs,
-    Other,
+    All,
 }
 
 impl ExperimentType {
@@ -11,7 +11,7 @@ impl ExperimentType {
         match exp_type.to_lowercase().as_str() {
             "xrr" => Ok(ExperimentType::Xrr),
             "xrs" => Ok(ExperimentType::Xrs),
-            "other" => Ok(ExperimentType::Other),
+            "other" => Ok(ExperimentType::All),
             _ => Err(crate::errors::FitsLoaderError::InvalidExperimentType(
                 exp_type.to_string(),
             )),
@@ -32,7 +32,7 @@ impl ExperimentType {
                 HeaderValue::Exposure,
             ],
             ExperimentType::Xrs => vec![HeaderValue::BeamlineEnergy],
-            ExperimentType::Other => vec![],
+            ExperimentType::All => vec![],
         };
 
         // Always include the Date header for all experiment types
@@ -54,7 +54,7 @@ impl ExperimentType {
                 "EXPOSURE",
             ],
             ExperimentType::Xrs => vec!["Beamline Energy"],
-            ExperimentType::Other => vec![],
+            ExperimentType::All => vec![],
         }
     }
 }

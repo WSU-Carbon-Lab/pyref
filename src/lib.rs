@@ -5,7 +5,7 @@ use pyo3_polars::{derive::polars_expr, PolarsAllocator, PyDataFrame};
 use pyref_core::{
     enums::ExperimentType,
     enums::HeaderValue,
-    loader::{read_experiment, read_fits},
+    loader::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits},
 };
 
 #[global_allocator]
@@ -87,14 +87,42 @@ fn get_headers(hdu_strs: Vec<String>) -> Vec<HeaderValue> {
 
 // ==================== FUNCTIONS ====================
 
-#[pyfunction(text_signature = "(path: str, header_items: List[str])")]
+#[pyfunction]
+#[pyo3(signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
 pub fn py_read_fits(path: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
     let hdus = get_headers(header_items);
     let df = read_fits(path.into(), &hdus).unwrap();
     Ok(PyDataFrame(df))
 }
 
-#[pyfunction(text_signature = "(dir: str, exp_type: str)")]
+#[pyfunction]
+#[pyo3(signature = (file_paths, exp_type, /), text_signature = "(file_paths, exp_type, /)")]
+pub fn py_read_multiple_fits(file_paths: Vec<String>, exp_type: &str) -> PyResult<PyDataFrame> {
+    let exp_type = ExperimentType::from_str(exp_type).unwrap().get_keys();
+    // Convert Vec<String> to Vec<PathBuf>
+    let fits_files: Vec<_> = file_paths.iter().map(|path| path.into()).collect();
+    match read_multiple_fits(fits_files, &exp_type) {
+        Ok(df) => Ok(PyDataFrame(df)),
+        Err(e) => panic!("Failed to load LazyFrame into python: {}", e),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (dir, pattern, exp_type, /), text_signature = "(dir, pattern, exp_type, /)")]
+pub fn py_read_experiment_pattern(
+    dir: &str,
+    pattern: &str,
+    exp_type: &str,
+) -> PyResult<PyDataFrame> {
+    let exp_type = ExperimentType::from_str(exp_type).unwrap();
+    match read_experiment_pattern(dir, pattern, exp_type) {
+        Ok(df) => Ok(PyDataFrame(df)),
+        Err(e) => panic!("Failed to load LazyFrame into python: {}", e),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (dir, exp_type, /), text_signature = "(dir, exp_type, /)")]
 pub fn py_read_experiment(dir: &str, exp_type: &str) -> PyDataFrame {
     let exp_type = ExperimentType::from_str(exp_type).unwrap().get_keys();
     match read_experiment(dir, &exp_type) {

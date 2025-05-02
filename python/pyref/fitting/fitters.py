@@ -474,7 +474,7 @@ class Fitter(CurveFitter):
             self._state.random_state = rstate0
             self.sampler.random_state = rstate0
         elif self._ntemps > 0:
-            self._state.random_state = rng.bit_generator.state
+            self._state.random_state = rng.bit_generator.state  # type: ignore
 
         # Passthough sampler_kws to the sampler.sample method outside of the
         # parallelisation context.

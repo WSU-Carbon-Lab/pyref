@@ -34,10 +34,10 @@ class XrayReflectDataset(ReflectDataset):
         idx = np.where(diff < 0)[0] + 1
         if len(idx) > 0:
             self.s = ReflectDataset(
-                (self.x[: idx[0]], self.y[: idx[0]], self.y_err[: idx[0]])
+                (self.x[: idx[0]], self.y[: idx[0]], self.y_err[: idx[0]])  # type: ignore
             )
             self.p = ReflectDataset(
-                (self.x[idx[0] :], self.y[idx[0] :], self.y_err[idx[0] :])
+                (self.x[idx[0] :], self.y[idx[0] :], self.y_err[idx[0] :])  # type: ignore
             )
         else:
             self.s = ReflectDataset((self.x, self.y, self.y_err))
@@ -109,7 +109,7 @@ class XrayReflectDataset(ReflectDataset):
 
         # Combine s and p polarization data
         x_combined = np.concatenate([x_s, x_p])
-        y_combined = np.concatenate([y_s, y_p])
+        y_combined = np.concatenate([y_s, y_p])  # type: ignore
         y_err_combined = np.concatenate([y_err_s, y_err_p])
 
         # Sort by x value if s and p overlap
@@ -140,7 +140,7 @@ class XrayReflectDataset(ReflectDataset):
 
         return dataset
 
-    def plot(self, ax=None, ax_anisotropy=None, **kwargs):
+    def plot(self, ax=None, ax_anisotropy=None, **kwargs):  # type: ignore
         """Plot the reflectivity and anisotropy data."""
         if ax is None:
             fig, axs = plt.subplots(
@@ -385,7 +385,7 @@ class ReflectModel:
 
     @dq.setter
     def dq(self, value):
-        self._dq.value = value
+        self._dq.value = value  # type: ignore
 
     @property
     def scale_s(self):
@@ -401,7 +401,7 @@ class ReflectModel:
 
     @scale_s.setter
     def scale_s(self, value):
-        self._scale_s.value = value
+        self._scale_s.value = value  # type: ignore
 
     @property
     def scale_p(self):
@@ -417,7 +417,7 @@ class ReflectModel:
 
     @scale_p.setter
     def scale_p(self, value):
-        self._scale_p.value = value
+        self._scale_p.value = value  # type: ignore
 
     @property
     def bkg(self):
@@ -430,7 +430,7 @@ class ReflectModel:
 
     @bkg.setter
     def bkg(self, value):
-        self._bkg.value = value
+        self._bkg.value = value  # type: ignore
 
     @property
     def q_offset(self):
@@ -443,7 +443,7 @@ class ReflectModel:
 
     @q_offset.setter
     def q_offset(self, value):
-        self._q_offset.value = value
+        self._q_offset.value = value  # type: ignore
 
     @property
     def theta_offset_s(self):
@@ -456,7 +456,7 @@ class ReflectModel:
 
     @theta_offset_s.setter
     def theta_offset_s(self, value):
-        self._theta_offset_s.value = value
+        self._theta_offset_s.value = value  # type: ignore
 
     @property
     def theta_offset_p(self):
@@ -469,7 +469,7 @@ class ReflectModel:
 
     @theta_offset_p.setter
     def theta_offset_p(self, value):
-        self._theta_offset_p.value = value
+        self._theta_offset_p.value = value  # type: ignore
 
     @property
     def en_offset(self):
@@ -483,7 +483,7 @@ class ReflectModel:
 
     @en_offset.setter
     def en_offset(self, value):
-        self._en_offset.value = value
+        self._en_offset.value = value  # type: ignore
 
     @property
     def energy(self):
@@ -571,7 +571,7 @@ class ReflectModel:
         """
         # Update parameters if provided
         if p is not None:
-            self.parameters.pvals = np.array(p)
+            self.parameters.pvals = np.array(p)  # type: ignore
 
         # Use object's dq if x_err is not provided
         if x_err is None:
@@ -579,19 +579,19 @@ class ReflectModel:
 
         # Prepare common model parameters
         model_input = {
-            "slabs": self.structure.slabs(),
-            "tensor": self.structure.tensor(energy=self.energy),
+            "slabs": self.structure.slabs(),  # type: ignore
+            "tensor": self.structure.tensor(energy=self.energy),  # type: ignore
             "energy": self.energy,
             "phi": self.phi,
-            "scale_s": self.scale_s.value,
-            "scale_p": self.scale_p.value,
-            "bkg": self.bkg.value,
+            "scale_s": self.scale_s.value,  # type: ignore
+            "scale_p": self.scale_p.value,  # type: ignore
+            "bkg": self.bkg.value,  # type: ignore
             "dq": x_err,
             "backend": self.backend,
         }
 
         # Wavelength in Angstroms
-        wavelength = 12398.42 / self.energy
+        wavelength = 12398.42 / self.energy  # type: ignore
 
         # Handle polarization-specific adjustments
         if self.pol in ("sp", "ps"):
@@ -600,7 +600,8 @@ class ReflectModel:
             qvals_1 = x[: concat_loc + 1]
             qvals_2 = x[concat_loc + 1 :]
             num_q = max(
-                len(x), concat_loc + 50
+                len(x),
+                concat_loc + 50,  # type: ignore
             )  # Ensure sufficient points for interpolation
 
             # Convert q to theta (in degrees)
@@ -608,8 +609,8 @@ class ReflectModel:
             theta_p = np.arcsin(qvals_2 * wavelength / (4 * np.pi)) * 180 / np.pi
 
             # Apply polarization-specific angle offsets
-            theta_s += self.theta_offset_s.value
-            theta_p += self.theta_offset_p.value
+            theta_s += self.theta_offset_s.value  # type: ignore
+            theta_p += self.theta_offset_p.value  # type: ignore
 
             # Convert back to q
             qvals_1 = (4 * np.pi / wavelength) * np.sin(theta_s * np.pi / 180)
@@ -622,14 +623,14 @@ class ReflectModel:
         elif self.pol == "s":
             # Convert to theta, apply s-polarization offset, convert back to q
             theta = np.arcsin(x * wavelength / (4 * np.pi)) * 180 / np.pi
-            theta += self.theta_offset_s.value
+            theta += self.theta_offset_s.value  # type: ignore
             qvals = (4 * np.pi / wavelength) * np.sin(theta * np.pi / 180)
             qvals_1 = qvals_2 = qvals
 
         elif self.pol == "p":
             # Convert to theta, apply p-polarization offset, convert back to q
             theta = np.arcsin(x * wavelength / (4 * np.pi)) * 180 / np.pi
-            theta += self.theta_offset_p.value
+            theta += self.theta_offset_p.value  # type: ignore
             qvals = (4 * np.pi / wavelength) * np.sin(theta * np.pi / 180)
             qvals_1 = qvals_2 = qvals
 
@@ -638,8 +639,8 @@ class ReflectModel:
             qvals = qvals_1 = qvals_2 = x
 
         # Apply q offset and calculate reflectivity
-        refl, tran, *components = reflectivity(
-            qvals + self.q_offset.value,
+        refl, tran, *components = reflectivity(  # type: ignore
+            qvals + self.q_offset.value,  # type: ignore
             **model_input,
         )
 
@@ -695,14 +696,14 @@ class ReflectModel:
         Properly accounts for theta offsets between s and p polarizations.
         """
         # Wavelength in Angstroms
-        wavelength = 12398.42 / self.energy
+        wavelength = 12398.42 / self.energy  # type: ignore
 
         # Convert x (q) to theta (in degrees)
         theta = np.arcsin(x * wavelength / (4 * np.pi)) * 180 / np.pi
 
         # Apply polarization-specific angle offsets
-        theta_s = theta + self.theta_offset_s.value
-        theta_p = theta + self.theta_offset_p.value
+        theta_s = theta + self.theta_offset_s.value  # type: ignore
+        theta_p = theta + self.theta_offset_p.value  # type: ignore
 
         # Convert back to q
         q_s = (4 * np.pi / wavelength) * np.sin(theta_s * np.pi / 180)
@@ -741,7 +742,7 @@ class ReflectModel:
             log-probability of structure.
 
         """
-        return self.structure.logp()
+        return self.structure.logp()  # type: ignore
 
     @property
     def structure(self):
@@ -895,7 +896,11 @@ def reflectivity(
                 )
             else:
                 refl, tran, *components = uniaxial_reflectivity(
-                    q, slabs, tensor, energy, phi
+                    q,
+                    slabs,
+                    tensor,
+                    energy,
+                    phi,  # type: ignore
                 )
             # Scale s and p polarizations separately
             refl[:, 0, 0] = scale_s * refl[:, 0, 0]
@@ -936,7 +941,7 @@ def _smeared_reflectivity(q, w, tensor, energy, phi, resolution, backend="uni"):
         if backend == "uni":
             return uniaxial_reflectivity(q, w, tensor, energy)
         else:
-            return uniaxial_reflectivity(q, w, tensor, energy, phi)
+            return uniaxial_reflectivity(q, w, tensor, energy, phi)  # type: ignore
             # return yeh_4x4_reflectivity(q, w, tensor, energy, phi)
 
     resolution /= 100

@@ -5,70 +5,182 @@ Modue contains tools for processing files into DataFrames or other objects.
 from __future__ import annotations
 
 from pathlib import Path
-
-import pandas as pd
 from typing import TYPE_CHECKING
-from astropy.io import fits
+
+from pyref.pyref import (
+    py_read_experiment,
+    py_read_experiment_pattern,
+    py_read_fits,
+    py_read_multiple_fits,
+)
 
 if TYPE_CHECKING:
     from typing import Literal
 
-type FilePath = str | Path 
+    import pandas as pd
+    import polars as pl
+
+type BackendProcessor = Literal["pandas", "polars"]
+BACKEND: BackendProcessor = "pandas"
+
+type FilePath = str | Path
+type FileDirectory = str | Path
+type FilePathList = list[str] | list[Path]
 
 
 def read_fits(
-        file_path: str | Path
-
-        ) -> pd.DataFrame:
+    file_path: FilePath,
+    headers: list[str] | None = None,
+) -> pd.DataFrame | pl.DataFrame:
     """
-    Fits file data extracted as a dictionary.
+    Read data from a FITS file into a DataFrame.
 
     Parameters
     ----------
-    file_path : str
-        Path to the FITS file.
+    file_path : str | Path | list[str] | list[Path] | FilePath | FilePathList
+        Path to the FITS file, or a list of paths to FITS files to read.
+    headers : list[str] | None, optional
+        List of heder values to parse from the header use `None` to read all header
+        values, by default None
 
     Returns
     -------
-    dict
-        Dictionary containing the FITS file content.
+    pd.DataFrame
+        DataFrame containing the FITS file content.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the file_path does not point to a valid file.
+    ValueError
+        If the file is not a FITS file (does not end with .fits).
+
+    Notes
+    -----
+    The constructed DataFrame will allws have the following columns:
+    - `DATE`: (pl.String) Date time string of when the file was created.
+    - `raw`: (pl.Array(pl.Uint64, N, M)) Raw CCD camera image data as a 2D array.
+
+    Example
+    -------
+    This example shows how to read the FITS files from a directory with a specific
+    series of headers:
+    >>> from pyref.io import read_fits
+    >>> df = read_fits(
+    ...     "path/to/file.fits",
+    ...     headers=["DATE", "Beamline Energy", "EXPOSURE"],
+    ... )
+    >>> print(df)
+    Alternatively, you can read all the header values by setting `headers` to `None`:
+    >>> df = read_fits("path/to/file.fits", headers=None)
+    >>> print(df)
+    And alternatively, you can read a list of FITS files:
+    >>> df = read_fits(
+    ...     ["path/to/file1.fits", "path/to/file2.fits"],
+    ...     headers=["DATE", "Beamline Energy", "EXPOSURE"],
+    ... )
+    >>> print(df)
     """
-    file_path = Path(file_path)
-    if not file_path.exists():
-        msg = f"File {file_path} does not exist."
+    if isinstance(file_path, list):
+        # Handle list of file paths
+        file_paths_str = []
+        for fp in file_path:
+            file_path_obj = Path(fp)
+            if not file_path_obj.is_file():
+                msg = f"{file_path_obj} is not a valid file."
+                raise FileNotFoundError(msg)
+            if file_path_obj.suffix != ".fits":
+                msg = f"{file_path_obj} is not a FITS file."
+                raise ValueError(msg)
+            file_paths_str.append(str(file_path_obj))
+        polars_data = py_read_multiple_fits(file_paths_str, headers=headers)
+
+    else:
+        # Handle single file path
+        file_path_obj = Path(file_path)
+        if not file_path_obj.is_file():
+            msg = f"{file_path_obj} is not a valid file."
+            raise FileNotFoundError(msg)
+        if file_path_obj.suffix != ".fits":
+            msg = f"{file_path_obj} is not a FITS file."
+            raise ValueError(msg)
+        polars_data = py_read_fits(str(file_path_obj), headers=headers)
+
+    if BACKEND == "pandas":
+        return polars_data.to_pandas()
+    return polars_data
+
+
+def read_experiment(
+    file_path: FileDirectory,
+    headers: list[str] | None = None,
+    pattern: str | bool = False,
+) -> pd.DataFrame | pl.DataFrame:
+    """
+    Read data from a FITS file or pattern into a DataFrame.
+
+    Parameters
+    ----------
+    file_path : str | Path | FileDirectory
+        Path to the FITS files to read.
+    headers : list[str] | None, optional
+        List of heder values to parse from the header use `None` to read all header
+        values, by default None
+    pattern : str | bool, optional
+        Pattern to search in directory, by default False
+
+    Returns
+    -------
+    pd.DataFrame | pl.DataFrame
+        DataFrame containing the FITS file content.
+        If using `polars` backend, returns a polars DataFrame.
+        If using `pandas` backend, returns a pandas DataFrame.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the file_path does not point to a valid file.
+    ValueError
+        If the file is not a FITS file (does not end with .fits).
+
+    Notes
+    -----
+    The constructed DataFrame will allws have the following columns:
+    - `DATE`: (pl.String) Date time string of when the file was created.
+    - `raw`: (pl.Array(pl.Uint64, N, M)) Raw CCD camera image data as a 2D array.
+
+    Example
+    -------
+    This example shows how to read the FITS files from a directory with a specific
+    series of headers:
+    >>> from pyref.io import read_experiment
+    >>> df = read_experiment(
+    ...     "path/to/directory",
+    ...     headers=["DATE", "Beamline Energy", "EXPOSURE"],
+    ... )
+    >>> print(df)
+    Alternatively, you can read all the header values by setting `headers` to `None`:
+    >>> df = read_experiment("path/to/directory", headers=None)
+    >>> print(df)
+    And alternatively, you can read a specific pattern of files in the directory:
+    >>> df = read_experiment("path/to/directory", pattern="*85684*")
+    >>> print(df)
+    """
+    file_path_obj = Path(file_path)
+    if not pattern and not file_path_obj.is_file():
+        msg = f"{file_path_obj} is not a valid file."
         raise FileNotFoundError(msg)
-    with fits.open(str(file_path)) as hdul:  # type: ignore
-        data = pd.DataFrame({hdul[i].name: hdul[i].data for i in range(len(hdul))})
-
-    return data
-
-
-def read_fits_directory(
-    directory: FilePath,
-    headers: list[str] =
-    calculate_columns: list[str] = None,
-) -> pd.DataFrame:
-    """
-    Directory of FITS files read into a single DataFrame.
-
-    Parameters
-    ----------
-    directory : str
-        Path to the directory containing FITS files.
-    file_extension : str
-        File extension of the FITS files to read.
-
-    Returns
-    -------
-    list[pd.DataFrame]
-        List of DataFrames containing the data from each FITS file.
-    """
-    directory = Path(directory)
-    if not directory.is_dir():
-        msg = f"{directory} is not a valid directory."
-        raise NotADirectoryError(msg)
-
-    fits_files = directory.glob(f"*{file_extension}")
-    dataframes = [read_fits(file) for file in fits_files]
-
-    return dataframes
+    if pattern:
+        polars_data = py_read_experiment_pattern(str(file_path_obj), headers=headers)
+        if BACKEND == "pandas":
+            return polars_data.to_pandas()
+        return polars_data
+    else:
+        # Ensure it's a FITS file if not using a pattern
+        if file_path_obj.suffix != ".fits":
+            msg = f"{file_path_obj} is not a FITS file."
+            raise ValueError(msg)
+        polars_data = py_read_experiment(str(file_path_obj), headers=headers)
+        if BACKEND == "pandas":
+            return polars_data.to_pandas()
+        return polars_data

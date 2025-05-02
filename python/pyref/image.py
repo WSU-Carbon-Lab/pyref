@@ -26,7 +26,7 @@ def find_max_index(arr):
 
 @njit(cache=True, nogil=True)
 def reduction(
-    masked: np.ndarray, beam_spot: tuple[int], roi: int
+    masked: np.ndarray, beam_spot: tuple[int, int], roi: int
 ) -> tuple[float, float]:
     """Calculate the specular reflectance from a masked image."""
     beam_x = beam_spot[0]

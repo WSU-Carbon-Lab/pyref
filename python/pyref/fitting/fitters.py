@@ -99,7 +99,7 @@ class AnisotropyObjective(Objective):
                 -0.5
                 * np.sum((model_anisotropy - data_anisotropy) ** 2)
                 * self.logp_anisotropy_weight
-            ) * self.logp_anisotropy_weight
+            )
         ll /= len(self.data.x)
         return ll
 

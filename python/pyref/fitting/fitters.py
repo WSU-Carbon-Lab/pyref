@@ -27,7 +27,7 @@ from refnx.analysis import (
 )
 from scipy._lib._util import check_random_state
 
-from pyref.fitting import XrayReflectDataset
+from pyref.fitting.reflectivity import ReflectModel, XrayReflectDataset
 
 if TYPE_CHECKING:
     from refnx.analysis import (
@@ -466,7 +466,7 @@ class Fitter(CurveFitter):
 
         # make sure the checkpoint file exists
         if f is not None:
-            with possibly_open_file(f, "w") as h:
+            with possibly_open_file(f, "w") as h:  # type: ignore
                 # write the shape of each step of the chain
                 h.write("# ")
                 shape = self._state.coords.shape
@@ -481,7 +481,7 @@ class Fitter(CurveFitter):
             self._state.random_state = rstate0
             self.sampler.random_state = rstate0
         elif self._ntemps > 0:
-            self._state.random_state = rng.bit_generator.state
+            self._state.random_state = rng.bit_generator.state  # type: ignore
 
         # Passthough sampler_kws to the sampler.sample method outside of the
         # parallelisation context.

@@ -32,25 +32,55 @@ class XrayReflectDataset(ReflectDataset):
         diff = np.diff(self.x)
         # locate where diff is less than 0 and find that index
         idx = np.where(diff < 0)[0] + 1
+
         if len(idx) > 0:
-            self.s = ReflectDataset(
-                (self.x[: idx[0]], self.y[: idx[0]], self.y_err[: idx[0]])
+            self.s = (
+                ReflectDataset(
+                    (self.x[: idx[0]], self.y[: idx[0]], self.y_err[: idx[0]])
+                )
+                if self.y_err is not None
+                else ReflectDataset((self.x[: idx[0]], self.y[: idx[0]]))
             )
-            self.p = ReflectDataset(
-                (self.x[idx[0] :], self.y[idx[0] :], self.y_err[idx[0] :])
+            self.p = (
+                ReflectDataset(
+                    (self.x[idx[0] :], self.y[idx[0] :], self.y_err[idx[0] :])
+                )
+                if self.y_err is not None
+                else ReflectDataset((self.x[idx[0] :], self.y[idx[0] :]))
             )
         else:
             self.s = ReflectDataset((self.x, self.y, self.y_err))
             self.p = ReflectDataset((self.x, self.y, self.y_err))
 
-        # calculate the anisotropic ratio in the overlaping region
-        q_min = np.max([self.s.x.min(), self.p.x.min()])
-        q_max = np.min([self.s.x.max(), self.p.x.max()])
-        q_common = np.linspace(q_min, q_max, max(len(self.s.x), len(self.p.x)))
+        # Calculate average spacing in each dataset to determine tolerance
+        s_spacing = float(np.mean(np.diff(self.s.x))) if len(self.s.x) > 1 else 0.0
+        p_spacing = float(np.mean(np.diff(self.p.x))) if len(self.p.x) > 1 else 0.0
+        # Use half the average spacing as tolerance
+        tolerance = 0.5 * max(s_spacing, p_spacing)
 
-        # Interpolate both s and p polarized data onto common q points
-        r_s_interp = np.interp(q_common, self.s.x, self.s.y)
-        r_p_interp = np.interp(q_common, self.p.x, self.p.y)
+        # Merge and sort all q points from both datasets
+        all_q = np.sort(np.unique(np.concatenate([self.s.x, self.p.x])))
+
+        # Find q values where both datasets have points (within tolerance)
+        q_common = []
+        for q in all_q:
+            min_diff_s = np.min(np.abs(self.s.x - q))
+            min_diff_p = np.min(np.abs(self.p.x - q))
+            if min_diff_s <= tolerance and min_diff_p <= tolerance:
+                q_common.append(q)
+
+        # Convert to numpy array
+        q_common = np.array(q_common)
+
+        # If we have common q points, interpolate both datasets
+        if len(q_common) > 0:
+            r_s_interp = np.interp(q_common, self.s.x, self.s.y)
+            r_p_interp = np.interp(q_common, self.p.x, self.p.y)
+        else:
+            # No common points, create empty arrays
+            q_common = np.array([])
+            r_s_interp = np.array([])
+            r_p_interp = np.array([])
 
         _anisotropy = (r_p_interp - r_s_interp) / (r_p_interp + r_s_interp)
         self.anisotropy = ReflectDataset((q_common, _anisotropy))

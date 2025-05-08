@@ -7,6 +7,7 @@ license = "GPL-2.0"
 name = "pyref-core"
 repository = "https://github.com/WSU-Carbon-Lab/pyref-ccd"
 version = "0.5.1"
+exclude =["tests"]
 
 [lib]
 name = "pyref_core"

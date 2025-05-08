@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.0 (2025-05-07)
+
+### Feat
+
+- **io**: update for seamless header passthough
+
 ## v0.4.1 (2025-05-01)
 
 ### Fix

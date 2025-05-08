@@ -27,7 +27,7 @@ def find_max_index(arr):
 @njit(cache=True, nogil=True)
 def reduction(
     masked: np.ndarray, beam_spot: tuple[int, int], roi: int
-) -> tuple[float, float]:
+) -> tuple[int, int]:
     """Calculate the specular reflectance from a masked image."""
     beam_x = beam_spot[0]
     beam_y = beam_spot[1]
@@ -63,12 +63,14 @@ def reduction(
     if db_sum == 0:
         return 0, 0
 
-    bg_sum *= db_count / bg_count
+    bg_sum *= int(db_count / bg_count)
     return int(db_sum), int(bg_sum)
 
 
 @njit(cache=True, nogil=True)
-def apply_mask(img: np.ndarray, mask: np.ndarray | None = None, edge: int = 10):
+def apply_mask(
+    img: np.ndarray, mask: np.ndarray | None = None, edge: int = 10
+) -> np.ndarray:
     """Apply a mask to an image."""
     if mask is not None:
         return mask_edge(img * mask, edge=edge)
@@ -95,9 +97,9 @@ def find_beam_from_contours(
     segmentation = segmentation == cluster
     # beamspot is in the center of the cluster
     y, x = np.where(segmentation)
-    x = np.mean(x)
-    y = np.mean(y)
-    return tuple(map(int, (y, x)))
+    x = int(np.mean(x))
+    y = int(np.mean(y))
+    return (x, y)
 
 
 @njit(cache=True, nogil=True)

@@ -167,8 +167,8 @@ def read_experiment(
     >>> print(df)
     """
     file_path_obj = Path(file_path)
-    if not pattern and not file_path_obj.is_file():
-        msg = f"{file_path_obj} is not a valid file."
+    if not pattern and not file_path_obj.is_dir():
+        msg = f"{file_path_obj} is not a valid directory."
         raise FileNotFoundError(msg)
     if pattern:
         polars_data = py_read_experiment_pattern(str(file_path_obj), headers=headers)
@@ -176,10 +176,10 @@ def read_experiment(
             return polars_data.to_pandas()
         return polars_data
     else:
-        # Ensure it's a FITS file if not using a pattern
-        if file_path_obj.suffix != ".fits":
-            msg = f"{file_path_obj} is not a FITS file."
-            raise ValueError(msg)
+        # Ensure it's at least one FITS file in the directory
+        if not any(file_path_obj.glob("*.fits")):
+            msg = f"{file_path_obj} does not contain any FITS files."
+            raise FileNotFoundError(msg)
         polars_data = py_read_experiment(str(file_path_obj), headers=headers)
         if BACKEND == "pandas":
             return polars_data.to_pandas()

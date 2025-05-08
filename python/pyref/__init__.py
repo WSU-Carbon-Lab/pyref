@@ -15,12 +15,6 @@ __email__ = "Harlan.Heilman@wsu.edu"
 from pyref.io import read_experiment, read_fits
 from pyref.loader import PrsoxrLoader
 from pyref.masking import InteractiveImageMasker
-from pyref.pyref import (
-    py_read_experiment,
-    py_read_experiment_pattern,
-    py_read_fits,
-    py_read_multiple_fits,
-)
 from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std
 
 __all__ = [
@@ -28,10 +22,6 @@ __all__ = [
     "PrsoxrLoader",
     "err_prop_div",
     "err_prop_mult",
-    "py_read_experiment",
-    "py_read_experiment_pattern",
-    "py_read_fits",
-    "py_read_multiple_fits",
     "read_experiment",
     "read_fits",
     "weighted_mean",

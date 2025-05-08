@@ -1813,9 +1813,9 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f81dbf8fc2b12169dd42d3c5503f0afc7bb906c5ff67cf0bf0a739f7799a52e"
+checksum = "c7a8ceac166e2dc5836ef284250e2e86d96aaa8b0d82f98b26019b3b340649aa"
 dependencies = [
  "astrors-fork",
  "chrono",
@@ -1823,8 +1823,8 @@ dependencies = [
  "ndarray 0.15.6",
  "physical_constants",
  "polars",
- "polars-arrow",
  "rayon",
+ "serde",
  "thiserror 2.0.11",
 ]
 

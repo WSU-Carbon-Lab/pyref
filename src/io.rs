@@ -199,7 +199,6 @@ pub fn process_image(img: &ImageHDU) -> Result<Vec<Column>, FitsLoaderError> {
             Ok(vec![
                 col_from_array("RAW".into(), data.clone()).unwrap(),
                 col_from_array("SUBTRACTED".into(), subtracted.clone()).unwrap(),
-                col_from_array("Simple Spot".into(), subtracted.clone()).unwrap(),
                 Column::new("Simple Spot X".into(), vec![max_coords.0 as u64]),
                 Column::new("Simple Spot Y".into(), vec![max_coords.1 as u64]),
                 Column::new(
@@ -271,7 +270,7 @@ fn subtract_background(
     data: &ArrayBase<OwnedRepr<i64>, Dim<IxDynImpl>>,
 ) -> ArrayBase<OwnedRepr<i64>, Dim<IxDynImpl>> {
     // Get a view of the data with 5 pixels sliced from each side
-    let view = data.slice(ndarray::s![.., 5..-5]);
+    let view = data.slice(ndarray::s![5..-5, 5..-5]);
     let rows = view.len_of(Axis(0));
     let cols = view.len_of(Axis(1));
 
@@ -321,12 +320,11 @@ pub fn process_metadata(
         Ok(hdu
             .header
             .iter()
+            .filter(|card| !card.keyword.as_str().to_lowercase().contains("comment"))
             .map(|card| {
                 let name = card.keyword.as_str();
                 let value = card.value.as_float().unwrap_or(0.0);
-                // Convert to snake_case without units
-                let clean_name = to_snake_case(name);
-                Column::new(clean_name.into(), &[value])
+                Column::new(name.into(), &[value])
             })
             .collect())
     } else {
@@ -381,37 +379,6 @@ pub fn process_metadata(
 
         Ok(columns)
     }
-}
-
-/// Convert a header name to snake_case without units
-fn to_snake_case(name: &str) -> String {
-    // First, remove any units in square brackets
-    let name_without_units = name.split(" [").next().unwrap_or(name);
-
-    // Then convert to snake_case
-    let mut result = String::new();
-    let mut previous_was_uppercase = false;
-
-    for (i, c) in name_without_units.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 && !previous_was_uppercase {
-                result.push('_');
-            }
-            result.push(c.to_lowercase().next().unwrap());
-            previous_was_uppercase = true;
-        } else if c.is_lowercase() {
-            result.push(c);
-            previous_was_uppercase = false;
-        } else if c.is_whitespace() {
-            result.push('_');
-            previous_was_uppercase = false;
-        } else if c.is_alphanumeric() {
-            result.push(c);
-            previous_was_uppercase = false;
-        }
-    }
-
-    result.to_lowercase()
 }
 
 pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {

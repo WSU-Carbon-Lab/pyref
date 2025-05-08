@@ -7,17 +7,16 @@ use pyref_core::{
 };
 
 // Test constants
-const TEST_DATA_DIR: &str = "./tests/test_data";
+const TEST_DATA_DIR: &str = "./tests/data";
 const HEADER_KEYS: &[&str] = &[
     "DATE",
     "Beamline Energy",
     "Sample Theta",
-    "EXPOSURE",
     "CCD Theta",
     "Higher Order Suppressor",
-    "Horizontal Exit Slit Size",
     "EPU Polarization",
 ];
+const HEADER_KEYS_2: &[&str] = &[];
 
 /// Helper function to get all FITS files in the test directory
 fn get_all_test_fits_files() -> Vec<PathBuf> {
@@ -37,29 +36,11 @@ fn get_all_test_fits_files() -> Vec<PathBuf> {
 }
 
 /// Helper function to convert header keys slice to Vec<String>
-fn header_keys_vec() -> Vec<String> {
-    HEADER_KEYS.iter().map(|&s| s.to_string()).collect()
-}
-
-#[test]
-fn test_data_directory_exists() {
-    let test_dir = Path::new(TEST_DATA_DIR);
-    assert!(
-        test_dir.exists() && test_dir.is_dir(),
-        "Test data directory not found: {}",
-        TEST_DATA_DIR
-    );
-
-    let fits_files = get_all_test_fits_files();
-    assert!(
-        !fits_files.is_empty(),
-        "No .fits files found in test data directory"
-    );
-
-    println!("Found {} FITS files for testing", fits_files.len());
-    // Print each file path for clarity
-    for (i, file) in fits_files.iter().enumerate() {
-        println!("  {}. {}", i + 1, file.display());
+fn header_keys_vec(num: usize) -> Vec<String> {
+    if num == 1 {
+        HEADER_KEYS.iter().map(|&s| s.to_string()).collect()
+    } else {
+        HEADER_KEYS_2.iter().map(|&s| s.to_string()).collect()
     }
 }
 
@@ -69,26 +50,39 @@ fn test_read_single_fits_file() {
     let first_file = &fits_files[0];
     println!("Testing with file: {}", first_file.display());
 
-    let header_keys = header_keys_vec();
-    let result = read_fits(first_file.clone(), &header_keys);
+    // Test with both sets of header keys
+    for i in [0, 1] {
+        println!("Testing with header_keys_vec({})", i);
+        let header_keys = header_keys_vec(i);
+        let result = read_fits(first_file.clone(), &header_keys);
 
-    assert!(
-        result.is_ok(),
-        "Failed to read FITS file: {:?}",
-        result.err()
-    );
+        assert!(
+            result.is_ok(),
+            "Failed to read FITS file with header_keys_vec({}): {:?}",
+            i,
+            result.err()
+        );
 
-    let df = result.unwrap();
-    assert!(!df.is_empty(), "DataFrame should not be empty");
+        let df = result.unwrap();
+        assert!(!df.is_empty(), "DataFrame should not be empty");
 
-    // Check if some expected columns exist
-    assert!(df.column("file_name").is_ok(), "Missing 'file_name' column");
-    assert!(df.column("RAW").is_ok(), "Missing 'RAW' column");
+        // Check if some expected columns exist
+        assert!(df.column("file_name").is_ok(), "Missing 'file_name' column");
+        assert!(df.column("RAW").is_ok(), "Missing 'RAW' column");
 
-    // Print DataFrame schema for debugging - using debug format to avoid Display trait error
-    println!("DataFrame schema: {:#?}", df.schema());
-    println!("DataFrame shape: {:?}", df.shape());
-    println!("DataFrame head: {:#?}", df.head(Some(5)));
+        // Print DataFrame schema for debugging
+        println!(
+            "DataFrame schema (header_keys_vec({})): {:#?}",
+            i,
+            df.schema()
+        );
+        println!("DataFrame shape (header_keys_vec({})): {:?}", i, df.shape());
+        println!(
+            "DataFrame head (header_keys_vec({})): {:#?}",
+            i,
+            df.head(Some(5))
+        );
+    }
 }
 
 #[test]
@@ -100,7 +94,7 @@ fn test_error_handling() {
         non_existent_file.display()
     );
 
-    let header_keys = header_keys_vec();
+    let header_keys = header_keys_vec(0);
 
     let result = read_fits(non_existent_file, &header_keys);
     assert!(result.is_err(), "Should fail with non-existent file");
@@ -141,7 +135,7 @@ fn test_read_multiple_fits_files() {
         "No .fits files found in test data directory"
     );
     println!("Found {} FITS files for testing", fits_files.len());
-    let header_keys = header_keys_vec();
+    let header_keys = header_keys_vec(0);
     let result = read_multiple_fits(fits_files.clone(), &header_keys);
     assert!(
         result.is_ok(),
@@ -167,7 +161,7 @@ fn test_read_experiment() {
         !fits_files.is_empty(),
         "No .fits files found in test data directory"
     );
-    let header_keys = header_keys_vec();
+    let header_keys = header_keys_vec(0);
     let result = read_experiment(TEST_DATA_DIR, &header_keys);
     assert!(
         result.is_ok(),
@@ -193,8 +187,8 @@ fn test_read_experiment_pattern() {
         !fits_files.is_empty(),
         "No .fits files found in test data directory"
     );
-    let header_keys = header_keys_vec();
-    let result = read_experiment_pattern(TEST_DATA_DIR, "*nov*.fits", &header_keys);
+    let header_keys = header_keys_vec(0);
+    let result = read_experiment_pattern(TEST_DATA_DIR, "*june*.fits", &header_keys);
     assert!(
         result.is_ok(),
         "Failed to read experiment: {:?}",

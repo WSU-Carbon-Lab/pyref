@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.1 (2025-05-08)
+
+### Fix
+
+- **io-image**: fix image indexing
+
 ## v0.5.0 (2025-05-07)
 
 ### Feat

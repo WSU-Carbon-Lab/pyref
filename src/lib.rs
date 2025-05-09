@@ -7,14 +7,56 @@ use pyref_core::loader::{read_experiment, read_experiment_pattern, read_fits, re
 #[global_allocator]
 static ALLOC: PolarsAllocator = PolarsAllocator::new();
 
+/// Read a FITS file into a DataFrame.
+///
+/// Parameters
+/// ----------
+/// path : str
+///     Path to the FITS file.
+/// header_items : list of str
+///     List of FITS header keywords to extract.
+///
+/// Returns
+/// -------
+/// polars.DataFrame
+///     DataFrame containing data from the FITS file.
+///
+/// Raises
+/// ------
+/// RuntimeError
+///     If there's an error reading the FITS file.
 #[pyfunction]
-#[pyo3(name = "py_read_fits")]
-#[pyo3(signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
+#[pyo3(name = "py_read_fits", signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
 pub fn py_read_fits(path: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
     let df = read_fits(path.into(), &header_items).unwrap();
     Ok(PyDataFrame(df))
 }
 
+/// Read multiple FITS files into a single DataFrame.
+///
+/// Parameters
+/// ----------
+/// file_paths : list of str
+///     List of paths to FITS files to read.
+/// header_items : list of str
+///     List of FITS header keywords to extract.
+///
+/// Returns
+/// -------
+/// polars.DataFrame
+///     DataFrame containing data from all specified FITS files.
+///
+/// Raises
+/// ------
+/// RuntimeError
+///     If there's an error reading the FITS files.
+///
+/// Examples
+/// --------
+/// >>> import pyref
+/// >>> files = ["file1.fits", "file2.fits"]
+/// >>> headers = ["EXPTIME", "DATE-OBS"]
+/// >>> df = pyref.py_read_multiple_fits(files, headers)
 #[pyfunction]
 #[pyo3(name = "py_read_multiple_fits")]
 #[pyo3(signature = (file_paths, header_items, /), text_signature = "(file_paths, header_items, /)")]

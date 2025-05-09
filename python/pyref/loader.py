@@ -13,7 +13,7 @@ import polars as pl
 from IPython.display import display
 from ipywidgets import VBox, interactive
 
-from pyref.image import *  # type: ignore  # noqa: F403
+from pyref.api import *  # type: ignore  # noqa: F403
 from pyref.io.readers import read_experiment
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue

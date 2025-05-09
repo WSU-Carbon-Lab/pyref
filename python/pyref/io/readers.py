@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pyref.api.extensions import ImageDtype
 from pyref.pyref import (
     py_read_experiment,
     py_read_experiment_pattern,
@@ -15,23 +16,40 @@ from pyref.pyref import (
 )
 
 if TYPE_CHECKING:
-    from typing import Literal
-
+    import numpy as np
     import pandas as pd
-    import polars as pl
-
-type BackendProcessor = Literal["pandas", "polars"]
-BACKEND: BackendProcessor = "pandas"
 
 type FilePath = str | Path
 type FileDirectory = str | Path
 type FilePathList = list[str] | list[Path]
 
 
+def _convert_image_dtype(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert the 'raw' column in the DataFrame to a custom image dtype.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing the 'raw' column.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with the 'raw' column converted to the custom image dtype.
+    """
+    # iterate for objects with dtype np.ndarray
+    for col in df.columns:
+        if isinstance(df[col].dtype, np.ndarray):
+            # Convert the column to the custom image dtype
+            df[col] = df[col].astype(ImageDtype())
+    return df
+
+
 def read_fits(
     file_path: FilePath,
     headers: list[str] | None = None,
-) -> pd.DataFrame | pl.DataFrame:
+) -> pd.DataFrame:
     """
     Read data from a FITS file into a DataFrame.
 
@@ -83,7 +101,7 @@ def read_fits(
     """
     if isinstance(file_path, list):
         # Handle list of file paths
-        file_paths_str = []
+        file_paths_str: list[str] = []
         for fp in file_path:
             file_path_obj = Path(fp)
             if not file_path_obj.is_file():
@@ -93,7 +111,7 @@ def read_fits(
                 msg = f"{file_path_obj} is not a FITS file."
                 raise ValueError(msg)
             file_paths_str.append(str(file_path_obj))
-        polars_data = py_read_multiple_fits(file_paths_str, headers=headers)
+        polars_data = py_read_multiple_fits(file_paths_str, headers)
 
     else:
         # Handle single file path
@@ -104,18 +122,16 @@ def read_fits(
         if file_path_obj.suffix != ".fits":
             msg = f"{file_path_obj} is not a FITS file."
             raise ValueError(msg)
-        polars_data = py_read_fits(str(file_path_obj), headers=headers)
+        polars_data = py_read_fits(str(file_path_obj), headers)
 
-    if BACKEND == "pandas":
-        return polars_data.to_pandas()
-    return polars_data
+    return polars_data.to_pandas()
 
 
 def read_experiment(
     file_path: FileDirectory,
     headers: list[str] | None = None,
     pattern: str | bool = False,
-) -> pd.DataFrame | pl.DataFrame:
+) -> pd.DataFrame:
     """
     Read data from a FITS file or pattern into a DataFrame.
 
@@ -124,17 +140,15 @@ def read_experiment(
     file_path : str | Path | FileDirectory
         Path to the FITS files to read.
     headers : list[str] | None, optional
-        List of heder values to parse from the header use `None` to read all header
+        List of header values to parse from the header use `None` to read all header
         values, by default None
     pattern : str | bool, optional
         Pattern to search in directory, by default False
 
     Returns
     -------
-    pd.DataFrame | pl.DataFrame
+    pd.DataFrame
         DataFrame containing the FITS file content.
-        If using `polars` backend, returns a polars DataFrame.
-        If using `pandas` backend, returns a pandas DataFrame.
 
     Raises
     ------
@@ -145,7 +159,7 @@ def read_experiment(
 
     Notes
     -----
-    The constructed DataFrame will allws have the following columns:
+    The constructed DataFrame will always have the following columns:
     - `DATE`: (pl.String) Date time string of when the file was created.
     - `raw`: (pl.Array(pl.Uint64, N, M)) Raw CCD camera image data as a 2D array.
 
@@ -170,17 +184,16 @@ def read_experiment(
     if not pattern and not file_path_obj.is_dir():
         msg = f"{file_path_obj} is not a valid directory."
         raise FileNotFoundError(msg)
+    if headers is None:
+        headers = []
     if pattern:
-        polars_data = py_read_experiment_pattern(str(file_path_obj), headers=headers)
-        if BACKEND == "pandas":
-            return polars_data.to_pandas()
-        return polars_data
+        polars_data = py_read_experiment_pattern(str(file_path_obj), pattern, headers)
+        return polars_data.to_pandas()
+
     else:
         # Ensure it's at least one FITS file in the directory
         if not any(file_path_obj.glob("*.fits")):
             msg = f"{file_path_obj} does not contain any FITS files."
             raise FileNotFoundError(msg)
-        polars_data = py_read_experiment(str(file_path_obj), headers=headers)
-        if BACKEND == "pandas":
-            return polars_data.to_pandas()
-        return polars_data
+        polars_data = py_read_experiment(str(file_path_obj), headers)
+        return polars_data.to_pandas()

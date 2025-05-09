@@ -9,6 +9,6 @@ image.
 It also provides pandas extensions for handling image data in DataFrames.
 """
 
-from pyref.image.extensions import ImageAccessor, ImageArray, ImageDtype
+from pyref.api.extensions import ImageAccessor, ImageArray, ImageDtype
 
 __all__ = ["ImageAccessor", "ImageArray", "ImageDtype"]

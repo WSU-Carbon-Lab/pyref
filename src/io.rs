@@ -23,22 +23,32 @@ pub fn col_from_array(
     let rows = array.len_of(Axis(0));
     let cols = array.len_of(Axis(1));
 
-    let mut list_builder =
-        ListPrimitiveChunkedBuilder::<Int64Type>::new(name, rows, rows * cols, DataType::Int64);
+    // To ensure correct ordering, we first make sure the array is C-contiguous (row-major).
+    // This might involve creating a copy if the original array is not.
+    let c_contiguous_array = array.as_standard_layout().into_owned();
 
-    for row in array.axis_iter(Axis(0)) {
-        match row.as_slice() {
-            Some(s) => list_builder.append_slice(s),
-            None => list_builder.append_slice(&row.to_owned().into_raw_vec()),
-        }
+    // We can now safely get a slice of the entire array data.
+    let flat_data = c_contiguous_array.as_slice().unwrap();
+
+    // We build a Series of Lists, where each list is a row of the original array.
+    let mut list_builder = ListPrimitiveChunkedBuilder::<Int64Type>::new(
+        name.clone(),
+        rows,
+        rows * cols,
+        DataType::Int64,
+    );
+
+    for row_chunk in flat_data.chunks_exact(cols) {
+        list_builder.append_slice(row_chunk);
     }
 
     let series_of_lists = list_builder.finish().into_series();
 
-    // Implode into a single row containing a list of lists.
+    // Implode the series of lists into a single row containing a list of lists.
     let series_of_list_of_lists = series_of_lists.implode()?;
 
-    // Cast to a 2D Array type.
+    // Finally, cast to a 2D Array type with explicit dimensions.
+    // This preserves the 2D structure of the data.
     let array_series = series_of_list_of_lists.cast(&DataType::Array(
         Box::new(DataType::Array(Box::new(DataType::Int64), cols)),
         rows,

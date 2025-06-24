@@ -30,14 +30,14 @@ pub fn col_from_array(
 
     let mut chunked_builder = ListPrimitiveChunkedBuilder::<Int64Type>::new(
         PlSmallStr::EMPTY,
-        array.len_of(Axis(0)),
+        array.len_of(Axis(1)),
         array.len_of(Axis(1)) * array.len_of(Axis(0)),
         DataType::Int64,
     );
-    for row in array.axis_iter(Axis(0)) {
-        match row.as_slice() {
-            Some(row) => chunked_builder.append_slice(row),
-            None => chunked_builder.append_slice(&row.to_owned().into_raw_vec()),
+    for col in array.axis_iter(Axis(1)) {
+        match col.as_slice() {
+            Some(col) => chunked_builder.append_slice(col),
+            None => chunked_builder.append_slice(&col.to_owned().into_raw_vec()),
         }
     }
     let new_series = chunked_builder
@@ -48,8 +48,8 @@ pub fn col_from_array(
         .into_column();
     let _ = s.extend(&new_series);
     let s = s.cast(&DataType::Array(
-        Box::new(DataType::Array(Box::new(DataType::Int32), size1)),
-        size0,
+        Box::new(DataType::Array(Box::new(DataType::Int32), size0)),
+        size1,
     ));
     s
 }

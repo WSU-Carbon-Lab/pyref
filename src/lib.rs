@@ -2,102 +2,95 @@ use polars::{prelude::*, series::amortized_iter::*};
 use polars_core::{export::num::Pow, utils::align_chunks_binary};
 use pyo3::prelude::*;
 use pyo3_polars::{derive::polars_expr, PolarsAllocator, PyDataFrame};
-use pyref_core::{
-    enums::ExperimentType,
-    enums::HeaderValue,
-    loader::{read_experiment, read_fits},
-};
+use pyref_core::loader::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits};
 
 #[global_allocator]
 static ALLOC: PolarsAllocator = PolarsAllocator::new();
 
-// ==================== Modeling XRR ====================
-
-/// This converts pyref_core structures to Python objects.
+/// Read a FITS file into a DataFrame.
 ///
-/// Each struct gets wrapped in a python binding class that
-/// starts with the Py prefix.
+/// Parameters
+/// ----------
+/// path : str
+///     Path to the FITS file.
+/// header_items : list of str
+///     List of FITS header keywords to extract.
 ///
-
-// ==================== Other Structs ====================
-#[pyclass(module = "pyref")]
-pub struct PyExType {
-    pub exp: ExperimentType,
-}
-
-#[pymethods]
-impl PyExType {
-    #[new]
-    pub fn from_str(exp_type: &str) -> PyResult<PyExType> {
-        let exp = ExperimentType::from_str(exp_type).unwrap();
-        Ok(PyExType { exp })
-    }
-
-    pub fn get_keys(&self) -> Vec<String> {
-        self.exp
-            .get_keys()
-            .iter()
-            .map(|s| s.hdu().to_string())
-            .collect()
-    }
-}
-
-#[pyclass(module = "pyref")]
-pub struct PyHduType {
-    pub hdu: HeaderValue,
-}
-
-#[pymethods]
-impl PyHduType {
-    #[new]
-    pub fn from_str(hdu: &str) -> PyResult<PyHduType> {
-        let hdu = match hdu.to_lowercase().as_str() {
-            "sample theta" => HeaderValue::SampleTheta,
-            "ccd theta" => HeaderValue::CCDTheta,
-            "beamline energy" => HeaderValue::BeamlineEnergy,
-            "beam current" => HeaderValue::BeamCurrent,
-            "epu polarization" => HeaderValue::EPUPolarization,
-            "horizontal exit slit size" => HeaderValue::HorizontalExitSlitSize,
-            "higher order suppressor" => HeaderValue::HigherOrderSuppressor,
-            "exposure" => HeaderValue::Exposure,
-            _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid HDU type",
-            ))?,
-        };
-        Ok(PyHduType { hdu })
-    }
-}
-
-fn get_headers(hdu_strs: Vec<String>) -> Vec<HeaderValue> {
-    hdu_strs
-        .iter()
-        .map(|s| match s.to_lowercase().as_str() {
-            "sample theta" => HeaderValue::SampleTheta,
-            "ccd theta" => HeaderValue::CCDTheta,
-            "beamline energy" => HeaderValue::BeamlineEnergy,
-            "beam current" => HeaderValue::BeamCurrent,
-            "epu polarization" => HeaderValue::EPUPolarization,
-            "horizontal exit slit size" => HeaderValue::HorizontalExitSlitSize,
-            "higher order suppressor" => HeaderValue::HigherOrderSuppressor,
-            "exposure" => HeaderValue::Exposure,
-            _ => panic!("Invalid HDU type"),
-        })
-        .collect()
-}
-
-// ==================== FUNCTIONS ====================
-
-#[pyfunction(text_signature = "(path: str, header_items: List[str])")]
+/// Returns
+/// -------
+/// polars.DataFrame
+///     DataFrame containing data from the FITS file.
+///
+/// Raises
+/// ------
+/// RuntimeError
+///     If there's an error reading the FITS file.
+#[pyfunction]
+#[pyo3(name = "py_read_fits", signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
 pub fn py_read_fits(path: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
-    let hdus = get_headers(header_items);
-    let df = read_fits(path.into(), &hdus).unwrap();
+    let df = read_fits(path.into(), &header_items)?;
     Ok(PyDataFrame(df))
 }
 
-#[pyfunction(text_signature = "(dir: str, exp_type: str)")]
-pub fn py_read_experiment(dir: &str, exp_type: &str) -> PyDataFrame {
-    let exp_type = ExperimentType::from_str(exp_type).unwrap().get_keys();
-    match read_experiment(dir, &exp_type) {
+/// Read multiple FITS files into a single DataFrame.
+///
+/// Parameters
+/// ----------
+/// file_paths : list of str
+///     List of paths to FITS files to read.
+/// header_items : list of str
+///     List of FITS header keywords to extract.
+///
+/// Returns
+/// -------
+/// polars.DataFrame
+///     DataFrame containing data from all specified FITS files.
+///
+/// Raises
+/// ------
+/// RuntimeError
+///     If there's an error reading the FITS files.
+///
+/// Examples
+/// --------
+/// >>> import pyref
+/// >>> files = ["file1.fits", "file2.fits"]
+/// >>> headers = ["EXPTIME", "DATE-OBS"]
+/// >>> df = pyref.py_read_multiple_fits(files, headers)
+#[pyfunction]
+#[pyo3(name = "py_read_multiple_fits")]
+#[pyo3(signature = (file_paths, header_items, /), text_signature = "(file_paths, header_items, /)")]
+pub fn py_read_multiple_fits(
+    file_paths: Vec<String>,
+    header_items: Vec<String>,
+) -> PyResult<PyDataFrame> {
+    // Convert Vec<String> to Vec<PathBuf>
+    let fits_files: Vec<_> = file_paths.iter().map(|path| path.into()).collect();
+    match read_multiple_fits(fits_files, &header_items) {
+        Ok(df) => Ok(PyDataFrame(df)),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+    }
+}
+
+#[pyfunction]
+#[pyo3(name = "py_read_experiment_pattern")]
+#[pyo3(signature = (dir, pattern, header_items, /), text_signature = "(dir, pattern, header_items, /)")]
+pub fn py_read_experiment_pattern(
+    dir: &str,
+    pattern: &str,
+    header_items: Vec<String>,
+) -> PyResult<PyDataFrame> {
+    match read_experiment_pattern(dir, pattern, &header_items) {
+        Ok(df) => Ok(PyDataFrame(df)),
+        Err(e) => panic!("Failed to load LazyFrame into python: {}", e),
+    }
+}
+
+#[pyfunction]
+#[pyo3(name = "py_read_experiment")]
+#[pyo3(signature = (dir, header_items, /), text_signature = "(dir, header_items, /)")]
+pub fn py_read_experiment(dir: &str, header_items: Vec<String>) -> PyDataFrame {
+    match read_experiment(dir, &header_items) {
         Ok(df) => PyDataFrame(df),
         Err(e) => panic!("Failed to load LazyFrame into python: {}", e),
     }
@@ -282,8 +275,9 @@ pub fn weighted_std(weights: Expr) -> Expr {
 #[pymodule]
 #[pyo3(name = "pyref")]
 pub fn pyref(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyExType>()?;
     m.add_function(wrap_pyfunction!(py_read_fits, m)?)?;
     m.add_function(wrap_pyfunction!(py_read_experiment, m)?)?;
+    m.add_function(wrap_pyfunction!(py_read_experiment_pattern, m)?)?;
+    m.add_function(wrap_pyfunction!(py_read_multiple_fits, m)?)?;
     Ok(())
 }

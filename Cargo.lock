@@ -597,6 +597,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 
 [[package]]
+name = "glob-match"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9985c9503b412198aa4197559e9a318524ebc4519c229bfa05a535828c950b9d"
+
+[[package]]
 name = "half"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1807,17 +1813,18 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.3.59"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba02f61fac1bdc7e17f9c15b6e68df8986b1ac9a1b4351ce68613834603ffaea"
+checksum = "0ae9d1b2fefe632398f9e532e234a05b738d2b9df731e3e89fb3342ac152ec50"
 dependencies = [
  "astrors-fork",
  "chrono",
+ "glob-match",
  "ndarray 0.15.6",
  "physical_constants",
  "polars",
- "polars-arrow",
  "rayon",
+ "serde",
  "thiserror 2.0.11",
 ]
 

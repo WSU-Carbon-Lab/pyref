@@ -1414,7 +1414,7 @@ class MixedMaterialSlab(PXR_Component):
         self._sld_parameters = Parameters(name=f"{name} - slds")
         self._vf_parameters = Parameters(name=f"{name} - volfracs")
 
-        for i, (s, v) in enumerate(zip(sld_list, vf_list)):
+        for i, (s, v) in enumerate(zip(sld_list, vf_list, strict=False)):
             if isinstance(s, Scatterer):
                 self.sld.append(s)
             else:
@@ -1467,7 +1467,12 @@ class MixedMaterialSlab(PXR_Component):
         vfs = np.array(self._vf_parameters)
         sum_vfs = np.sum(vfs)
 
-        sldc = np.sum([complex(sld) * vf / sum_vfs for sld, vf in zip(self.sld, vfs)])
+        sldc = np.sum(
+            [
+                complex(sld) * vf / sum_vfs
+                for sld, vf in zip(self.sld, vfs, strict=False)
+            ]
+        )
 
         return np.array(
             [
@@ -1502,7 +1507,8 @@ class MixedMaterialSlab(PXR_Component):
             self.sld.energy = energy
 
         combinetensor = np.sum(
-            [sld.tensor * vf / sum_vfs for sld, vf in zip(self.sld, vfs)], axis=0
+            [sld.tensor * vf / sum_vfs for sld, vf in zip(self.sld, vfs, strict=False)],
+            axis=0,
         )
 
         return combinetensor  # self.sld.tensor

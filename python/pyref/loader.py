@@ -13,13 +13,8 @@ import polars as pl
 from IPython.display import display
 from ipywidgets import VBox, interactive
 
-from pyref import pyref
-from pyref.image import (
-    apply_mask,
-    locate_beam,
-    reduce_masked_data,
-    reduction,
-)
+from pyref.api import *  # type: ignore  # noqa: F403
+from pyref.io.readers import read_experiment
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue
 from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std
@@ -208,7 +203,7 @@ class PrsoxrLoader:
     ):
         # Sample information
         # self.name: str = directory.stem  # Name of the series to be loaded
-        self.path: str = Path(directory)  # Path to the data
+        self.path: Path = Path(directory)  # Path to the data
 
         # Configuration
         self.shutter_offset: float = 0.00389278  # [s]
@@ -227,7 +222,7 @@ class PrsoxrLoader:
 
         # Files for output
         self.beam_drift = None
-        self.meta: pl.DataFrame = pyref.py_read_experiment(str(directory), "xrr")
+        self.meta: pl.DataFrame = pl.from_dataframe(read_experiment(directory))
         self.data: pl.DataFrame | list[pl.DataFrame] = self.meta.group_by(
             "Beamline Energy [eV]"
         ).agg(pl.all())
@@ -240,7 +235,7 @@ class PrsoxrLoader:
         self._polarization: Literal["s", "p"] | None = None
 
     @property
-    def energy(self) -> list[float]:
+    def energy(self) -> list[float] | np.ndarray:
         """Energy getter."""
         return np.sort(
             self.meta.select("Beamline Energy [eV]").unique().to_numpy().flatten()
@@ -258,7 +253,7 @@ class PrsoxrLoader:
                 raise UnknownPolarizationError()
 
     @property
-    def name(self) -> str | list[str]:
+    def name(self) -> str | list[str] | np.ndarray:
         """Name getter."""
         return (
             self.meta.filter(~pl.col("Sample Name").str.starts_with("Captured"))
@@ -269,7 +264,7 @@ class PrsoxrLoader:
         )
 
     @property
-    def scan_id(self) -> int | list[int]:
+    def scan_id(self) -> int | list[int] | np.ndarray:
         """Scan ID getter."""
         return (
             self.meta.filter(~pl.col("Sample Name").str.starts_with("Captured"))
@@ -280,7 +275,7 @@ class PrsoxrLoader:
         )
 
     @property
-    def files(self) -> str | list[str]:
+    def files(self) -> str | list[str] | np.ndarray:
         """Files getter."""
         return self.meta.select("File Name").unique().to_numpy().flatten()
 
@@ -380,9 +375,9 @@ class PrsoxrLoader:
             meta = meta.row(frame, named=True)
 
             image = np.reshape(meta["Raw"], meta["Raw Shape"])[::-1]
-            masked = apply_mask(image, self.mask)
-            bs = locate_beam(masked, blur=blur)
-            db, bg = reduction(image, beam_spot=bs, roi=roi, edge_trim=self.edge_trim)
+            masked = apply_mask(image, mask=self.mask, edge=self.edge_trim)  # type: ignore  # noqa: F405
+            bs = locate_beam(masked, blur=blur)  # type: ignore # noqa: F405
+            db, bg = reduction(image, beam_spot=bs, roi=roi, edge_trim=self.edge_trim)  # type: ignore # noqa: F405
 
             imax = ax[0]
             hist = ax[1]
@@ -414,7 +409,7 @@ class PrsoxrLoader:
 
             # Add rectangles to highlight the beam spot and dark frame
             imax.add_patch(
-                plt.Rectangle(
+                plt.Rectangle(  # type: ignore
                     (0, bs[0] - roi),
                     image.shape[1],
                     2 * roi,
@@ -423,7 +418,7 @@ class PrsoxrLoader:
                 )
             )
             imax.add_patch(
-                plt.Rectangle(
+                plt.Rectangle(  # type: ignore
                     (bs[1] - roi, bs[0] - roi),
                     2 * roi,
                     2 * roi,
@@ -452,31 +447,6 @@ class PrsoxrLoader:
                     .otherwise(pl.lit("Normal"))
                     .alias("Saturation")
                 )
-                plt.histplot(
-                    data=df.to_pandas(),
-                    x="Intensity In ROI",
-                    stat="density",
-                    ax=hist,
-                    element="step",
-                    hue="Saturation",
-                )
-                # add quanitiles
-                q5 = np.quantile(slice, 0.01)
-                q95 = np.quantile(slice, 0.99)
-                q50 = np.quantile(slice, 0.5)
-                hist.fill_betweenx(
-                    hist.get_ylim(),
-                    q5,
-                    q95,
-                    color="C5",
-                    alpha=0.2,
-                    label="99% of data",
-                )
-
-                hist.set_xlim(np.quantile(slice, 0.001), np.quantile(slice, 0.999))
-                hist.axvline(q50, color="C5", linestyle="--")
-                hist.set_title("Pixel Intensity Histogram")
-                hist.legend()
             fig.canvas.draw_idle()
 
             # Update class attributes for blur and ROI
@@ -634,7 +604,7 @@ class PrsoxrLoader:
         """
         if roi is None:
             roi = self.roi
-        lzf = reduce_masked_data(
+        lzf = reduce_masked_data(  # noqa: F405 # type: ignore
             self.meta,
             self.mask,
             roi,
@@ -666,7 +636,7 @@ class PrsoxrLoader:
 
         refl = self.refl.filter(pl.col("Q [Å⁻¹]").gt(0.0) & pl.col("r [a. u.]").gt(0.0))
 
-        p = refl.hvplot.scatter(
+        p = refl.hvplot.scatter(  # type: ignore
             x="Q [Å⁻¹]",
             y="r [a. u.]",
             by=["File Name", "Beamline Energy [eV]"],
@@ -677,7 +647,7 @@ class PrsoxrLoader:
         ).opts(
             legend_position="top_right",
             logy=True,
-            xlim=(0, refl["Q [Å⁻¹]"].max() * 1.1),
+            xlim=(0, refl["Q [Å⁻¹]"].max() * 1.1),  # type: ignore
         )
         return p
 
@@ -690,7 +660,7 @@ def _overlap_name_map(label: Literal["current", "prior"]) -> dict[str, str]:
 
 
 def col_and_err(col: str) -> tuple[IntoExprColumn, IntoExprColumn]:
-    """Create a polars column exoression linking a column and its error."""
+    """Create a polars column expression linking a column and its error."""
     return pl.col(col), pl.col(f"δ{col}")
 
 

@@ -45,12 +45,11 @@ class InteractiveImageMasker:
         self.image = image  # Original image
         self.mask = np.ones_like(image)  # Mask (same size as image)
         self.fig, self.ax = plt.subplots()
-        self.ax.imshow(self.image, cmap="terrain")  # Display the image
         self.selector = RectangleSelector(
             self.ax,
             self.on_select,
             useblit=True,
-            button=[1],  # Left-click
+            button=[1],  # Left-click  # type: ignore
             minspanx=5,
             minspany=5,
             spancoords="pixels",

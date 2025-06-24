@@ -170,7 +170,7 @@ class XrayReflectDataset(ReflectDataset):
 
         return dataset
 
-    def plot(self, ax=None, ax_anisotropy=None, **kwargs):
+    def plot(self, ax=None, ax_anisotropy=None, **kwargs):  # type: ignore
         """Plot the reflectivity and anisotropy data."""
         if ax is None:
             fig, axs = plt.subplots(
@@ -609,7 +609,7 @@ class ReflectModel:
 
         # Prepare common model parameters
         model_input = {
-            "slabs": self.structure.slabs(),  # type: ignore # type: ignore
+            "slabs": self.structure.slabs(),  # type: ignore
             "tensor": self.structure.tensor(energy=self.energy),  # type: ignore
             "energy": self.energy,
             "phi": self.phi,

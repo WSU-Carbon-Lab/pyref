@@ -7,6 +7,7 @@ and an accessor for convenient operations on these image columns.
 
 import numpy as np
 import pandas as pd
+import torch
 from pandas.api.extensions import (
     ExtensionArray,
     ExtensionDtype,
@@ -82,7 +83,7 @@ class ImageArray(ExtensionArray):
 
     def __getitem__(self, item):
         """Get images from an array."""
-        if isinstance(item, (int, np.integer)):
+        if isinstance(item, (int | np.integer)):
             return self._data[item]  # Returns the np.ndarray or None
         else:
             # Slice, mask, or array of indices
@@ -110,7 +111,7 @@ class ImageArray(ExtensionArray):
         # Returns a boolean numpy array
         return np.array([x is None for x in self._data], dtype=bool)
 
-    def take(self, indices, allow_fill=False, fill_value=None):
+    def take(self, indices, allow_fill=False, fill_value=None) -> "ImageArray":
         """Take values from the array at the specified indices."""
         from pandas.core.algorithms import take as pandas_take
 
@@ -144,7 +145,7 @@ class ImageArray(ExtensionArray):
         """Convert to a NumPy array."""
         return self._data
 
-    def astype(self, dtype, copy=True):
+    def astype(self, dtype: str | np.dtype, *, copy: bool = True):
         """Cast to a different dtype."""
         if isinstance(dtype, ImageDtype):
             if copy:
@@ -158,11 +159,11 @@ class ImageDtype(ExtensionDtype):
     """Custom dtype to represent image data (2D numpy arrays)."""
 
     name = "image"  # Used for string representation, e.g., df.astype("image")
-    type = np.ndarray  # The Python type for an individual element
+    dtype: type[np.ndarray] = np.ndarray  # The Python type for an individual element
     kind = "O"  # type: ignore # Object kind, as we're storing np.ndarray objects
 
     @classmethod
-    def construct_from_string(cls, string):
+    def construct_from_string(cls, string: str) -> "ImageDtype":
         """Construct the dtype from a string."""
         if string == cls.name:
             return cls()
@@ -171,12 +172,12 @@ class ImageDtype(ExtensionDtype):
             raise TypeError(msg)
 
     @classmethod
-    def construct_array_type(cls):
+    def construct_array_type(cls) -> type[ImageArray]:
         """Return the array type associated with this dtype."""
         return ImageArray
 
     @property
-    def na_value(self):
+    def na_value(self) -> None:
         """The NA value for this dtype (None for object-stored np.ndarrays)."""
         return None
 
@@ -211,7 +212,11 @@ class ImageAccessor:
             raise TypeError(msg)
         return self._obj.array
 
-    def stack(self, index=None):
+    def __getitem__(self, item) -> torch.Tensor:
+        """Get an image from the series."""
+        return self._pl_array_to_tensor(item)
+
+    def _pl_array_to_tensor(self, index=None) -> torch.Tensor:
         """Convert an image at the given index to a 2D numpy array.
 
         Parameters
@@ -229,31 +234,16 @@ class ImageAccessor:
             try:
                 img_series = self._obj.astype(ImageDtype())
                 if index is None:
-                    return np.stack(img_series.iloc[0])
-                return np.stack(img_series.iloc[index])
+                    return torch.from_numpy(
+                        np.stack(img_series.iloc[0], dtype=np.int64)
+                    )
+                return torch.from_numpy(
+                    np.stack(img_series.iloc[index], dtype=np.int64)
+                )
             except Exception as e:
                 msg = f"Cannot convert to image dtype: {e}"
                 raise TypeError(msg) from e
 
         if index is None:
-            return np.stack(self._obj.iloc[0])
-        return np.stack(self._obj.iloc[index])
-
-    def stack_all(self):
-        """Convert all images in the series to a list of 2D numpy arrays.
-
-        Returns
-        -------
-        list
-            List of 2D numpy arrays.
-        """
-        if not isinstance(self._obj.dtype, ImageDtype):
-            # Try to convert to image dtype first
-            try:
-                img_series = self._obj.astype(ImageDtype())
-                return [np.stack(img) for img in img_series]
-            except Exception as e:
-                msg = f"Cannot convert to image dtype: {e}"
-                raise TypeError(msg) from e
-
-        return [np.stack(img) for img in self._obj]
+            return torch.from_numpy(np.stack(self._obj.iloc[0], dtype=np.int64))
+        return torch.from_numpy(np.stack(self._obj.iloc[index], dtype=np.int64))

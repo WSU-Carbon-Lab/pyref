@@ -24,7 +24,12 @@ class InteractiveImageMasker:
 
     Methods
     -------
-    __init__(image):
+    __init__(
+        self,
+        image,
+        mask=None,
+        title="Draw mask, press 't' to toggle, 'm' to save and close",
+    ):
         Initializes the InteractiveImageMasker with the given image.
 
     on_select(eclick, erelease):
@@ -41,10 +46,25 @@ class InteractiveImageMasker:
         Returns the mask.
     """
 
-    def __init__(self, image):
+    def __init__(
+        self,
+        image,
+        mask=None,
+        title="Draw mask, press 't' to toggle, 'm' to save and close",
+    ):
         self.image = image  # Original image
-        self.mask = np.ones_like(image)  # Mask (same size as image)
+        if mask is None:
+            self.mask = np.ones_like(image)  # Mask (same size as image)
+        else:
+            self.mask = mask.copy()
         self.fig, self.ax = plt.subplots()
+        if self.fig.canvas.manager:
+            self.fig.canvas.manager.set_window_title("Interactive Masking")
+        self.ax.set_title(title)
+
+        masked_image = self.image * self.mask
+        self.ax.imshow(masked_image, cmap="terrain")
+
         self.selector = RectangleSelector(
             self.ax,
             self.on_select,
@@ -92,8 +112,7 @@ class InteractiveImageMasker:
         """Return the mask when 'm' key is pressed."""
         if event.key in ["m", "M"]:
             print("Mask has been created, you can access it via 'get_mask' method.")
-            # For testing, this just prints the mask.
-            print(self.get_mask())
+            plt.close(self.fig)
 
     def get_mask(self):
         """Return the mask."""

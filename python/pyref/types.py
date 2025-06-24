@@ -17,37 +17,37 @@ class HeaderValue(Enum):
 
     def unit(self) -> str:
         """Return the unit of the header value."""
-        match self:
-            case HeaderValue.SAMPLE_THETA:
-                return "[deg]"
-            case HeaderValue.BEAMLINE_ENERGY:
-                return "[eV]"
-            case HeaderValue.EPU_POLARIZATION:
-                return "[deg]"
-            case HeaderValue.HORIZONTAL_EXIT_SLIT_SIZE:
-                return "[um]"
-            case HeaderValue.HIGHER_ORDER_SUPPRESSOR:
-                return "mm"
-            case HeaderValue.EXPOSURE:
-                return "s"
+        if self == HeaderValue.SAMPLE_THETA:
+            return "[deg]"
+        elif self == HeaderValue.BEAMLINE_ENERGY:
+            return "[eV]"
+        elif self == HeaderValue.EPU_POLARIZATION:
+            return "[deg]"
+        elif self == HeaderValue.HORIZONTAL_EXIT_SLIT_SIZE:
+            return "[um]"
+        elif self == HeaderValue.HIGHER_ORDER_SUPPRESSOR:
+            return "mm"
+        elif self == HeaderValue.EXPOSURE:
+            return "s"
+        return ""
 
     def hdu(self) -> str:
         """Return the HDU name of the header value."""
-        match self:
-            case HeaderValue.SAMPLE_THETA:
-                return "Sample Theta"
-            case HeaderValue.BEAMLINE_ENERGY:
-                return "Beamline Energy"
-            case HeaderValue.EPU_POLARIZATION:
-                return "EPU Polarization"
-            case HeaderValue.HORIZONTAL_EXIT_SLIT_SIZE:
-                return "Horizontal Exit Slit Size"
-            case HeaderValue.HIGHER_ORDER_SUPPRESSOR:
-                return "Higher Order Suppressor"
-            case HeaderValue.EXPOSURE:
-                return "EXPOSURE"
+        if self == HeaderValue.SAMPLE_THETA:
+            return "Sample Theta"
+        elif self == HeaderValue.BEAMLINE_ENERGY:
+            return "Beamline Energy"
+        elif self == HeaderValue.EPU_POLARIZATION:
+            return "EPU Polarization"
+        elif self == HeaderValue.HORIZONTAL_EXIT_SLIT_SIZE:
+            return "Horizontal Exit Slit Size"
+        elif self == HeaderValue.HIGHER_ORDER_SUPPRESSOR:
+            return "Higher Order Suppressor"
+        elif self == HeaderValue.EXPOSURE:
+            return "EXPOSURE"
+        return ""
 
-    def name(self) -> str:
+    def display_name(self) -> str:
         """Return the name of the header value with its unit."""
         return f"{self.hdu()} {self.unit()}"
 

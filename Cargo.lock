@@ -1813,9 +1813,9 @@ dependencies = [
 
 [[package]]
 name = "pyref-core"
-version = "0.5.1"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ae9d1b2fefe632398f9e532e234a05b738d2b9df731e3e89fb3342ac152ec50"
+checksum = "94c93b3b3dd175290a454d5c964a4ccadaec096478521ab98b471858907fd297"
 dependencies = [
  "astrors-fork",
  "chrono",

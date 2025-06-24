@@ -5,10 +5,9 @@ Module contains tools for processing files into DataFrames or other objects.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from pyref.api.extensions import ImageDtype
-from pyref.pyref import (
+from pyref.pyref import (  # type: ignore[import]
     py_read_experiment,
     py_read_experiment_pattern,
     py_read_fits,
@@ -16,40 +15,20 @@ from pyref.pyref import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np
     import pandas as pd
+    import polars as pl
 
 type FilePath = str | Path
 type FileDirectory = str | Path
 type FilePathList = list[str] | list[Path]
 
 
-def _convert_image_dtype(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert the 'raw' column in the DataFrame to a custom image dtype.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame containing the 'raw' column.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with the 'raw' column converted to the custom image dtype.
-    """
-    # iterate for objects with dtype np.ndarray
-    for col in df.columns:
-        if isinstance(df[col].dtype, np.ndarray):
-            # Convert the column to the custom image dtype
-            df[col] = df[col].astype(ImageDtype())
-    return df
-
-
 def read_fits(
     file_path: FilePath,
     headers: list[str] | None = None,
-) -> pd.DataFrame:
+    *,
+    engine: Literal["pandas", "polars"] = "polars",
+) -> pd.DataFrame | pl.DataFrame:
     """
     Read data from a FITS file into a DataFrame.
 
@@ -124,14 +103,19 @@ def read_fits(
             raise ValueError(msg)
         polars_data = py_read_fits(str(file_path_obj), headers)
 
-    return polars_data.to_pandas()
+    if engine == "pandas":
+        return polars_data.to_pandas()
+    elif engine == "polars":
+        return polars_data
 
 
 def read_experiment(
     file_path: FileDirectory,
     headers: list[str] | None = None,
-    pattern: str | bool = False,
-) -> pd.DataFrame:
+    pattern: str | None = None,
+    *,
+    engine: Literal["pandas", "polars"] = "polars",
+) -> pd.DataFrame | pl.DataFrame:
     """
     Read data from a FITS file or pattern into a DataFrame.
 
@@ -142,8 +126,8 @@ def read_experiment(
     headers : list[str] | None, optional
         List of header values to parse from the header use `None` to read all header
         values, by default None
-    pattern : str | bool, optional
-        Pattern to search in directory, by default False
+    pattern : str | None, optional
+        Pattern to search in directory, by default None
 
     Returns
     -------
@@ -188,7 +172,6 @@ def read_experiment(
         headers = []
     if pattern:
         polars_data = py_read_experiment_pattern(str(file_path_obj), pattern, headers)
-        return polars_data.to_pandas()
 
     else:
         # Ensure it's at least one FITS file in the directory
@@ -196,4 +179,7 @@ def read_experiment(
             msg = f"{file_path_obj} does not contain any FITS files."
             raise FileNotFoundError(msg)
         polars_data = py_read_experiment(str(file_path_obj), headers)
+    if engine == "pandas":
         return polars_data.to_pandas()
+    elif engine == "polars":
+        return polars_data

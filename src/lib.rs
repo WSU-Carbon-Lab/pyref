@@ -28,8 +28,12 @@ static ALLOC: PolarsAllocator = PolarsAllocator::new();
 #[pyfunction]
 #[pyo3(name = "py_read_fits", signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
 pub fn py_read_fits(path: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
-    let df = read_fits(path.into(), &header_items)?;
-    Ok(PyDataFrame(df))
+    match read_fits(path.into(), &header_items) {
+        Ok(df) => Ok(PyDataFrame(df)),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
+    }
 }
 
 /// Read multiple FITS files into a single DataFrame.
@@ -68,10 +72,11 @@ pub fn py_read_multiple_fits(
     let fits_files: Vec<_> = file_paths.iter().map(|path| path.into()).collect();
     match read_multiple_fits(fits_files, &header_items) {
         Ok(df) => Ok(PyDataFrame(df)),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }
-
 #[pyfunction]
 #[pyo3(name = "py_read_experiment_pattern")]
 #[pyo3(signature = (dir, pattern, header_items, /), text_signature = "(dir, pattern, header_items, /)")]
@@ -82,17 +87,20 @@ pub fn py_read_experiment_pattern(
 ) -> PyResult<PyDataFrame> {
     match read_experiment_pattern(dir, pattern, &header_items) {
         Ok(df) => Ok(PyDataFrame(df)),
-        Err(e) => panic!("Failed to load LazyFrame into python: {}", e),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }
-
 #[pyfunction]
 #[pyo3(name = "py_read_experiment")]
 #[pyo3(signature = (dir, header_items, /), text_signature = "(dir, header_items, /)")]
-pub fn py_read_experiment(dir: &str, header_items: Vec<String>) -> PyDataFrame {
+pub fn py_read_experiment(dir: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
     match read_experiment(dir, &header_items) {
-        Ok(df) => PyDataFrame(df),
-        Err(e) => panic!("Failed to load LazyFrame into python: {}", e),
+        Ok(df) => Ok(PyDataFrame(df)),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }
 

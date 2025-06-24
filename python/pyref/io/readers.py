@@ -75,7 +75,7 @@ def read_fits(
 
     Notes
     -----
-    The constructed DataFrame will allws have the following columns:
+    The constructed DataFrame will always have the following columns:
     - `DATE`: (pl.String) Date time string of when the file was created.
     - `raw`: (pl.Array(pl.Uint64, N, M)) Raw CCD camera image data as a 2D array.
 

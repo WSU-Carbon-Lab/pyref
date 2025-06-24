@@ -20,17 +20,17 @@ pub fn col_from_array(
     name: PlSmallStr,
     array: ArrayBase<OwnedRepr<i64>, Dim<IxDynImpl>>,
 ) -> Result<Column, PolarsError> {
-    let rows = array.len_of(Axis(0));
-    let cols = array.len_of(Axis(1));
+    // Transpose the array to ensure the dimensions are swapped, which should
+    // counteract the downstream processing issue.
+    let transposed_array = array.t(); // Get a transposed view
 
-    // To ensure correct ordering, we first make sure the array is C-contiguous (row-major).
-    // This might involve creating a copy if the original array is not.
-    let c_contiguous_array = array.as_standard_layout().into_owned();
+    let rows = transposed_array.len_of(Axis(0));
+    let cols = transposed_array.len_of(Axis(1));
 
-    // We can now safely get a slice of the entire array data.
+    // Create a C-contiguous version of the transposed array.
+    let c_contiguous_array = transposed_array.as_standard_layout().into_owned();
     let flat_data = c_contiguous_array.as_slice().unwrap();
 
-    // We build a Series of Lists, where each list is a row of the original array.
     let mut list_builder = ListPrimitiveChunkedBuilder::<Int64Type>::new(
         name.clone(),
         rows,

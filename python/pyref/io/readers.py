@@ -1,5 +1,5 @@
 """
-Modue contains tools for processing files into DataFrames or other objects.
+Module contains tools for processing files into DataFrames or other objects.
 """
 
 from __future__ import annotations

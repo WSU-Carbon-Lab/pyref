@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.6 (2025-06-24)
+
+### Fix
+
+- maybe this time we will fix the dimensions.
+
 ## v0.5.5 (2025-06-24)
 
 ### Fix

@@ -29,16 +29,3 @@ def to_reflect_dataset(
     dR = np.minimum(dR, 0.9 * R)
     ds = XrayReflectDataset(data=(Q, R, dR))
     return ds
-
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-    import polars as pl
-
-    df = pl.read_parquet("/home/hduva/projects/data/june_processed.parquet")
-    ds = to_reflect_dataset(df.filter(pl.col("sample").str.starts_with("mono")))
-
-    for s in ds:
-        s.plot()
-        plt.yscale("log")
-        plt.show()

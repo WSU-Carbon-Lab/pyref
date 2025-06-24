@@ -27,12 +27,14 @@ from refnx.analysis import (
 )
 from scipy._lib._util import check_random_state
 
+from pyref.fitting.reflectivity import ReflectModel, XrayReflectDataset
+
 if TYPE_CHECKING:
     from refnx.analysis import (
         GlobalObjective,
     )
 
-    from pyref.fitting import ReflectModel, XrayReflectDataset
+    from pyref.fitting import ReflectModel
 
 demove = [(DEMove(sigma=1e-7), 0.95), (DEMove(sigma=1e-7, gamma0=1), 0.05)]
 gmove = GaussianMove(1e-7)
@@ -46,11 +48,11 @@ class AnisotropyObjective(Objective):
         model: ReflectModel,
         data: XrayReflectDataset,
         logp_extra=None,
-        ll_scale: float | None = 1.0,
+        logp_anisotropy_weight: float = 0.5,
         **kwargs,
     ):
         super().__init__(model, data, logp_extra=logp_extra, **kwargs)
-        self.ll_scale = ll_scale
+        self.logp_anisotropy_weight = logp_anisotropy_weight
 
     # ----------/ Custom Log-Posterior /----------
     def logl(self, pvals=None):
@@ -89,12 +91,16 @@ class AnisotropyObjective(Objective):
 
         """
         ll = super().logl(pvals=pvals)
-        model_anisotropy = self.model.anisotropy(self.data.anisotropy.x)  # type: ignore
-        data_anisotropy = self.data.anisotropy.y  # type: ignore
-        ll += 0.5 * np.sum((model_anisotropy - data_anisotropy) ** 2) * self.ll_scale
-        # Normalize the anisotropy log-likelihood by the number of points
-        ll /= len(data_anisotropy)
-        # Add the log-prior constraint
+        if isinstance(self.data, XrayReflectDataset):
+            ll *= 1 - self.logp_anisotropy_weight
+            model_anisotropy = self.model.anisotropy(self.data.anisotropy.x)
+            data_anisotropy = self.data.anisotropy.y
+            ll += (
+                -0.5
+                * np.sum((model_anisotropy - data_anisotropy) ** 2)
+                * self.logp_anisotropy_weight
+            )
+        ll /= len(self.data.x)
         return ll
 
     # ----------/ Custom Plotting /----------
@@ -195,7 +201,7 @@ class AnisotropyObjective(Objective):
                 ax.plot(
                     self.data.s.x,  # type: ignore
                     s_model,
-                    color="C1",
+                    color="C0",
                     label="s-pol fit",
                     zorder=20,
                     **model_kwargs,
@@ -210,7 +216,7 @@ class AnisotropyObjective(Objective):
                     self.data.p.y_err,  # type: ignore
                     label=f"{self.data.name} p-pol" if self.data.name else "p-pol",
                     marker="o",
-                    color="C2",
+                    color="C1",
                     ms=3,
                     lw=0,
                     elinewidth=1,
@@ -226,7 +232,7 @@ class AnisotropyObjective(Objective):
                 ax.plot(
                     self.data.p.x,  # type: ignore
                     p_model,
-                    color="C3",
+                    color="C1",
                     label="p-pol fit",
                     zorder=20,
                     **model_kwargs,
@@ -300,6 +306,7 @@ class AnisotropyObjective(Objective):
                 self.data.anisotropy.x,  # type: ignore
                 self.model.anisotropy(self.data.anisotropy.x),  # type: ignore
                 color="C3",
+                zorder=20,
                 label="model",
             )
 
@@ -307,7 +314,7 @@ class AnisotropyObjective(Objective):
             ax_anisotropy.plot(
                 self.data.anisotropy.x,  # type: ignore
                 self.data.anisotropy.y,  # type: ignore
-                color="C2",
+                color="C3",
                 marker="o",
                 markersize=3,
                 linestyle="None",
@@ -459,7 +466,7 @@ class Fitter(CurveFitter):
 
         # make sure the checkpoint file exists
         if f is not None:
-            with possibly_open_file(f, "w") as h:
+            with possibly_open_file(f, "w") as h:  # type: ignore
                 # write the shape of each step of the chain
                 h.write("# ")
                 shape = self._state.coords.shape

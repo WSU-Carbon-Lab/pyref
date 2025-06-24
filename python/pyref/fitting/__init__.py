@@ -6,13 +6,14 @@ from refnx.dataset import ReflectDataset
 from pyref.fitting.fitters import (
     AnisotropyObjective,
     LogpExtra,
+    ReflectModel,
+    XrayReflectDataset,
     demove,
     gmove,
 )
 from pyref.fitting.fitters import (
     Fitter as CurveFitter,
 )
-from pyref.fitting.reflectivity import ReflectModel, XrayReflectDataset
 from pyref.fitting.refnx_converters import to_reflect_dataset
 from pyref.fitting.structure import SLD, MaterialSLD, UniTensorSLD
 

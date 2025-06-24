@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.2 (2025-06-24)
+
+### Fix
+
+- bugfix on image dimensionality
+
 ## v0.5.1 (2025-05-08)
 
 ### Fix

@@ -58,7 +58,7 @@ def read_fits(
     file_path : str | Path | list[str] | list[Path] | FilePath | FilePathList
         Path to the FITS file, or a list of paths to FITS files to read.
     headers : list[str] | None, optional
-        List of heder values to parse from the header use `None` to read all header
+        List of header values to parse from the header; use `None` to read all header
         values, by default None
 
     Returns

@@ -28,7 +28,7 @@ static ALLOC: PolarsAllocator = PolarsAllocator::new();
 #[pyfunction]
 #[pyo3(name = "py_read_fits", signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
 pub fn py_read_fits(path: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
-    let df = read_fits(path.into(), &header_items).unwrap();
+    let df = read_fits(path.into(), &header_items)?;
     Ok(PyDataFrame(df))
 }
 

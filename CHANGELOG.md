@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.5 (2025-06-24)
+
+### Fix
+
+- this time.... surely the array matches
+
+## v0.5.3 (2025-06-24)
+
+### Fix
+
+- added impolosuion to final series
+
 ## v0.5.2 (2025-06-24)
 
 ### Fix

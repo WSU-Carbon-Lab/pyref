@@ -43,12 +43,11 @@ pub fn col_from_array(
     let new_series = chunked_builder
         .finish()
         .into_series()
-        .implode()
-        .unwrap()
+        .implode()?
         .into_column();
     let _ = s.extend(&new_series);
     let s = s.cast(&DataType::Array(
-        Box::new(DataType::Array(Box::new(DataType::Int32), size0)),
+        Box::new(DataType::Array(Box::new(DataType::Int64), size0)),
         size1,
     ));
     s

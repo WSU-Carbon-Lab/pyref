@@ -68,7 +68,7 @@ pub fn py_read_multiple_fits(
     let fits_files: Vec<_> = file_paths.iter().map(|path| path.into()).collect();
     match read_multiple_fits(fits_files, &header_items) {
         Ok(df) => Ok(PyDataFrame(df)),
-        Err(e) => panic!("Failed to load LazyFrame into python: {}", e),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
     }
 }
 

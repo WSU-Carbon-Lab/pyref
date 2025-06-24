@@ -20,37 +20,31 @@ pub fn col_from_array(
     name: PlSmallStr,
     array: ArrayBase<OwnedRepr<i64>, Dim<IxDynImpl>>,
 ) -> Result<Column, PolarsError> {
-    let size0 = array.len_of(Axis(0));
-    let size1 = array.len_of(Axis(1));
+    let rows = array.len_of(Axis(0));
+    let cols = array.len_of(Axis(1));
 
-    let mut s = Column::new_empty(
-        name,
-        &DataType::List(Box::new(DataType::List(Box::new(DataType::Int64)))),
-    );
+    let mut list_builder =
+        ListPrimitiveChunkedBuilder::<Int64Type>::new(name, rows, rows * cols, DataType::Int64);
 
-    let mut chunked_builder = ListPrimitiveChunkedBuilder::<Int64Type>::new(
-        PlSmallStr::EMPTY,
-        array.len_of(Axis(1)),
-        array.len_of(Axis(1)) * array.len_of(Axis(0)),
-        DataType::Int64,
-    );
-    for col in array.axis_iter(Axis(1)) {
-        match col.as_slice() {
-            Some(col) => chunked_builder.append_slice(col),
-            None => chunked_builder.append_slice(&col.to_owned().into_raw_vec()),
+    for row in array.axis_iter(Axis(0)) {
+        match row.as_slice() {
+            Some(s) => list_builder.append_slice(s),
+            None => list_builder.append_slice(&row.to_owned().into_raw_vec()),
         }
     }
-    let new_series = chunked_builder
-        .finish()
-        .into_series()
-        .implode()?
-        .into_column();
-    let _ = s.extend(&new_series);
-    let s = s.cast(&DataType::Array(
-        Box::new(DataType::Array(Box::new(DataType::Int64), size0)),
-        size1,
-    ));
-    s
+
+    let series_of_lists = list_builder.finish().into_series();
+
+    // Implode into a single row containing a list of lists.
+    let series_of_list_of_lists = series_of_lists.implode()?;
+
+    // Cast to a 2D Array type.
+    let array_series = series_of_list_of_lists.cast(&DataType::Array(
+        Box::new(DataType::Array(Box::new(DataType::Int64), cols)),
+        rows,
+    ))?;
+
+    Ok(array_series.into_column())
 }
 // ================== CCD Raw Data Processing ============
 pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {

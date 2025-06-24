@@ -11,7 +11,7 @@
 /// # Example
 ///
 /// ```
-/// use pyref_ccd::{read_fits, loader::ExperimentType};
+/// use pyref_core::{read_fits, loader::ExperimentType};
 /// use std::path::Path;
 ///
 /// // Using experiment type

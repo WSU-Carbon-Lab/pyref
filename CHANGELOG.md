@@ -1,3 +1,28 @@
+## v0.8.1 (2025-07-01)
+
+### Fix
+
+- hopefully this does it
+- **fitting**: update ll calculation
+- **imports**: circular imports
+- imports
+- **api**: imports into api module
+- **api**: primordial support for api extension
+- **rust**: update pyref-core to latest
+- fixed sampler kwargs update
+- added direct passthough of sampler keywords
+- **fitting**: fixed hidden function
+- rollback to last stable sampler
+- fixind default thread pool allocator
+- **fitting**: removing more backend junk
+- **fitting**: removed backend checkpointing for more stable api
+
+### Refactor
+
+- start of refactor into api extension
+- **io**: fits file and directory io
+- **loader**: segregated IO operations from loader base class. added tjf's loader class
+
 ## v0.8.0 (2025-04-07)
 
 ### Feat

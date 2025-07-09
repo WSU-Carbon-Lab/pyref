@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import numbers
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from refnx.analysis import Parameters, possibly_create_parameter
 from scipy.interpolate import splev, splrep
 
-from pyref.fitting.uniaxial_model import uniaxial_reflectivity
+from pyref.fitting.uniaxial import uniaxial_reflectivity
 
 # some definitions for resolution smearing
 _FWHM = 2 * np.sqrt(2 * np.log(2.0))
@@ -70,19 +70,23 @@ class ReflectModel:
         backend="uni",
     ):
         self.name = name
-        self._parameters = None
+        self._parameters: Parameters | None = None
         self.backend = backend
         self._energy = energy  # [eV]
         self._phi = phi
         self._pol = pol  # Output polarization
 
         # all reflectometry models have an optional scale factor and background
-        self._scale_s = possibly_create_parameter(scale_s, name="scale_s")
-        self._scale_p = possibly_create_parameter(scale_p, name="scale_p")
+        self._scale_s: Parameters = possibly_create_parameter(scale_s, name="scale_s")  # type: ignore
+        self._scale_p: Parameters = possibly_create_parameter(scale_p, name="scale_p")  # type: ignore
 
-        self._bkg = possibly_create_parameter(bkg, name="bkg")
-        self._q_offset = possibly_create_parameter(q_offset, name="q_offset")
-        self._theta_offset = possibly_create_parameter(0, name="theta_offset")
+        self._bkg: Parameters = possibly_create_parameter(bkg, name="bkg")  # type: ignore
+        self._q_offset: Parameters = possibly_create_parameter(  # type: ignore
+            q_offset, name="q_offset"
+        )
+        self._theta_offset: Parameters = possibly_create_parameter(  # type: ignore
+            0, name="theta_offset"
+        )
 
         # New model parameter en_offset : 10/21/2021
         self._en_offset = possibly_create_parameter(en_offset, name="en_offset")
@@ -133,7 +137,7 @@ class ReflectModel:
         """Representation of the ReflectModel."""
         return (
             "ReflectModel({_structure!r}, name={name!r},"
-            " scale={_scale!r}, bkg={_bkg!r},"
+            " scale=({_scale_s!r} {_scale_p}), bkg={_bkg!r},"
             " dq={_dq!r}"
             " quad_order={quad_order}),"
             " q_offset={_q_offset!r}".format(**self.__dict__)
@@ -312,7 +316,7 @@ class ReflectModel:
         return self._phi
 
     @phi.setter
-    def phi(self, phi):
+    def phi(self, phi) -> None:
         self._phi = phi
 
     def _model(self, x, p=None, x_err=None):
@@ -413,7 +417,7 @@ class ReflectModel:
         # Apply q offset and calculate reflectivity
         refl, tran, *components = reflectivity(  # type: ignore
             qvals + self.q_offset.value,  # type: ignore
-            **model_input,
+            **model_input,  # type: ignore
         )
 
         return qvals, qvals_1, qvals_2, refl, tran, components
@@ -447,12 +451,12 @@ class ReflectModel:
         elif self.pol == "p":
             output = refl[:, 0, 0]
         elif self.pol == "sp":
-            spol_model = np.interp(qvals_1, qvals, refl[:, 1, 1])
-            ppol_model = np.interp(qvals_2, qvals, refl[:, 0, 0])
+            spol_model = np.interp(qvals_1, qvals, refl[:, 1, 1])  # type: ignore
+            ppol_model = np.interp(qvals_2, qvals, refl[:, 0, 0])  # type: ignore
             output = np.concatenate([spol_model, ppol_model])
         elif self.pol == "ps":
-            spol_model = np.interp(qvals_2, qvals, refl[:, 1, 1])
-            ppol_model = np.interp(qvals_1, qvals, refl[:, 0, 0])
+            spol_model = np.interp(qvals_2, qvals, refl[:, 1, 1])  # type: ignore
+            ppol_model = np.interp(qvals_1, qvals, refl[:, 0, 0])  # type: ignore
             output = np.concatenate([ppol_model, spol_model])
 
         else:
@@ -567,15 +571,7 @@ def reflectivity(
     bkg: float = 0.0,
     dq: float = 0.0,
     backend: Literal["uni", "bi"] = "uni",
-) -> (
-    tuple[
-        ndarray[tuple[int, ...], dtype[float64]] | Unknown,
-        Unknown,
-        list[list[Unknown]] | list[Unknown],
-    ]
-    | tuple[Unknown, Unknown, list[Unknown]]
-    | None
-):
+) -> tuple[np.ndarray, np.ndarray, list[Any]] | None:
     r"""
     Full calculation for anisotropic reflectivity of a stratified medium.
 
@@ -753,16 +749,16 @@ def _smeared_reflectivity(q, w, tensor, energy, phi, resolution, backend="uni"):
     # Refl, Tran = yeh_4x4_reflectivity(xlin, w, tensor, Energy, phi, threads=threads,
     # save_components=None)
     # Convolve each solution independently
-    smeared_ss = np.convolve(refl[:, 0, 0], gauss_y, mode="same") * (
+    smeared_ss = np.convolve(refl[:, 0, 0], gauss_y, mode="same") * (  # type: ignore
         gauss_x[1] - gauss_x[0]
     )
-    smeared_pp = np.convolve(refl[:, 1, 1], gauss_y, mode="same") * (
+    smeared_pp = np.convolve(refl[:, 1, 1], gauss_y, mode="same") * (  # type: ignore
         gauss_x[1] - gauss_x[0]
     )
-    smeared_sp = np.convolve(refl[:, 0, 1], gauss_y, mode="same") * (
+    smeared_sp = np.convolve(refl[:, 0, 1], gauss_y, mode="same") * (  # type: ignore
         gauss_x[1] - gauss_x[0]
     )
-    smeared_ps = np.convolve(refl[:, 1, 0], gauss_y, mode="same") * (
+    smeared_ps = np.convolve(refl[:, 1, 0], gauss_y, mode="same") * (  # type: ignore
         gauss_x[1] - gauss_x[0]
     )
 

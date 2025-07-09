@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numbers
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,9 +12,6 @@ from refnx.dataset import ReflectDataset
 from scipy.interpolate import splev, splrep
 
 from pyref.fitting.uniaxial_model import uniaxial_reflectivity
-
-if TYPE_CHECKING:
-    import polars as pl
 
 # some definitions for resolution smearing
 _FWHM = 2 * np.sqrt(2 * np.log(2.0))
@@ -254,23 +251,6 @@ class XrayReflectDataset(ReflectDataset):
         ax.set_ylabel(r"$R$")
         plt.legend()
         return ax, ax_anisotropy
-
-
-def to_reflect_dataset(
-    df: pl.DataFrame, *, overwrite_err: bool = True
-) -> XrayReflectDataset:
-    """Convert a pandas dataframe to a ReflectDataset object."""
-    if not overwrite_err:
-        e = "overwrite_err=False is not implemented yet."
-        raise NotImplementedError(e)
-    Q = df["Q"].to_numpy()
-    R = df["r"].to_numpy()
-    # Calculate initial dR
-    dR = 0.15 * R + 0.3e-6 * Q
-    # Ensure dR doesn't exceed 90% of R to keep R-dR positive
-    dR = np.minimum(dR, 0.9 * R)
-    ds = XrayReflectDataset(data=(Q, R, dR))
-    return ds
 
 
 class ReflectModel:

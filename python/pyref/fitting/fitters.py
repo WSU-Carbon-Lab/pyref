@@ -27,7 +27,7 @@ from refnx.analysis import (
 )
 from scipy._lib._util import check_random_state
 
-from pyref.fitting.reflectivity import ReflectModel, XrayReflectDataset
+from pyref.fitting.model import ReflectModel, XrayReflectDataset
 
 if TYPE_CHECKING:
     from refnx.analysis import (

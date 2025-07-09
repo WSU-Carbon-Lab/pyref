@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections import UserList
+from typing import TYPE_CHECKING, deprecated  # type: ignore[import-untyped]
 
 import numpy as np
 import pandas as pd
@@ -14,18 +15,16 @@ from refnx.reflect.interface import Erf, Step
 from refnx.reflect.structure import Component
 from scipy.interpolate import interp1d
 
-from pyref.fitting.reflectivity import reflectivity
+from pyref.fitting.model import reflectivity
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 speed_of_light = 299792458  # m/s
 plank_constant = 4.135667697e-15  # ev*s
 hc = (speed_of_light * plank_constant) * 1e10  # ev*A
 
 tensor_index = ["xx", "yy", "zz"]  # Indexing for later definitions
-
-# azimuthal rotations for averaging
-t90 = np.pi / 2
-t180 = np.pi
-t270 = 3 * np.pi / 2
 
 
 class Structure(UserList):
@@ -557,9 +556,9 @@ class Scatterer:
         raise NotImplementedError
 
     @property
-    def parameters(self):
+    def parameters(self) -> Parameters:
         """Parameters."""
-        raise NotImplementedError
+        return Parameters(name=self.name)
 
     def __call__(self, thick=0, rough=0) -> Structure:
         """
@@ -840,6 +839,9 @@ class MaterialSLD(Scatterer):
         mass density of compound in g / cm**3
     energy : float, optional
         energy of radiation (ev) ~ Converted to Angstrom in function
+    energy_offset: float, optional
+        energy offset in eV to be added to the energy for calculations
+        (default is 0.0)
     name : str, optional
         Name of material
 
@@ -857,27 +859,38 @@ class MaterialSLD(Scatterer):
 
     """
 
-    def __init__(self, formula, density=None, energy=250.0, name=""):
+    def __init__(
+        self,
+        formula: str,
+        density: None | float = None,
+        energy=250.0,
+        name="",
+        *,
+        energy_offset=0.0,
+    ):
         super().__init__(name=name)
 
-        self.__formula = pt.formula(
-            formula
-        )  # Build the PeriodicTable object for storage
+        self.__formula: pt.Formula = pt.formula(formula)  # type: ignore[assignment] formulas are lazily evaluated
         self._compound = formula  # Keep a reference of the str object
         if density is None:
             density = compound_density(formula)
-        self.density = possibly_create_parameter(
-            density, name=f"{name}_rho", vary=True, bounds=(0, 5 * density)
-        )
-
         self._energy = energy  # Store in eV for user interface
+        self._tensor = np.eye(
+            3, dtype=np.complex128
+        )  # Initialize as a 3x3 complex array
+        # ----------/ parameter construction/---------
+        self.density: Parameter = possibly_create_parameter(
+            density, name=f"{name}_rho", vary=True, bounds=(0, 5 * density)
+        )  # type: ignore[assignment]
+        self._energy_offset: Parameter = possibly_create_parameter(
+            energy_offset, name=f"{name}_enoffset", vary=True, bounds=(-1, 1)
+        )  # type: ignore[assignment]
+        self._parameters = Parameters(name=name)
+        self._parameters.extend([self.density, self._energy_offset])
+        # --------/ depriciated / --------------
         self._wavelength = (
             hc / self._energy
         )  # Convert to Angstroms for later calculations
-        self._tensor = None  # Build this when its called based in parameter values
-
-        self._parameters = Parameters(name=name)
-        self._parameters.extend([self.density])
 
     def __repr__(self):
         """Representation of the scatterer."""
@@ -910,11 +923,11 @@ class MaterialSLD(Scatterer):
     def formula(self, formula):
         import periodictable as pt
 
-        self.__formula = pt.formula(formula)
+        self.__formula = pt.formula(formula)  # type: ignore[assignment] formulas are lazily evaluated
         self._compound = formula
 
     @property
-    def energy(self):
+    def energy(self) -> float:
         """
         Photon energy to evaluate index of refraction in eV.
 
@@ -928,12 +941,28 @@ class MaterialSLD(Scatterer):
         return self._energy
 
     @energy.setter
-    def energy(self, energy):
+    def energy(self, energy) -> None:
         self._energy = energy
-        self._wavelength = (
-            hc / self._energy
-        )  # Update the wavelength if the energy changes
 
+    @property
+    def energy_offset(self) -> float:
+        """
+        Energy offset in eV to be added to the energy for calculations.
+
+        Returns
+        -------
+            energy_offset : float
+                Energy offset in eV.
+        """
+        if self._energy_offset.value:
+            return self._energy_offset.value
+        return 0.0
+
+    @energy_offset.setter
+    def energy_offset(self, energy_offset) -> None:
+        self._energy_offset.value = energy_offset
+
+    @deprecated("Use `energy` and `energy_offset` instead.")
     @property
     def wavelength(self):
         """
@@ -949,6 +978,7 @@ class MaterialSLD(Scatterer):
         """
         return self._wavelength
 
+    @deprecated("Use `energy` and `energy_offset` instead.")
     @wavelength.setter
     def wavelength(self, wavelength):
         self._wavelength = wavelength
@@ -956,20 +986,20 @@ class MaterialSLD(Scatterer):
             hc / self._wavelength
         )  # Update the energy if the wavelength changes
 
-    def __complex__(self):
+    def __complex__(self) -> complex:
         """Complex representation of the scatterer."""
+        energy_kev: float = (
+            self.energy + self.energy_offset
+        ) * 1e-3  # Convert eV to keV
         sldc = xsf.index_of_refraction(
-            self.__formula, density=self.density.value, wavelength=self.wavelength
+            self.__formula, density=self.density.value, energy=energy_kev
         )
-        if (
-            type(sldc).__module__ == np.__name__
-        ):  # check if the type is accidentally cast into numpy.
-            sldc = sldc.item()
-        return 1 - sldc  # pt.xsf makes the type numpy affiliated...
-        # __complex__ does not play nice so we reconvert with .item()
+        if type(sldc).__module__ == np.__name__:
+            sldc = sldc.item()  # ensure we get just the single scalar value
+        return complex(1 - sldc)
 
     @property
-    def parameters(self):
+    def parameters(self) -> Parameters:
         """
         :class:`refnx.analysis.Parameters`.
 
@@ -979,7 +1009,7 @@ class MaterialSLD(Scatterer):
         return self._parameters
 
     @property
-    def tensor(self):
+    def tensor(self) -> NDArray[np.complex128]:
         """
         An isotropic 3x3 tensor composed of `complex(self.delta, self.beta)`.
 
@@ -988,7 +1018,7 @@ class MaterialSLD(Scatterer):
             tensor : np.ndarray
                 complex tensor index of refraction
         """
-        self._tensor = np.eye(3) * complex(self)
+        self._tensor = np.eye(3, dtype=np.complex128) * complex(self)
         return self._tensor
 
 
@@ -1064,7 +1094,7 @@ class UniTensorSLD(Scatterer):
         # ============/ Optical Constants /===========
         self.energy = energy
         self._energy_offset = possibly_create_parameter(
-            energy_offset, name=f"{name}_enOffset", vary=True, bounds=(-0.01, 0.01)
+            energy_offset, name=f"{name}_enoffset", vary=True, bounds=(-0.01, 0.01)
         )
 
         self.n_xx = interp1d(ooc["energy"], ooc["n_xx"])
@@ -1754,7 +1784,7 @@ def birefringence_profile(slabs, tensor, z=None, step=False):
 # Taken from Kas's code.
 
 
-def compound_density(compound, desperate_lookup=True):
+def compound_density(compound: str, *, desperate_lookup: bool = True) -> float:
     """Density of the compound in g/cm^3.
 
     Elemental densities are taken from periodictable, which gets
@@ -1770,86 +1800,87 @@ def compound_density(compound, desperate_lookup=True):
     for d in henke_densities:
         if compound in (d[0], d[1]):
             return d[2]
-    comp = pt.formula(compound)
+    comp = pt.formula(compound)  # type: ignore[assignment] formulas are lazily evaluated
     if comp.density is not None:
-        return comp.density
+        return float(comp.density)
     if desperate_lookup:
-        return comp.structure[0][1].density
-    return None
+        return float(comp.structure[0][1].density)
+    e: str = f"Density for compound {compound!r} unknown, please provide a value."
+    raise ValueError(e)
 
 
-henke_densities = [
-    ["", "AgBr", 6.473],
-    ["", "AlAs", 3.81],
-    ["", "AlN", 3.26],
-    ["Sapphire", "Al2O3", 3.97],
-    ["", "AlP", 2.42],
-    ["", "B4C", 2.52],
-    ["", "BeO", 3.01],
-    ["", "BN", 2.25],
-    ["Polyimide", "C22H10N2O5", 1.43],
-    ["Polypropylene", "C3H6", 0.90],
-    ["PMMA", "C5H8O2", 1.19],
-    ["Polycarbonate", "C16H14O3", 1.2],
-    ["Kimfol", "C16H14O3", 1.2],
-    ["Mylar", "C10H8O4", 1.4],
-    ["Teflon", "C2F4", 2.2],
-    ["Parylene-C", "C8H7Cl", 1.29],
-    ["Parylene-N", "C8H8", 1.11],
-    ["Fluorite", "CaF2", 3.18],
-    ["", "CdWO4", 7.9],
-    ["", "CdS", 4.826],
-    ["", "CoSi2", 5.3],
-    ["", "Cr2O3", 5.21],
-    ["", "CsI", 4.51],
-    ["", "CuI", 5.63],
-    ["", "InN", 6.88],
-    ["", "In2O3", 7.179],
-    ["", "InSb", 5.775],
-    ["", "IrO2", 11.66],
-    ["", "GaAs", 5.316],
-    ["", "GaN", 6.10],
-    ["", "GaP", 4.13],
-    ["", "HfO2", 9.68],
-    ["", "LiF", 2.635],
-    ["", "LiH", 0.783],
-    ["", "LiOH", 1.43],
-    ["", "MgF2", 3.18],
-    ["", "MgO", 3.58],
-    ["", "Mg2Si", 1.94],
-    ["Mica", "KAl3Si3O12H2", 2.83],
-    ["", "MnO", 5.44],
-    ["", "MnO2", 5.03],
-    ["", "MoO2", 6.47],
-    ["", "MoO3", 4.69],
-    ["", "MoSi2", 6.31],
-    ["Salt", "NaCl", 2.165],
-    ["", "NbSi2", 5.37],
-    ["", "NbN", 8.47],
-    ["", "NiO", 6.67],
-    ["", "Ni2Si", 7.2],
-    ["", "Ru2Si3", 6.96],
-    ["", "RuO2", 6.97],
-    ["", "SiC", 3.217],
-    ["", "Si3N4", 3.44],
-    ["Silica", "SiO2", 2.2],
-    ["Quartz", "SiO2", 2.65],
-    ["", "TaN", 16.3],
-    ["", "TiN", 5.22],
-    ["", "Ta2Si", 14.0],
-    ["Rutile", "TiO2", 4.26],
-    ["ULE", "Si.925Ti.075O2", 2.205],
-    ["", "UO2", 10.96],
-    ["", "VN", 6.13],
-    ["Water", "H2O", 1.0],
-    ["", "WC", 15.63],
-    ["YAG", "Y3Al5O12", 4.55],
-    ["Zerodur", "Si.56Al.5P.16Li.04Ti.02Zr.02Zn.03O2.46", 2.53],
-    ["", "ZnO", 5.675],
-    ["", "ZnS", 4.079],
-    ["", "ZrN", 7.09],
-    ["Zirconia", "ZrO2", 5.68],
-    ["", "ZrSi2", 4.88],
+henke_densities: list[tuple[str, str, float]] = [
+    ("", "AgBr", 6.473),
+    ("", "AlAs", 3.81),
+    ("", "AlN", 3.26),
+    ("Sapphire", "Al2O3", 3.97),
+    ("", "AlP", 2.42),
+    ("", "B4C", 2.52),
+    ("", "BeO", 3.01),
+    ("", "BN", 2.25),
+    ("Polyimide", "C22H10N2O5", 1.43),
+    ("Polypropylene", "C3H6", 0.90),
+    ("PMMA", "C5H8O2", 1.19),
+    ("Polycarbonate", "C16H14O3", 1.2),
+    ("Kimfol", "C16H14O3", 1.2),
+    ("Mylar", "C10H8O4", 1.4),
+    ("Teflon", "C2F4", 2.2),
+    ("Parylene-C", "C8H7Cl", 1.29),
+    ("Parylene-N", "C8H8", 1.11),
+    ("Fluorite", "CaF2", 3.18),
+    ("", "CdWO4", 7.9),
+    ("", "CdS", 4.826),
+    ("", "CoSi2", 5.3),
+    ("", "Cr2O3", 5.21),
+    ("", "CsI", 4.51),
+    ("", "CuI", 5.63),
+    ("", "InN", 6.88),
+    ("", "In2O3", 7.179),
+    ("", "InSb", 5.775),
+    ("", "IrO2", 11.66),
+    ("", "GaAs", 5.316),
+    ("", "GaN", 6.10),
+    ("", "GaP", 4.13),
+    ("", "HfO2", 9.68),
+    ("", "LiF", 2.635),
+    ("", "LiH", 0.783),
+    ("", "LiOH", 1.43),
+    ("", "MgF2", 3.18),
+    ("", "MgO", 3.58),
+    ("", "Mg2Si", 1.94),
+    ("Mica", "KAl3Si3O12H2", 2.83),
+    ("", "MnO", 5.44),
+    ("", "MnO2", 5.03),
+    ("", "MoO2", 6.47),
+    ("", "MoO3", 4.69),
+    ("", "MoSi2", 6.31),
+    ("Salt", "NaCl", 2.165),
+    ("", "NbSi2", 5.37),
+    ("", "NbN", 8.47),
+    ("", "NiO", 6.67),
+    ("", "Ni2Si", 7.2),
+    ("", "Ru2Si3", 6.96),
+    ("", "RuO2", 6.97),
+    ("", "SiC", 3.217),
+    ("", "Si3N4", 3.44),
+    ("Silica", "SiO2", 2.2),
+    ("Quartz", "SiO2", 2.65),
+    ("", "TaN", 16.3),
+    ("", "TiN", 5.22),
+    ("", "Ta2Si", 14.0),
+    ("Rutile", "TiO2", 4.26),
+    ("ULE", "Si.925Ti.075O2", 2.205),
+    ("", "UO2", 10.96),
+    ("", "VN", 6.13),
+    ("Water", "H2O", 1.0),
+    ("", "WC", 15.63),
+    ("YAG", "Y3Al5O12", 4.55),
+    ("Zerodur", "Si.56Al.5P.16Li.04Ti.02Zr.02Zn.03O2.46", 2.53),
+    ("", "ZnO", 5.675),
+    ("", "ZnS", 4.079),
+    ("", "ZrN", 7.09),
+    ("Zirconia", "ZrO2", 5.68),
+    ("", "ZrSi2", 4.88),
 ]
 
 

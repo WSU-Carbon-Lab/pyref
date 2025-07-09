@@ -5,252 +5,14 @@ from __future__ import annotations
 import numbers
 from typing import Literal
 
-import matplotlib.pyplot as plt
 import numpy as np
 from refnx.analysis import Parameters, possibly_create_parameter
-from refnx.dataset import ReflectDataset
 from scipy.interpolate import splev, splrep
 
 from pyref.fitting.uniaxial_model import uniaxial_reflectivity
 
 # some definitions for resolution smearing
 _FWHM = 2 * np.sqrt(2 * np.log(2.0))
-
-
-class XrayReflectDataset(ReflectDataset):
-    """Overload of the ReflectDataset class from refnx."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._initialize_polarizations()
-
-    def _initialize_polarizations(self):
-        """Initialize s and p polarization datasets and calculate anisotropy."""
-        diff = np.diff(self.x)
-        # locate where diff is less than 0 and find that index
-        idx = np.where(diff < 0)[0] + 1
-
-        if len(idx) > 0:
-            self.s = (
-                ReflectDataset(
-                    (self.x[: idx[0]], self.y[: idx[0]], self.y_err[: idx[0]])
-                )
-                if self.y_err is not None
-                else ReflectDataset((self.x[: idx[0]], self.y[: idx[0]]))
-            )
-            self.p = (
-                ReflectDataset(
-                    (self.x[idx[0] :], self.y[idx[0] :], self.y_err[idx[0] :])
-                )
-                if self.y_err is not None
-                else ReflectDataset((self.x[idx[0] :], self.y[idx[0] :]))
-            )
-        else:
-            self.s = ReflectDataset((self.x, self.y, self.y_err))
-            self.p = ReflectDataset((self.x, self.y, self.y_err))
-
-        # Calculate average spacing in each dataset to determine tolerance
-        s_spacing = float(np.mean(np.diff(self.s.x))) if len(self.s.x) > 1 else 0.0
-        p_spacing = float(np.mean(np.diff(self.p.x))) if len(self.p.x) > 1 else 0.0
-        # Use half the average spacing as tolerance
-        tolerance = 0.5 * max(s_spacing, p_spacing)
-
-        # Merge and sort all q points from both datasets
-        all_q = np.sort(np.unique(np.concatenate([self.s.x, self.p.x])))
-
-        # Find q values where both datasets have points (within tolerance)
-        q_common = []
-        for q in all_q:
-            min_diff_s = np.min(np.abs(self.s.x - q))
-            min_diff_p = np.min(np.abs(self.p.x - q))
-            if min_diff_s <= tolerance and min_diff_p <= tolerance:
-                q_common.append(q)
-
-        # Convert to numpy array
-        q_common = np.array(q_common)
-
-        # If we have common q points, interpolate both datasets
-        if len(q_common) > 0:
-            r_s_interp = np.interp(q_common, self.s.x, self.s.y)
-            r_p_interp = np.interp(q_common, self.p.x, self.p.y)
-        else:
-            # No common points, create empty arrays
-            q_common = np.array([])
-            r_s_interp = np.array([])
-            r_p_interp = np.array([])
-
-        _anisotropy = (r_p_interp - r_s_interp) / (r_p_interp + r_s_interp)
-        self.anisotropy = ReflectDataset((q_common, _anisotropy))
-
-    @classmethod
-    def from_arrays(
-        cls,
-        x_s=None,
-        y_s=None,
-        y_err_s=None,
-        x_p=None,
-        y_p=None,
-        y_err_p=None,
-        name=None,
-    ):
-        """
-        Create an XrayReflectDataset directly from arrays of s and p polarization data.
-
-        Parameters
-        ----------
-        x_s : np.ndarray
-            q values for s-polarization
-        y_s : np.ndarray
-            reflectivity values for s-polarization
-        y_err_s : np.ndarray
-            errors for s-polarization reflectivity
-        x_p : np.ndarray
-            q values for p-polarization
-        y_p : np.ndarray
-            reflectivity values for p-polarization
-        y_err_p : np.ndarray
-            errors for p-polarization reflectivity
-        name : str, optional
-            Name for the dataset
-
-        Returns
-        -------
-        dataset : XrayReflectDataset
-            The combined dataset with s and p polarization data
-        """
-        # Handle case where only s-polarization is provided
-        if x_p is None:
-            dataset = cls(data=(x_s, y_s, y_err_s), name=name)
-            return dataset
-
-        # Handle case where only p-polarization is provided
-        if x_s is None:
-            dataset = cls(data=(x_p, y_p, y_err_p), name=name)
-            return dataset
-
-        # Default to empty arrays if not provided
-        if y_err_s is None:
-            y_err_s = np.zeros_like(y_s)
-        if y_err_p is None:
-            y_err_p = np.zeros_like(y_p)
-
-        # Combine s and p polarization data
-        x_combined = np.concatenate([x_s, x_p])
-        y_combined = np.concatenate([y_s, y_p])  # type: ignore
-        y_err_combined = np.concatenate([y_err_s, y_err_p])
-
-        # Sort by x value if s and p overlap
-        if np.any(x_s > x_p[0]):
-            sort_idx = np.argsort(x_combined)
-            x_combined = x_combined[sort_idx]
-            y_combined = y_combined[sort_idx]
-            y_err_combined = y_err_combined[sort_idx]
-
-        # Create the dataset
-        dataset = cls(data=(x_combined, y_combined, y_err_combined), name=name)
-
-        # Override automatic polarization detection if we're manually specifying them
-        dataset.s = ReflectDataset((x_s, y_s, y_err_s))
-        dataset.p = ReflectDataset((x_p, y_p, y_err_p))
-
-        # Recalculate anisotropy
-        q_min = np.max([dataset.s.x.min(), dataset.p.x.min()])
-        q_max = np.min([dataset.s.x.max(), dataset.p.x.max()])
-        q_common = np.linspace(q_min, q_max, max(len(dataset.s.x), len(dataset.p.x)))
-
-        # Interpolate both s and p polarized data onto common q points
-        r_s_interp = np.interp(q_common, dataset.s.x, dataset.s.y)
-        r_p_interp = np.interp(q_common, dataset.p.x, dataset.p.y)
-
-        _anisotropy = (r_p_interp - r_s_interp) / (r_p_interp + r_s_interp)
-        dataset.anisotropy = ReflectDataset((q_common, _anisotropy))
-
-        return dataset
-
-    def plot(self, ax=None, ax_anisotropy=None, **kwargs):  # type: ignore
-        """Plot the reflectivity and anisotropy data."""
-        if ax is None:
-            fig, axs = plt.subplots(
-                nrows=2,
-                sharex=True,
-                figsize=(8, 6),
-                gridspec_kw={"height_ratios": [3, 1]},
-            )
-            ax = axs[0]
-            if ax_anisotropy is None:
-                ax_anisotropy = axs[1]
-
-        elif ax_anisotropy is None:
-            # If only ax was provided but not ax_anisotropy
-            fig = ax.figure
-            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0)
-            ax_anisotropy = fig.add_subplot(gs[1], sharex=ax)
-
-        if self.s.y[3] != self.p.y[3]:
-            # Plot s and p separately
-            ax.errorbar(
-                self.s.x,
-                self.s.y,
-                self.s.y_err,
-                label=f"{self.name} s-pol",
-                marker="o",
-                color="C0",
-                ms=3,
-                lw=0,
-                elinewidth=1,
-                capsize=1,
-                ecolor="k",
-            )
-            ax.errorbar(
-                self.p.x,
-                self.p.y,
-                self.p.y_err,
-                label=f"{self.name} p-pol",
-                marker="o",
-                color="C1",
-                ms=3,
-                lw=0,
-                elinewidth=1,
-                capsize=1,
-                ecolor="k",
-            )
-        else:
-            # Plot together if same x values
-            ax.errorbar(
-                self.x,
-                self.y,
-                self.y_err,
-                label=self.name,
-                marker="o",
-                color="C0",
-                ms=3,
-                lw=0,
-                elinewidth=1,
-                capsize=1,
-                ecolor="k",
-            )
-
-        ax_anisotropy.plot(
-            self.anisotropy.x,
-            self.anisotropy.y,
-            label=f"{self.name} anisotropy" if self.name else "anisotropy",
-            marker="o",
-            markersize=3,
-            lw=0,
-            color="C2",
-        )
-        ax_anisotropy.axhline(
-            0,
-            color=plt.rcParams["axes.edgecolor"],
-            ls="-",
-            lw=plt.rcParams["axes.linewidth"],
-        )
-
-        ax.set_yscale("log")
-        ax_anisotropy.set_xlabel(r"$q (\AA^{-1})$")
-        ax.set_ylabel(r"$R$")
-        plt.legend()
-        return ax, ax_anisotropy
 
 
 class ReflectModel:
@@ -805,6 +567,14 @@ def reflectivity(
     bkg: float = 0.0,
     dq: float = 0.0,
     backend: Literal["uni", "bi"] = "uni",
+) -> (
+    tuple[
+        ndarray[tuple[int, ...], dtype[float64]] | Unknown,
+        Unknown,
+        list[list[Unknown]] | list[Unknown],
+    ]
+    | tuple[Unknown, Unknown, list[Unknown]]
+    | None
 ):
     r"""
     Full calculation for anisotropic reflectivity of a stratified medium.
@@ -944,8 +714,7 @@ def _smeared_reflectivity(q, w, tensor, energy, phi, resolution, backend="uni"):
 
     Returns
     -------
-    reflectivity: np.ndarray
-        The resolution smeared reflectivity
+    reflectivity: np.ndarray, np.ndarray, np.ndarray,
     """
     if resolution < 0.5:
         if backend == "uni":

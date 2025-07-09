@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections import UserList
-from typing import TYPE_CHECKING, deprecated  # type: ignore[import-untyped]
+from typing import TYPE_CHECKING, deprecated
 
 import numpy as np
 import pandas as pd
@@ -27,42 +27,47 @@ hc = (speed_of_light * plank_constant) * 1e10  # ev*A
 tensor_index = ["xx", "yy", "zz"]  # Indexing for later definitions
 
 
+# ==============/ Base Classes /===================
 class Structure(UserList):
     r"""
-    Represents the interfacial Structure of a reflectometry sample.
-
-    Successive Components are added to the Structure to construct the interface.
+    Represents the slab structure of a reflective sample.
 
     Parameters
     ----------
-    components : sequence
-        A sequence of PXR_Components to initialise the PXR_Structure.
-    name : str
-        Name of this structure
-    reverse_structure : bool
-        If `Structure.reverse_structure` is `True` then  slab representation produced by
-          `Structure.slabs` is reversed.
+    components : tuple[Component | PXR_Component]
+        Initial components of the structure.
+    name : str, optional
+        Name of the structure.
+    reverse_structure : bool, optional
+        If `True`, the slab representation produced by :meth:`PXR_Structure.slabs` is
+        reversed.
 
     Example
     -------
-    >>> from PyPXR import PXR_SLD, PXR_MaterialSLD
-    >>> en = 284.4  # [eV]
-    >>> # make the material with tensor index of refraction
-    >>> vac = PXR_MaterialSLD("", density=1, energy=en, name="vacuum")  # Superstrate
-    >>> si = PXR_MaterialSLD("Si", density=2.33, energy=en, name="Si")  # Substrate
-    >>> sio2 = PXR_MaterialSLD("SiO2", density=2.4, energy=en, name="SiO2")  # Substrate
-    >>> n_xx = complex(-0.0035, 0.0004)  # [unitless] #Ordinary Axis
-    >>> n_zz = complex(-0.0045, 0.0009)  # [unitless] #Extraordinary Axis
-    >>> molecule = PXR_SLD(np.array([n_xx, n_zz]), name="material")  # molecule
-    >>> # Make the structure
-    >>> # See 'PXR_Slab' for details on building layers
-    >>> structure = vac(0, 0) | molecule(100, 2) | sio2(15, 1.5) | si(1, 1.5)
+    ```python
+    import pyref.fitting as fit
 
+    en = 284.4  # [eV]
+    # Create the materials for a given energy
+    vac = fit.PXR_MaterialSLD("", density=1, energy=en, name="vacuum")
+    si = fit.PXR_MaterialSLD("Si", density=2.33, energy=en, name="Si")
+    sio2 = fit.PXR_MaterialSLD("SiO2", density=2.4, energy=en, name="SiO2")
+    # Specify the complex index of refraction for a molecule
+    n_xx = complex(-0.0035, 0.0004)  # [unitless] #Ordinary Axis
+    n_zz = complex(-0.0045, 0.0009)  # [unitless] #Extraordinary Axis
+    molecule = fit.SLD(np.array([n_xx, n_zz]), name="material")  # molecule
+    # Make the structure
+    # See 'PXR_Slab' for details on building layers
+    structure = vac(0, 0) | molecule(100, 2) | sio2(15, 1.5) | si(1, 1.5)
+    ```
     """
 
     def __init__(
-        self, components=(), name="", reverse_structure=False
-    ):  # Removed solvent parameter
+        self,
+        *components: tuple[PXR_Component],
+        name="",
+        reverse_structure=False,
+    ) -> None:
         super().__init__()
         self._name = name
 
@@ -70,19 +75,21 @@ class Structure(UserList):
 
         # if you provide a list of components to start with, then initialise
         # the structure from that
-        self.data = [c for c in components if isinstance(c, Component)]
+        self.data: list[PXR_Component] = [
+            c for c in components if isinstance(c, PXR_Component)
+        ]
 
-    def __copy__(self):
+    def __copy__(self) -> Structure:
         """Create a shallow copy of the structure."""
-        s = Structure(name=self.name)
+        s: Structure = Structure(name=self.name)
         s.data = self.data.copy()
         return s
 
-    def __setitem__(self, i, v):
+    def __setitem__(self, i, v) -> None:
         """Set the i-th item of the structure to v."""
         self.data[i] = v
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Representation of the structure."""
         s = []
         s.append("{:_>80}".format(""))
@@ -94,7 +101,7 @@ class Structure(UserList):
 
         return "\n".join(s)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Representation of the structure."""
         return (
             "Structure(components={data!r},"
@@ -102,7 +109,7 @@ class Structure(UserList):
             " reverse_structure={_reverse_structure},".format(**self.__dict__)
         )
 
-    def append(self, item):
+    def append(self, item) -> None:
         """
         Append a :class:`PXR_Component` to the Structure.
 
@@ -128,6 +135,17 @@ class Structure(UserList):
     @name.setter
     def name(self, name):
         self._name = name
+
+    @property
+    def energy_offset(self) -> Parameter:
+        """Energy offset for the substrate of the structure."""
+        substrate: PXR_Component = self.data[0 if not self.reverse_structure else -1]
+        return substrate.sld.energy_offset
+
+    @energy_offset.setter
+    def energy_offset(self, value: Parameter) -> None:
+        for component in self.components:
+            component.sld.energy_offset = value
 
     @property
     def reverse_structure(self):
@@ -197,7 +215,7 @@ class Structure(UserList):
 
     def tensor(self, energy=None):
         """
-        Tensor index of refraction for the structure.
+        Transfer matrix representation of the structure.
 
         Parameters
         ----------
@@ -385,7 +403,7 @@ class Structure(UserList):
         return p
 
     @property
-    def components(self):
+    def components(self) -> list[PXR_Component]:
         """
         The list of components in the sample.
         """
@@ -545,22 +563,71 @@ class Scatterer:
 
     def __init__(self, name=""):
         self.name = name
+        # ensure that some common attributes are parameterized
+        self.energy: float | None = None
+        self._energy_offset: Parameter | None = None
+        self._density: Parameter | None = None
+        self._rotation: Parameter | None = None
+        self._tensor: NDArray[np.complex128] | None = None
 
-    def __str__(self):
+    @property
+    def energy_offset(self) -> Parameter:
+        """Energy offset."""
+        return self._energy_offset or Parameter(
+            0.0, name=f"{self.name}_energy_offset", vary=False, bounds=(-100, 100)
+        )
+
+    @energy_offset.setter
+    def energy_offset(self, value: Parameter) -> None:
+        """Set the energy offset."""
+        self._energy_offset = value
+
+    @property
+    def density(self) -> Parameter:
+        """Density."""
+        return self._density or Parameter(
+            1.0, name=f"{self.name}_rho", vary=False, bounds=(0, 100)
+        )
+
+    @density.setter
+    def density(self, value: Parameter) -> None:
+        """Set the density."""
+        self._density = value
+
+    @property
+    def rotation(self) -> Parameter:
+        """Rotation."""
+        return self._rotation or Parameter(
+            0.0, name=f"{self.name}_rotation", vary=False, bounds=(0, np.pi * 2)
+        )
+
+    @rotation.setter
+    def rotation(self, value: Parameter) -> None:
+        """Set the rotation."""
+        self._rotation = value
+
+    def __str__(self) -> str:
         """Representation of the scatterer."""
         sld = 1 - complex(self)  # Returns optical constant
         return f"n = {sld}"
 
-    def __complex__(self):
+    def __complex__(self) -> complex:
         """Complex representation of the scatterer."""
-        raise NotImplementedError
+        return complex(1, 0)
 
     @property
     def parameters(self) -> Parameters:
         """Parameters."""
         return Parameters(name=self.name)
 
-    def __call__(self, thick=0, rough=0) -> Structure:
+    @property
+    def tensor(self) -> NDArray[np.complex128]:
+        """
+        Complex tensor index of refraction.
+        """
+        return self._tensor or np.eye(3, dtype=np.complex128)
+
+    def __call__(self, thick=0, rough=0) -> Slab:
         """
         Create a :class:`PXR_Slab`.
 
@@ -590,11 +657,245 @@ class Scatterer:
         slab.rough.setp(vary=True, bounds=(0, 2 * rough))
         return slab
 
-    def __or__(self, other) -> Structure:
+    def __or__(self, other: Slab) -> Structure:
         """Combine scatterers."""
         # c = self | other
-        slab = self()
+        slab: Slab = self()
         return slab | other
+
+
+class PXR_Component:
+    """
+    A base class for describing the structure of a subset of an interface.
+
+    Parameters
+    ----------
+    name : str, optional
+        The name associated with the Component
+
+    Notes
+    -----
+    Currently limited to Gaussian interfaces.
+    """
+
+    def __init__(self, name=""):
+        self.name = name
+        self.sld: Scatterer = Scatterer(name=name)
+
+    def __or__(self, other):
+        """
+        OR'ing components can create a :class:`Structure`.
+
+        Parameters
+        ----------
+        other: refnx.reflect.Structure, refnx.reflect.Component
+            Combines with this component to make a Structure
+
+        Returns
+        -------
+        s: refnx.reflect.Structure
+            The created Structure
+
+        Examples
+        --------
+        >>> air = SLD(0, name="air")
+        >>> sio2 = SLD(3.47, name="SiO2")
+        >>> si = SLD(2.07, name="Si")
+        >>> structure = air | sio2(20, 3) | si(0, 3)
+
+        """
+        # c = self | other
+        p = Structure()
+        p |= self
+        p |= other
+        return p
+
+    def __mul__(self, n):
+        """
+        MUL'ing components makes them repeat.
+
+        Parameters
+        ----------
+        n: int
+            How many times you want to repeat the Component
+
+        Returns
+        -------
+        s: refnx.reflect.Structure
+            The created Structure
+        """
+        # convert to integer, should raise an error if there's a problem
+        n = operator.index(n)
+        if n < 1:
+            return Structure()
+        elif n == 1:
+            return self
+        else:
+            s = Structure()
+            s.extend([self] * n)
+            return s
+
+    def __str__(self):
+        """Representation of the component."""
+        return str(self.parameters)
+
+    @property
+    def parameters(self):
+        """
+        :class:`refnx.analysis.Parameters`.
+
+         associated with this component
+        """
+        e = "A component should override the parameters property"
+        raise NotImplementedError(e)
+
+    def slabs(self, structure=None):
+        """
+        Slab representation of this component.
+
+        Parameters
+        ----------
+        structure : PyPXR.anisotropic_reflect.PXR_Structure
+            Summary of the structure that houses the component.
+
+        Returns
+        -------
+        slabs : np.ndarray
+            Slab representation of this Component.
+            Has shape (N, 5).
+
+            - slab[N, 0]
+               thickness of layer N
+            - slab[N, 1]
+               SLD.real of layer N (not including solvent)
+            - slab[N, 2]
+               *overall* SLD.imag of layer N (not including solvent)
+            - slab[N, 3]
+               roughness between layer N and N-1
+            - slab[N, 4]
+               volume fraction of solvent in layer N.
+
+        If a Component returns None, then it doesn't have any slabs.
+        """
+        e = "A component should override the slabs property"
+        raise NotImplementedError(e)
+
+    def logp(self):
+        """
+        Log-probability for the component.
+
+        Do not include log-probability terms for the actual parameters,
+        these are automatically included elsewhere.
+
+        Returns
+        -------
+        logp : float
+            Log-probability
+        """
+        return 0
+
+    def tensor(self, energy=None):
+        """
+        Information pertaining to the tensor dielectric properties of the slab.
+
+        Parameters
+        ----------
+        energy : float
+            Updates PXR_SLD energy component associated with slab. Only required for
+            PXR_MaterialSLD objects
+
+        Returns
+        -------
+        tensor : np.ndarray
+            Complex tensor index of refraction associated with slab.
+        """
+        return np.array([self.sld.tensor])
+
+
+class Slab(PXR_Component):
+    """
+    A slab component has with tensor index of refraction associated over its thickness.
+
+    Parameters
+    ----------
+    thick : refnx.analysis.Parameter or float
+        thickness of slab (Angstrom)
+    sld : :class:`PyPXR.anisotropic_structure.PXR_Scatterer`, complex, or float
+        (complex) tensor index of refraction of film
+    rough : refnx.analysis.Parameter or float
+        roughness on top of this slab (Angstrom)
+    name : str
+        Name of this slab
+    """
+
+    def __init__(self, thick, sld: Scatterer, rough, name=""):
+        super().__init__(name=name)
+        self.thick = possibly_create_parameter(thick, name=f"{name}_thick")
+        if isinstance(sld, Scatterer):
+            self.sld: Scatterer = sld
+        else:
+            self.sld: Scatterer = SLD(sld)
+
+        self.rough = possibly_create_parameter(rough, name=f"{name}_rough")
+
+        p = Parameters(name=self.name)
+        p.extend([Parameters([self.thick, self.rough], name=f"{name}_slab")])
+        p.extend(self.sld.parameters)
+
+        self._parameters = p
+
+    def __repr__(self):
+        """Representation of the slab."""
+        return f"Slab({self.thick!r}, {self.sld!r}, {self.rough!r}, name={self.name!r},"
+
+    def __str__(self):
+        """Representation of the slab."""
+        # sld = repr(self.sld)
+        #
+        # s = 'Slab: {0}\n    thick = {1} Å, {2}, rough = {3} Å,
+        #      \u03D5_solv = {4}'
+        # t = s.format(self.name, self.thick.value, sld, self.rough.value,
+        #              self.vfsolv.value)
+        return str(self.parameters)
+
+    @property
+    def parameters(self):
+        """
+        :class:`refnx.analysis.Parameters`.
+
+           associated with this component
+
+        """
+        self._parameters.name = self.name
+        return self._parameters
+
+    def slabs(self, structure=None):
+        """
+        Slab representation of this component.
+
+        See :class:`Component.slabs`
+        """
+        sldc = complex(self.sld)
+        return np.array([[self.thick.value, sldc.real, sldc.imag, self.rough.value]])
+
+    def tensor(self, energy=None):
+        """
+        Information pertaining to the tensor dielectric properties of the slab.
+
+        Parameters
+        ----------
+        energy : float
+            Updates PXR_SLD energy component associated with slab. Only required for
+            PXR_MaterialSLD objects
+
+        Returns
+        -------
+        tensor : np.ndarray
+            Complex tensor index of refraction associated with slab.
+        """
+        if energy is not None and hasattr(self.sld, "energy"):
+            self.sld.energy = energy
+        return np.array([self.sld.tensor])
 
 
 class SLD(Scatterer):
@@ -1182,222 +1483,6 @@ class UniTensorSLD(Scatterer):
             dtype=complex,
         )
         return self._tensor
-
-
-class PXR_Component:
-    """
-    A base class for describing the structure of a subset of an interface.
-
-    Parameters
-    ----------
-    name : str, optional
-        The name associated with the Component
-
-    Notes
-    -----
-    Currently limited to Gaussian interfaces.
-    """
-
-    def __init__(self, name=""):
-        self.name = name
-
-    def __or__(self, other):
-        """
-        OR'ing components can create a :class:`Structure`.
-
-        Parameters
-        ----------
-        other: refnx.reflect.Structure, refnx.reflect.Component
-            Combines with this component to make a Structure
-
-        Returns
-        -------
-        s: refnx.reflect.Structure
-            The created Structure
-
-        Examples
-        --------
-        >>> air = SLD(0, name="air")
-        >>> sio2 = SLD(3.47, name="SiO2")
-        >>> si = SLD(2.07, name="Si")
-        >>> structure = air | sio2(20, 3) | si(0, 3)
-
-        """
-        # c = self | other
-        p = Structure()
-        p |= self
-        p |= other
-        return p
-
-    def __mul__(self, n):
-        """
-        MUL'ing components makes them repeat.
-
-        Parameters
-        ----------
-        n: int
-            How many times you want to repeat the Component
-
-        Returns
-        -------
-        s: refnx.reflect.Structure
-            The created Structure
-        """
-        # convert to integer, should raise an error if there's a problem
-        n = operator.index(n)
-        if n < 1:
-            return Structure()
-        elif n == 1:
-            return self
-        else:
-            s = Structure()
-            s.extend([self] * n)
-            return s
-
-    def __str__(self):
-        """Representation of the component."""
-        return str(self.parameters)
-
-    @property
-    def parameters(self):
-        """
-        :class:`refnx.analysis.Parameters`.
-
-         associated with this component
-        """
-        e = "A component should override the parameters property"
-        raise NotImplementedError(e)
-
-    def slabs(self, structure=None):
-        """
-        Slab representation of this component.
-
-        Parameters
-        ----------
-        structure : PyPXR.anisotropic_reflect.PXR_Structure
-            Summary of the structure that houses the component.
-
-        Returns
-        -------
-        slabs : np.ndarray
-            Slab representation of this Component.
-            Has shape (N, 5).
-
-            - slab[N, 0]
-               thickness of layer N
-            - slab[N, 1]
-               SLD.real of layer N (not including solvent)
-            - slab[N, 2]
-               *overall* SLD.imag of layer N (not including solvent)
-            - slab[N, 3]
-               roughness between layer N and N-1
-            - slab[N, 4]
-               volume fraction of solvent in layer N.
-
-        If a Component returns None, then it doesn't have any slabs.
-        """
-        e = "A component should override the slabs property"
-        raise NotImplementedError(e)
-
-    def logp(self):
-        """
-        Log-probability for the component.
-
-        Do not include log-probability terms for the actual parameters,
-        these are automatically included elsewhere.
-
-        Returns
-        -------
-        logp : float
-            Log-probability
-        """
-        return 0
-
-
-class Slab(PXR_Component):
-    """
-    A slab component has with tensor index of refraction associated over its thickness.
-
-    Parameters
-    ----------
-    thick : refnx.analysis.Parameter or float
-        thickness of slab (Angstrom)
-    sld : :class:`PyPXR.anisotropic_structure.PXR_Scatterer`, complex, or float
-        (complex) tensor index of refraction of film
-    rough : refnx.analysis.Parameter or float
-        roughness on top of this slab (Angstrom)
-    name : str
-        Name of this slab
-    """
-
-    def __init__(self, thick, sld, rough, name=""):
-        super().__init__(name=name)
-        self.thick = possibly_create_parameter(thick, name=f"{name}_thick")
-        if isinstance(sld, Scatterer):
-            self.sld = sld
-        else:
-            self.sld = SLD(sld)
-
-        self.rough = possibly_create_parameter(rough, name=f"{name}_rough")
-
-        p = Parameters(name=self.name)
-        p.extend([Parameters([self.thick, self.rough], name=f"{name}_slab")])
-        p.extend(self.sld.parameters)
-
-        self._parameters = p
-
-    def __repr__(self):
-        """Representation of the slab."""
-        return f"Slab({self.thick!r}, {self.sld!r}, {self.rough!r}, name={self.name!r},"
-
-    def __str__(self):
-        """Representation of the slab."""
-        # sld = repr(self.sld)
-        #
-        # s = 'Slab: {0}\n    thick = {1} Å, {2}, rough = {3} Å,
-        #      \u03D5_solv = {4}'
-        # t = s.format(self.name, self.thick.value, sld, self.rough.value,
-        #              self.vfsolv.value)
-        return str(self.parameters)
-
-    @property
-    def parameters(self):
-        """
-        :class:`refnx.analysis.Parameters`.
-
-           associated with this component
-
-        """
-        self._parameters.name = self.name
-        return self._parameters
-
-    def slabs(self, structure=None):
-        """
-        Slab representation of this component.
-
-        See :class:`Component.slabs`
-        """
-        sldc = complex(self.sld)
-        return np.array([[self.thick.value, sldc.real, sldc.imag, self.rough.value]])
-
-    def tensor(self, energy=None):
-        """
-        Information pertaining to the tensor dielectric properties of the slab.
-
-        Parameters
-        ----------
-        energy : float
-            Updates PXR_SLD energy component associated with slab. Only required for
-            PXR_MaterialSLD objects
-
-        Returns
-        -------
-        tensor : np.ndarray
-            Complex tensor index of refraction associated with slab.
-        """
-        if energy is not None and hasattr(self.sld, "energy"):
-            self.sld.energy = energy
-        return np.array([self.sld.tensor])
 
 
 class MixedMaterialSlab(PXR_Component):

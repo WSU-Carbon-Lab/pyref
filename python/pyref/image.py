@@ -6,7 +6,7 @@ import numpy as np
 import polars as pl
 import skimage
 from numba import njit
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter  # type: ignore[import]
 
 
 @njit(cache=True, nogil=True)
@@ -46,7 +46,7 @@ def reduction(
 
     # Iterate over all rows and columns
     for i in range(masked.shape[1]):
-        for j in range(masked.shape[0]):
+        for j in range(masked.shape[0]):  # type: ignore[assignment]
             value = masked[i, j]
             if value == 0:
                 continue
@@ -73,8 +73,8 @@ def apply_mask(
 ) -> np.ndarray:
     """Apply a mask to an image."""
     if mask is not None:
-        return mask_edge(img * mask, edge=edge)
-    return mask_edge(img, edge=edge)
+        return mask_edge(img * mask, edge=edge)  # type: ignore[return-value]
+    return mask_edge(img, edge=edge)  # type: ignore[return-value]
 
 
 @njit(cache=True, nogil=True)
@@ -97,8 +97,8 @@ def find_beam_from_contours(
     segmentation = segmentation == cluster
     # beamspot is in the center of the cluster
     y, x = np.where(segmentation)
-    x = int(np.mean(x))
-    y = int(np.mean(y))
+    x = int(np.mean(x))  # type: ignore[assignment]
+    y = int(np.mean(y))  # type: ignore[assignment]
     return (x, y)
 
 
@@ -135,7 +135,7 @@ def locate_beam(image, roi):
     else:
         image = image - left.mean(axis=1)[:, None]
 
-    beam_spot = find_max_index(image)
+    beam_spot = find_max_index(image)  # type: ignore[assignment]
     if on_edge(beam_spot, image.shape, roi):
         # Use edge detection to find the beam
         u8 = ((image - image.min()) / (image.max() - image.min()) * 255).astype(
@@ -157,9 +157,9 @@ def reduce_data(
     image = np.array(image)
     zinged = dezinger_image(image)
     filtered = skimage.filters.gaussian(zinged, sigma=radius)
-    masked = apply_mask(filtered, mask=mask, edge=edge_trim)
-    beam_spot = locate_beam(masked, roi)
-    return reduction(zinged, beam_spot, roi)
+    masked = apply_mask(filtered, mask=mask, edge=edge_trim)  # type: ignore[return-value]
+    beam_spot = locate_beam(masked, roi)  # type: ignore[assignment]
+    return reduction(zinged, beam_spot, roi)  # type: ignore[return-value]
 
 
 def reduce_masked_data(

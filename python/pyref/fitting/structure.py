@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections import UserList
-from typing import TYPE_CHECKING, deprecated
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,6 @@ import periodictable as pt
 import periodictable.xsf as xsf
 from refnx.analysis import Parameter, Parameters, possibly_create_parameter
 from refnx.reflect.interface import Erf, Step
-from refnx.reflect.structure import Component
 from scipy.interpolate import interp1d
 
 from pyref.fitting.model import reflectivity
@@ -128,6 +127,23 @@ class Structure(UserList):
         super().append(item)
 
     @property
+    def substrate(self) -> PXR_Component:
+        """
+        The substrate of the structure.
+
+        Returns
+        -------
+        substrate : :class:`PXR_Component`
+            The substrate component of the structure.
+        """
+        if not self.data:
+            e = "Structure has no components."
+            raise ValueError(e)
+        if not self.reverse_structure:
+            return self.data[-1]
+        return self.data[0]
+
+    @property
     def name(self):
         """Name."""
         return self._name
@@ -139,13 +155,15 @@ class Structure(UserList):
     @property
     def energy_offset(self) -> Parameter:
         """Energy offset for the substrate of the structure."""
-        substrate: PXR_Component = self.data[0 if not self.reverse_structure else -1]
+        substrate = self.substrate
         return substrate.sld.energy_offset
 
     @energy_offset.setter
     def energy_offset(self, value: Parameter) -> None:
-        for component in self.components:
-            component.sld.energy_offset = value
+        for component in self.data:
+            component.sld.energy_offset.setp(
+                value=value.value, vary=None, bounds=value.bounds, constraint=value
+            )
 
     @property
     def reverse_structure(self):
@@ -260,7 +278,12 @@ class Structure(UserList):
             _tensor = np.flip(_tensor, axis=0)
         return _tensor
 
-    def reflectivity(self, q, energy=250.0, backend="uni"):
+    def reflectivity(
+        self,
+        q: np.ndarray,
+        energy: float = 250.0,
+        backend: Literal["uni", "bi"] = "uni",
+    ):
         """
         Calculate theoretical polarized reflectivity of this structure.
 
@@ -276,8 +299,14 @@ class Structure(UserList):
             (07/2021 Biaxial currently does not work)
 
         """
-        refl, tran, *components = reflectivity(
-            q, self.slabs(), self.tensor(energy=energy), backend=backend
+        if self.slabs() is None:
+            e = "Structure requires fronting and backing Slabs in order to calculate."
+            raise TypeError(e)
+        refl, tran, *components = reflectivity(  # type: ignore
+            q,
+            self.slabs(),  # type: ignore
+            self.tensor(energy=energy),
+            backend=backend,
         )
         return refl[:, 1, 1], refl[:, 0, 0], components
 
@@ -378,7 +407,7 @@ class Structure(UserList):
 
         return self
 
-    def __or__(self, other: Structure | Component | SLD) -> Structure:
+    def __or__(self, other: Structure | Slab) -> Structure:
         """
         Build a structure by `OR`'ing Structures/Components/SLDs.
 
@@ -477,7 +506,7 @@ class Structure(UserList):
         """
         import matplotlib.pyplot as plt
 
-        params = self.parameters
+        params: Parameters = self.parameters
 
         if pvals is not None:
             params.pvals = pvals
@@ -541,7 +570,7 @@ class Structure(UserList):
         ax.set_xlabel("zed / $\\AA$")
         if difference:
             axr = ax.twinx()
-            dichroism = prof[:, 0].real - prof[:, 2].real
+            dichroism = prof[:, 0].real - prof[:, 2].real  # type: ignore
             axr.plot(zed, dichroism, color="C1", zorder=20)
             axr.fill_between(
                 zed, dichroism, color="C1", alpha=0.5, zorder=20, label="δxx - δzz"
@@ -564,47 +593,45 @@ class Scatterer:
     def __init__(self, name=""):
         self.name = name
         # ensure that some common attributes are parameterized
-        self.energy: float | None = None
-        self._energy_offset: Parameter | None = None
-        self._density: Parameter | None = None
-        self._rotation: Parameter | None = None
+        self.energy: float = 250.0
+        self.energy_offset: Parameter = Parameter()
+        self.density: Parameter = Parameter()
+        self.rotation: Parameter = Parameter()
         self._tensor: NDArray[np.complex128] | None = None
 
-    @property
-    def energy_offset(self) -> Parameter:
-        """Energy offset."""
-        return self._energy_offset or Parameter(
-            0.0, name=f"{self.name}_energy_offset", vary=False, bounds=(-100, 100)
-        )
+    def get_energy(self) -> float:
+        """
+        Get the energy in eV.
 
-    @energy_offset.setter
-    def energy_offset(self, value: Parameter) -> None:
-        """Set the energy offset."""
-        self._energy_offset = value
+        Returns
+        -------
+            energy : float
+                Photon energy of X-ray probe.
+        """
+        offset: float = self.energy_offset.value if self.energy_offset.value else 0.0
+        return self.energy + offset
 
-    @property
-    def density(self) -> Parameter:
-        """Density."""
-        return self._density or Parameter(
-            1.0, name=f"{self.name}_rho", vary=False, bounds=(0, 100)
-        )
+    def get_density(self) -> float:
+        """
+        Get the density in g/cm^3.
 
-    @density.setter
-    def density(self, value: Parameter) -> None:
-        """Set the density."""
-        self._density = value
+        Returns
+        -------
+            density : float
+                Density of the scatterer.
+        """
+        return self.density.value if self.density.value else 1.0
 
-    @property
-    def rotation(self) -> Parameter:
-        """Rotation."""
-        return self._rotation or Parameter(
-            0.0, name=f"{self.name}_rotation", vary=False, bounds=(0, np.pi * 2)
-        )
+    def get_rotation(self) -> float:
+        """
+        Get the rotation in radians.
 
-    @rotation.setter
-    def rotation(self, value: Parameter) -> None:
-        """Set the rotation."""
-        self._rotation = value
+        Returns
+        -------
+            rotation : float
+                Rotation of the scatterer in radians.
+        """
+        return self.rotation.value if self.rotation.value else 0.0
 
     def __str__(self) -> str:
         """Representation of the scatterer."""
@@ -627,7 +654,7 @@ class Scatterer:
         """
         return self._tensor or np.eye(3, dtype=np.complex128)
 
-    def __call__(self, thick=0, rough=0) -> Slab:
+    def __call__(self, thick: float = 0, rough: float = 0) -> Slab:
         """
         Create a :class:`PXR_Slab`.
 
@@ -652,7 +679,7 @@ class Scatterer:
         >>> slab = molecule(10, 3)
 
         """
-        slab = Slab(thick, self, rough, name=self.name)
+        slab: Slab = Slab(thick, self, rough, name=self.name)
         slab.thick.setp(vary=True, bounds=(0, 2 * thick))
         slab.rough.setp(vary=True, bounds=(0, 2 * rough))
         return slab
@@ -678,11 +705,11 @@ class PXR_Component:
     Currently limited to Gaussian interfaces.
     """
 
-    def __init__(self, name=""):
+    def __init__(self, name="") -> None:
         self.name = name
         self.sld: Scatterer = Scatterer(name=name)
 
-    def __or__(self, other):
+    def __or__(self, other: Slab) -> Structure:
         """
         OR'ing components can create a :class:`Structure`.
 
@@ -705,7 +732,7 @@ class PXR_Component:
 
         """
         # c = self | other
-        p = Structure()
+        p: Structure = Structure()
         p |= self
         p |= other
         return p
@@ -740,14 +767,13 @@ class PXR_Component:
         return str(self.parameters)
 
     @property
-    def parameters(self):
+    def parameters(self) -> Parameters:
         """
         :class:`refnx.analysis.Parameters`.
 
          associated with this component
         """
-        e = "A component should override the parameters property"
-        raise NotImplementedError(e)
+        return Parameters(name=self.name)
 
     def slabs(self, structure=None):
         """
@@ -777,8 +803,7 @@ class PXR_Component:
 
         If a Component returns None, then it doesn't have any slabs.
         """
-        e = "A component should override the slabs property"
-        raise NotImplementedError(e)
+        return np.array([])
 
     def logp(self):
         """
@@ -838,7 +863,7 @@ class Slab(PXR_Component):
 
         self.rough = possibly_create_parameter(rough, name=f"{name}_rough")
 
-        p = Parameters(name=self.name)
+        p: Parameters = Parameters(name=self.name)
         p.extend([Parameters([self.thick, self.rough], name=f"{name}_slab")])
         p.extend(self.sld.parameters)
 
@@ -859,7 +884,7 @@ class Slab(PXR_Component):
         return str(self.parameters)
 
     @property
-    def parameters(self):
+    def parameters(self) -> Parameters:
         """
         :class:`refnx.analysis.Parameters`.
 
@@ -947,11 +972,10 @@ class SLD(Scatterer):
 
     def __init__(
         self,
-        value: np.ndarray | pd.DataFrame | float | complex | None = None,
-        symmetry="uni",
+        value: np.ndarray | complex,
+        symmetry: Literal["uni", "bi", "iso"] = "uni",
         name="",
-        energy=None,
-    ):
+    ) -> None:
         """Initialize SLD object.
 
         Parameters
@@ -969,70 +993,41 @@ class SLD(Scatterer):
             Energy in eV to evaluate optical constants if value is DataFrame
         """
         super().__init__(name=name)
+        # Initialize n as a 3-element complex array
+        n: np.ndarray = np.zeros(3, dtype=np.complex128)
 
-        # If value is DataFrame, interpolate at specified energy
-        if isinstance(value, pd.DataFrame):
-            if not energy:
-                e = "Must specify energy when passing DataFrame"
-                raise ValueError(e)
-
-            required_cols = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
-            if not all(col in value.columns for col in required_cols):
-                e = f"DataFrame must contain columns: {required_cols}"
-                raise ValueError(e)
-
-            en_col = value["energy"].to_numpy()
-            n_xx = value["n_xx"].to_numpy()
-            n_zz = value["n_zz"].to_numpy()
-            n_ixx = value["n_ixx"].to_numpy()
-            n_izz = value["n_izz"].to_numpy()
-
-            n_xx = np.interp(energy, en_col, n_xx)
-            n_zz = np.interp(energy, en_col, n_zz)
-            n_ixx = np.interp(energy, en_col, n_ixx)
-            n_izz = np.interp(energy, en_col, n_izz)
-
-            value = np.array([n_xx + 1j * n_ixx, n_xx + 1j * n_ixx, n_zz + 1j * n_izz])
-
-        # Handle ndarray input
-        elif isinstance(value, np.ndarray):
+        if isinstance(value, np.ndarray):
             if value.shape == (3,):
-                pass
+                n[:] = value
             elif value.shape == (2,):
-                temp_val = np.ones(3) * value[0]
-                temp_val[2] = value[1]
-                value = temp_val
+                # Assume uniaxial: [n_xx, n_zz] -> [n_xx, n_xx, n_zz]
+                n[0:2] = value[0]
+                n[2] = value[1]
             elif value.shape == (3, 3):
-                value = value.diagonal()
+                n[:] = value.diagonal()
             else:
                 e = "Array must have shape (2,), (3,) or (3,3)"
                 raise ValueError(e)
-
-        # Handle scalar input
-        elif isinstance(value, (int, float, complex)):
-            value = value * np.ones(3)
+        elif isinstance(value, (int | float | complex)):
+            n[:] = complex(value)
         else:
             e = "Input must be DataFrame, array or scalar"
             raise TypeError(e)
 
         # Create parameters
         self._parameters = Parameters(name=name)
-        self.delta = Parameter(np.average(value).real, name=f"{name}_diso")
-        self.beta = Parameter(np.average(value).imag, name=f"{name}_biso")
+        self.delta = Parameter(np.average(n).real, name=f"{name}_diso")  # type: ignore
+        self.beta = Parameter(np.average(n).imag, name=f"{name}_biso")  # type: ignore
 
-        self.xx = Parameter(value[0].real, name=f"{name}_{tensor_index[0]}")
-        self.ixx = Parameter(value[0].imag, name=f"{name}_i{tensor_index[0]}")
-        self.yy = Parameter(value[1].real, name=f"{name}_{tensor_index[1]}")
-        self.iyy = Parameter(value[1].imag, name=f"{name}_i{tensor_index[1]}")
-        self.zz = Parameter(value[2].real, name=f"{name}_{tensor_index[2]}")
-        self.izz = Parameter(value[2].imag, name=f"{name}_i{tensor_index[2]}")
+        self.xx = Parameter(n[0].real, name=f"{name}_{tensor_index[0]}")
+        self.ixx = Parameter(n[0].imag, name=f"{name}_i{tensor_index[0]}")
+        self.yy = Parameter(n[1].real, name=f"{name}_{tensor_index[1]}")
+        self.iyy = Parameter(n[1].imag, name=f"{name}_i{tensor_index[1]}")
+        self.zz = Parameter(n[2].real, name=f"{name}_{tensor_index[2]}")
+        self.izz = Parameter(n[2].imag, name=f"{name}_i{tensor_index[2]}")
 
-        self.birefringence = Parameter(
-            (self.xx.value - self.zz.value), name=f"{name}_bire"
-        )
-        self.dichroism = Parameter(
-            (self.ixx.value - self.izz.value), name=f"{name}_dichro"
-        )
+        self.birefringence = Parameter((n[0].real - n[2].real), name=f"{name}_bire")
+        self.dichroism = Parameter((n[1].imag - n[2].imag), name=f"{name}_dichro")
 
         self._parameters.extend(
             [
@@ -1048,19 +1043,20 @@ class SLD(Scatterer):
                 self.dichroism,
             ]
         )
-
-        self.symmetry = symmetry
+        self._symmetry: Literal["iso", "uni", "bi"] = symmetry
 
     def __repr__(self):
         """Representation of the scatterer."""
-        return (
-            "Isotropic Index of Refraction = ([{delta!r}, {beta!r}],"
-            " name={name!r})".format(**self.__dict__)
-        )
+        return f"Isotropic Index of Refraction = ({complex(self)}, name={self.name!r})"
 
-    def __complex__(self):
+    def __complex__(self) -> complex:
         """Complex representation of the scatterer."""
-        sldc = complex(self.delta.value, self.beta.value)
+        delta = self.delta.value
+        beta = self.beta.value
+        if delta is None or beta is None:
+            e = "SLD delta and beta must be set before complex conversion"
+            raise ValueError(e)
+        sldc: complex = complex(delta, beta)
         return sldc
 
     @property
@@ -1075,7 +1071,7 @@ class SLD(Scatterer):
         return self._parameters
 
     @property
-    def symmetry(self):
+    def symmetry(self) -> Literal["iso", "uni", "bi"]:
         """
         Specify `symmetry` to automatically constrain the components.
 
@@ -1084,7 +1080,7 @@ class SLD(Scatterer):
         return self._symmetry
 
     @symmetry.setter
-    def symmetry(self, symmetry):
+    def symmetry(self, symmetry: Literal["iso", "uni", "bi"]) -> None:
         self._symmetry = symmetry
         if self._symmetry == "iso":
             self.yy.setp(self.xx, vary=None, constraint=self.xx)
@@ -1113,12 +1109,12 @@ class SLD(Scatterer):
                 complex tensor index of refraction
         """
         self._tensor = np.array(
-            [
-                [self.xx.value + 1j * self.ixx.value, 0, 0],
-                [0, self.yy.value + 1j * self.iyy.value, 0],
-                [0, 0, self.zz.value + 1j * self.izz.value],
+            [  # This can only ever be used after the components are set
+                [self.xx.value + 1j * self.ixx.value, 0, 0],  # type: ignore
+                [0, self.yy.value + 1j * self.iyy.value, 0],  # type: ignore
+                [0, 0, self.zz.value + 1j * self.izz.value],  # type: ignore
             ],
-            dtype=complex,
+            dtype=np.complex128,
         )
         return self._tensor
 
@@ -1164,7 +1160,7 @@ class MaterialSLD(Scatterer):
         self,
         formula: str,
         density: None | float = None,
-        energy=250.0,
+        energy: float = 250.0,
         name="",
         *,
         energy_offset=0.0,
@@ -1175,7 +1171,7 @@ class MaterialSLD(Scatterer):
         self._compound = formula  # Keep a reference of the str object
         if density is None:
             density = compound_density(formula)
-        self._energy = energy  # Store in eV for user interface
+        self.energy: float = energy  # type: ignore[assignment]
         self._tensor = np.eye(
             3, dtype=np.complex128
         )  # Initialize as a 3x3 complex array
@@ -1183,14 +1179,14 @@ class MaterialSLD(Scatterer):
         self.density: Parameter = possibly_create_parameter(
             density, name=f"{name}_rho", vary=True, bounds=(0, 5 * density)
         )  # type: ignore[assignment]
-        self._energy_offset: Parameter = possibly_create_parameter(
-            energy_offset, name=f"{name}_enoffset", vary=True, bounds=(-1, 1)
-        )  # type: ignore[assignment]
+        self.energy_offset: Parameter = possibly_create_parameter(  # type: ignore[assignment]
+            energy_offset, name=f"{name}_energy_offset", vary=True, bounds=(-1, 1)
+        )
         self._parameters = Parameters(name=name)
-        self._parameters.extend([self.density, self._energy_offset])
+        self._parameters.extend([self.density, self.energy_offset])
         # --------/ depriciated / --------------
         self._wavelength = (
-            hc / self._energy
+            hc / self.energy
         )  # Convert to Angstroms for later calculations
 
     def __repr__(self):
@@ -1199,12 +1195,11 @@ class MaterialSLD(Scatterer):
             "compound": self._compound,
             "density": self.density,
             "energy": self.energy,
-            "wavelength": self.wavelength,
             "name": self.name,
         }
         return (
             "MaterialSLD({compound!r}, {density!r},"
-            "energy={energy!r}, wavelength={wavelength!r}, name={name!r})".format(**d)
+            "energy={energy!r},  name={name!r})".format(**d)
         )
 
     @property
@@ -1227,71 +1222,9 @@ class MaterialSLD(Scatterer):
         self.__formula = pt.formula(formula)  # type: ignore[assignment] formulas are lazily evaluated
         self._compound = formula
 
-    @property
-    def energy(self) -> float:
-        """
-        Photon energy to evaluate index of refraction in eV.
-
-        Automatically updates wavelength when assigned.
-
-        Returns
-        -------
-            energy : float
-                Photon energy of X-ray probe.
-        """
-        return self._energy
-
-    @energy.setter
-    def energy(self, energy) -> None:
-        self._energy = energy
-
-    @property
-    def energy_offset(self) -> float:
-        """
-        Energy offset in eV to be added to the energy for calculations.
-
-        Returns
-        -------
-            energy_offset : float
-                Energy offset in eV.
-        """
-        if self._energy_offset.value:
-            return self._energy_offset.value
-        return 0.0
-
-    @energy_offset.setter
-    def energy_offset(self, energy_offset) -> None:
-        self._energy_offset.value = energy_offset
-
-    @deprecated("Use `energy` and `energy_offset` instead.")
-    @property
-    def wavelength(self):
-        """
-        Wavelength to evaluate index of refraction in Angstroms.
-
-        Automatically updates
-        energy when assigned.
-
-        Returns
-        -------
-            wavelength : float
-                Wavelength of X-ray probe.
-        """
-        return self._wavelength
-
-    @deprecated("Use `energy` and `energy_offset` instead.")
-    @wavelength.setter
-    def wavelength(self, wavelength):
-        self._wavelength = wavelength
-        self._energy = (
-            hc / self._wavelength
-        )  # Update the energy if the wavelength changes
-
     def __complex__(self) -> complex:
         """Complex representation of the scatterer."""
-        energy_kev: float = (
-            self.energy + self.energy_offset
-        ) * 1e-3  # Convert eV to keV
+        energy_kev: float = self.get_energy() * 1e-3  # Convert eV to keV
         sldc = xsf.index_of_refraction(
             self.__formula, density=self.density.value, energy=energy_kev
         )
@@ -1368,11 +1301,11 @@ class UniTensorSLD(Scatterer):
     def __init__(
         self,
         ooc: pd.DataFrame,
-        rotation=0,
-        density=1.0,
-        energy=250.0,
-        energy_offset=0,
-        name="",
+        rotation: float = 0,
+        density: float = 1.0,
+        energy: float = 250.0,
+        energy_offset: float = 0,
+        name: str = "",
     ):
         # =================/ Input Validation /================
         required_columns = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
@@ -1386,22 +1319,22 @@ class UniTensorSLD(Scatterer):
         super().__init__(name=name)
 
         # ============/ Isotropic Parameters /===========
-        self.density = possibly_create_parameter(
+        self.density: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             density, name=f"{name}_density", bounds=(0, 5 * density), vary=True
         )
-        self.rotation = possibly_create_parameter(
+        self.rotation: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             rotation, name=f"{name}_rotation", vary=True, bounds=(-np.pi, np.pi)
         )
         # ============/ Optical Constants /===========
         self.energy = energy
-        self._energy_offset = possibly_create_parameter(
-            energy_offset, name=f"{name}_enoffset", vary=True, bounds=(-0.01, 0.01)
+        self.energy_offset: Parameter = possibly_create_parameter(  # type: ignore[assignment]
+            energy_offset, name=f"{name}_energy_offset", vary=True, bounds=(-0.01, 0.01)
         )
-
-        self.n_xx = interp1d(ooc["energy"], ooc["n_xx"])
-        self.n_ixx = interp1d(ooc["energy"], ooc["n_ixx"])
-        self.n_zz = interp1d(ooc["energy"], ooc["n_zz"])
-        self.n_izz = interp1d(ooc["energy"], ooc["n_izz"])
+        # store the optical constants as n_xx n_ixx, n_zz, n_izz
+        self.n_xx = interp1d(ooc["energy"], ooc["n_xx"], bounds_error=False)
+        self.n_ixx = interp1d(ooc["energy"], ooc["n_ixx"], bounds_error=False)
+        self.n_zz = interp1d(ooc["energy"], ooc["n_zz"], bounds_error=False)
+        self.n_izz = interp1d(ooc["energy"], ooc["n_izz"], bounds_error=False)
 
         # Add parameters to parameter set
         self._parameters.extend([self.density, self.rotation, self.energy_offset])
@@ -1413,40 +1346,25 @@ class UniTensorSLD(Scatterer):
 
     def __repr__(self):
         """Representation of the scatterer."""
-        return "Index of Refraction = ({n!r}, name={name!r})".format(**self.__dict__)
+        return "Index of Refraction = (name={name!r})".format(**self.__dict__)
 
     @property
-    def energy_offset(self):
-        """
-        Energy offset for optical constant lookup.
-
-        Returns
-        -------
-            energy_offset : float
-                Energy offset for optical constant lookup.
-        """
-        return self._energy_offset
-
-    @energy_offset.setter
-    def energy_offset(self, energy_offset):
-        self._energy_offset.value = energy_offset
-
-    @property
-    def n(self):
+    def n(self) -> NDArray[np.complex128]:
         """
         Optical constants of the material.
 
         Returns
         -------
-            n : np.ndarray
-                Optical constants of the material.
+        n : np.ndarray
+            Optical constants of the material.
         """
-        e = self.energy + self.energy_offset.value
-        return np.diag(
+        e = self.get_energy()
+        return np.array(
             [
-                self.n_xx(e) + self.n_ixx(e) * 1j,
-                self.n_zz(e) + self.n_izz(e) * 1j,
-            ]
+                [self.n_xx(e) + self.n_ixx(e) * 1j, 0],
+                [0, self.n_zz(e) + self.n_izz(e) * 1j],
+            ],
+            dtype=np.complex128,
         )
 
     @property
@@ -1458,7 +1376,7 @@ class UniTensorSLD(Scatterer):
         return self._parameters
 
     @property
-    def tensor(self):  #
+    def tensor(self) -> NDArray[np.complex128]:
         """
         A full 3x3 matrix composed of the individual parameter values.
 
@@ -1467,12 +1385,12 @@ class UniTensorSLD(Scatterer):
             out : np.ndarray (3x3)
                 complex tensor index of refraction
         """
-        n = self.density.value * self.n
-        cos_squared = np.square(np.cos(self.rotation.value))
-        sin_squared = 1 - cos_squared
+        n: np.ndarray = self.get_density() * self.n
+        cos_squared: float = np.square(np.cos(self.get_rotation()))
+        sin_squared: float = 1 - cos_squared
 
-        n_o = (n[0, 0] * (1 + cos_squared) + n[1, 1] * sin_squared) / 2
-        n_e = n[0, 0] * sin_squared + n[1, 1] * cos_squared
+        n_o: complex = (n[0, 0] * (1 + cos_squared) + n[1, 1] * sin_squared) / 2
+        n_e: complex = n[0, 0] * sin_squared + n[1, 1] * cos_squared
 
         self._tensor = np.array(
             [
@@ -1480,7 +1398,7 @@ class UniTensorSLD(Scatterer):
                 [0, n_o, 0],
                 [0, 0, n_e],
             ],
-            dtype=complex,
+            dtype=np.complex128,
         )
         return self._tensor
 
@@ -1524,18 +1442,18 @@ class MixedMaterialSlab(PXR_Component):
         super().__init__(name=name)
 
         self.thick = possibly_create_parameter(thick, name=f"{name} - thick")
-        self.sld = []
-        self.vf = []
+        self.sld = []  # type: ignore
+        self.vf = []  # type: ignore
         self._sld_parameters = Parameters(name=f"{name} - slds")
         self._vf_parameters = Parameters(name=f"{name} - volfracs")
 
         for i, (s, v) in enumerate(zip(sld_list, vf_list, strict=False)):
             if isinstance(s, Scatterer):
-                self.sld.append(s)
+                self.sld.append(s)  # type: ignore
             else:
-                self.sld.append(SLD(s))
+                self.sld.append(SLD(s))  # type: ignore
 
-            self._sld_parameters.append(self.sld[-1].parameters)
+            self._sld_parameters.append(self.sld[-1].parameters)  # type: ignore
 
             vf = possibly_create_parameter(v, name=f"vf{i} - {name}", bounds=(0.0, 1.0))
             self.vf.append(vf)
@@ -1585,7 +1503,7 @@ class MixedMaterialSlab(PXR_Component):
         sldc = np.sum(
             [
                 complex(sld) * vf / sum_vfs
-                for sld, vf in zip(self.sld, vfs, strict=False)
+                for sld, vf in zip(self.sld, vfs, strict=False)  # type: ignore
             ]
         )
 
@@ -1622,7 +1540,7 @@ class MixedMaterialSlab(PXR_Component):
             self.sld.energy = energy
 
         combinetensor = np.sum(
-            [sld.tensor * vf / sum_vfs for sld, vf in zip(self.sld, vfs, strict=False)],
+            [sld.tensor * vf / sum_vfs for sld, vf in zip(self.sld, vfs, strict=False)],  # type: ignore
             axis=0,
         )
 
@@ -1652,7 +1570,7 @@ class Stack(PXR_Component, UserList):
         UserList.__init__(self)
 
         self.repeats = possibly_create_parameter(repeats, "repeat")
-        self.repeats.bounds.lb = 1
+        self.repeats.bounds.lb = 1  # type: ignore
 
         # Construct the list of components
         for c in components:
@@ -1671,7 +1589,7 @@ class Stack(PXR_Component, UserList):
         s = []
         s.append("{:=>80}".format(""))
 
-        s.append(f"Stack start: {round(abs(self.repeats.value))} repeats")
+        s.append(f"Stack start: {round(abs(self.repeats.value))} repeats")  # type: ignore
         for component in self:
             s.append(str(component))
         s.append("Stack finish")
@@ -1704,7 +1622,7 @@ class Stack(PXR_Component, UserList):
             raise TypeError(e)
         self.data.append(item)
 
-    def slabs(self, structure=None):
+    def slabs(self, structure=None):  # type: ignore
         """
         Slab representation of this component.
 
@@ -1716,7 +1634,7 @@ class Stack(PXR_Component, UserList):
         if not len(self):
             return None
 
-        repeats = round(abs(self.repeats.value))
+        repeats = round(abs(self.repeats.value))  # type: ignore
 
         slabs = np.concatenate([c.slabs(structure=self) for c in self.components])
 
@@ -1728,7 +1646,7 @@ class Stack(PXR_Component, UserList):
 
         return slabs
 
-    def tensor(self, energy=None):
+    def tensor(self, energy=None):  # type: ignore
         """
         Tensor representation of this component.
 
@@ -1737,7 +1655,7 @@ class Stack(PXR_Component, UserList):
         if not len(self):
             return None
 
-        repeats = round(abs(self.repeats.value))
+        repeats = round(abs(self.repeats.value))  # type: ignore
 
         tensor = np.concatenate(
             [c.tensor(energy=energy) for c in self.components], axis=0
@@ -1832,7 +1750,7 @@ def birefringence_profile(slabs, tensor, z=None, step=False):
             zstart, zend, num=total_film_thickness * 2
         )  # 0.5 Angstrom resolution default
     else:
-        zed = np.asfarray(z)
+        zed = np.asfarray(z)  # type: ignore[assignment]
 
     # Reduce the dimensionality of the tensor for ease of use
     reduced_tensor = tensor.diagonal(
@@ -1974,14 +1892,12 @@ if __name__ == "__main__":
     import pandas as pd
     import seaborn as sns
 
-    from pyref.fitting import AnisotropyObjective
-    from pyref.fitting.reflectivity import ReflectModel
-    from pyref.fitting.refnx_converters import XrayReflectDataset
+    from pyref.fitting.model import ReflectModel
 
     sns.set_palette("blend:#00829c,#ff9d8d", n_colors=3)
 
-    ooc = pd.read_csv("~/.projects/pyref/optical_constants.csv")
-    si = MaterialSLD("Si", name="Si", energy=283.7)(0, 1.5)
+    ooc = pd.read_csv("~/projects/pyref/test/optical_constants.csv")
+    si = MaterialSLD("Si", name="Si", energy=283.7)(0, 1.5)  # Si substrate
 
     fig, ax = plt.subplots(
         1, 2, figsize=(8, 2), sharey=True, gridspec_kw={"wspace": 0.1}
@@ -1994,10 +1910,10 @@ if __name__ == "__main__":
         energy=283.7,
         name="ZnPC",
     )(196.441, 7.216)
-    vac = MaterialSLD("", density=None, name="Vac")(0, 0)
+    vac: Slab = MaterialSLD("", density=None, name="Vac")(0, 0)
 
     struct = vac | znpc_slab | si
-    struct.name = "ZnPC/Si"
+    struct.name = "ZnPc/Si"
     struct.plot(ax=ax[0])
 
     znpc_slab = UniTensorSLD(
@@ -2005,25 +1921,10 @@ if __name__ == "__main__":
         rotation=np.pi / 2,
         density=1.45,
         energy=283.7,
-        name="ZnPC",
+        name="ZnPc",
     )(196.441, 7.216)
 
-    struct = vac | znpc_slab | si
-    struct.plot(ax=ax[1])
+    struct: Structure = vac | znpc_slab | si
+    model = ReflectModel(struct)  # type: ignore
+    model.energy_offset = 2
     print(struct)
-    plt.show()
-
-    # Plot a model
-    models = ReflectModel(struct, name="ZnPC/Si", energy=283.7, pol="s")
-    modelp = ReflectModel(struct, name="ZnPC/Si", energy=283.7, pol="p")
-    model = ReflectModel(struct, name="ZnPC/Si", energy=283.7, pol="sp")
-
-    q = np.linspace(0.01, 0.1, 100)
-    datas = models(q)
-    datap = modelp(q)
-    xraydata = XrayReflectDataset.from_arrays(
-        x_s=q, y_s=datas, x_p=q, y_p=datap, name="ZnPC/Si"
-    )
-    obj = AnisotropyObjective(model, xraydata, name="ZnPC/Si")
-    ax, ax_ani = obj.plot()
-    plt.show()

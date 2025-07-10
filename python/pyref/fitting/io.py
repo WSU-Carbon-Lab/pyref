@@ -5,28 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-
-from pyref.fitting.model import XrayReflectDataset
+from refnx.dataset import ReflectDataset
 
 if TYPE_CHECKING:
     import polars as pl
-
-
-def to_reflect_dataset(
-    df: pl.DataFrame, *, overwrite_err: bool = True
-) -> XrayReflectDataset:
-    """Convert a pandas dataframe to a ReflectDataset object."""
-    if not overwrite_err:
-        e = "overwrite_err=False is not implemented yet."
-        raise NotImplementedError(e)
-    Q = df["Q"].to_numpy()
-    R = df["r"].to_numpy()
-    # Calculate initial dR
-    dR = 0.15 * R + 0.3e-6 * Q
-    # Ensure dR doesn't exceed 90% of R to keep R-dR positive
-    dR = np.minimum(dR, 0.9 * R)
-    ds = XrayReflectDataset(data=(Q, R, dR))
-    return ds
 
 
 class XrayReflectDataset(ReflectDataset):
@@ -34,6 +16,11 @@ class XrayReflectDataset(ReflectDataset):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.s = ReflectDataset()
+        self.p = ReflectDataset()
+        self.anisotropy = ReflectDataset()
+
+        # Build the s, p, anisotropy datasets
         self._initialize_polarizations()
 
     def _initialize_polarizations(self):
@@ -62,8 +49,8 @@ class XrayReflectDataset(ReflectDataset):
             self.p = ReflectDataset((self.x, self.y, self.y_err))
 
         # Calculate average spacing in each dataset to determine tolerance
-        s_spacing = float(np.mean(np.diff(self.s.x))) if len(self.s.x) > 1 else 0.0
-        p_spacing = float(np.mean(np.diff(self.p.x))) if len(self.p.x) > 1 else 0.0
+        s_spacing = float(np.mean(np.diff(self.s.x))) if len(self.s.x) > 1 else 0.0  # type: ignore
+        p_spacing = float(np.mean(np.diff(self.p.x))) if len(self.p.x) > 1 else 0.0  # type: ignore
         # Use half the average spacing as tolerance
         tolerance = 0.5 * max(s_spacing, p_spacing)
 
@@ -83,8 +70,8 @@ class XrayReflectDataset(ReflectDataset):
 
         # If we have common q points, interpolate both datasets
         if len(q_common) > 0:
-            r_s_interp = np.interp(q_common, self.s.x, self.s.y)
-            r_p_interp = np.interp(q_common, self.p.x, self.p.y)
+            r_s_interp = np.interp(q_common, self.s.x, self.s.y)  # type: ignore
+            r_p_interp = np.interp(q_common, self.p.x, self.p.y)  # type: ignore
         else:
             # No common points, create empty arrays
             q_common = np.array([])
@@ -95,25 +82,31 @@ class XrayReflectDataset(ReflectDataset):
         self.anisotropy = ReflectDataset((q_common, _anisotropy))
 
     @classmethod
-    def from_dataframe(cls, spol, ppol, *, overwrite_err) -> XrayReflectDataset:
-        """Create an XrayReflectDataset from s and p polarization dataframes."""
-        s_x = spol["Q"].to_numpy()
-        s_y = spol["r"].to_numpy()
-        s_y_err = spol["dR"].to_numpy()
-        p_x = ppol["Q"].to_numpy()
-        p_y = ppol["r"].to_numpy()
-        p_y_err = ppol["dR"].to_numpy()
-        return cls.from_arrays(
-            x_s=s_x,
-            y_s=y_s,
-            y_err_s=y_err_s,
-            x_p=p_x,
-            y_p=y_p,
-            y_err_p=y_err_p,
-        )
+    def from_df(
+        cls,
+        df: pl.DataFrame,
+        *,
+        overwrite_err: bool = True,
+        q_col: str = "Q",
+        r_col: str = "r",
+    ) -> XrayReflectDataset:
+        """Convert a pandas dataframe to a ReflectDataset object."""
+        if not overwrite_err:
+            e = "overwrite_err=False is not implemented yet."
+            raise NotImplementedError(e)
+        Q: np.ndarray = df[q_col].to_numpy()
+        R: np.ndarray = df[r_col].to_numpy()
+        # Calculate initial dR
+        dR: np.ndarray = 0.15 * R + 0.3e-6 * Q  # type: ignore
+        # Ensure dR doesn't exceed 90% of R to keep R-dR positive
+        dR = np.minimum(dR, 0.9 * R)
+        ds: XrayReflectDataset = XrayReflectDataset(data=(Q, R, dR))
+        return ds
 
-    def plot(self, ax=None, ax_anisotropy=None, **kwargs):  # type: ignore
+    def plot(self, ax=None, ax_anisotropy=None, *, show_anisotropy=True, **kwargs):  # type: ignore
         """Plot the reflectivity and anisotropy data."""
+        import matplotlib.pyplot as plt
+
         if ax is None:
             fig, axs = plt.subplots(
                 nrows=2,
@@ -125,7 +118,7 @@ class XrayReflectDataset(ReflectDataset):
             if ax_anisotropy is None:
                 ax_anisotropy = axs[1]
 
-        elif ax_anisotropy is None:
+        elif ax_anisotropy is None and show_anisotropy:
             # If only ax was provided but not ax_anisotropy
             fig = ax.figure
             gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0)
@@ -174,25 +167,25 @@ class XrayReflectDataset(ReflectDataset):
                 capsize=1,
                 ecolor="k",
             )
-
-        ax_anisotropy.plot(
-            self.anisotropy.x,
-            self.anisotropy.y,
-            label=f"{self.name} anisotropy" if self.name else "anisotropy",
-            marker="o",
-            markersize=3,
-            lw=0,
-            color="C2",
-        )
-        ax_anisotropy.axhline(
-            0,
-            color=plt.rcParams["axes.edgecolor"],
-            ls="-",
-            lw=plt.rcParams["axes.linewidth"],
-        )
+        if show_anisotropy and ax_anisotropy is not None:
+            ax_anisotropy.plot(
+                self.anisotropy.x,
+                self.anisotropy.y,
+                label=f"{self.name} anisotropy" if self.name else "anisotropy",
+                marker="o",
+                markersize=3,
+                lw=0,
+                color="C2",
+            )
+            ax_anisotropy.axhline(
+                0,
+                color=plt.rcParams["axes.edgecolor"],
+                ls="-",
+                lw=plt.rcParams["axes.linewidth"],
+            )
+            ax_anisotropy.set_xlabel(r"$q (\AA^{-1})$")
 
         ax.set_yscale("log")
-        ax_anisotropy.set_xlabel(r"$q (\AA^{-1})$")
         ax.set_ylabel(r"$R$")
         plt.legend()
         return ax, ax_anisotropy

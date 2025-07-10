@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import arviz
+import arviz as az
 import numpy as np
+import sigfig
 from refnx._lib import (
     MapWrapper,
     emcee,
@@ -17,7 +17,6 @@ from refnx._lib import (
     unique as f_unique,
 )
 from refnx._lib.emcee.moves.de import DEMove
-from refnx._lib.emcee.moves.gaussian import GaussianMove
 from refnx._lib.util import getargspec
 from refnx.analysis import (
     CurveFitter,
@@ -27,17 +26,20 @@ from refnx.analysis import (
 )
 from scipy._lib._util import check_random_state
 
-from pyref.fitting.model import ReflectModel, XrayReflectDataset
+from pyref.fitting.io import XrayReflectDataset
+from pyref.fitting.model import ReflectModel
 
 if TYPE_CHECKING:
-    from refnx.analysis import (
-        GlobalObjective,
-    )
+    from typing import Literal
+
+    import pandas as pd
+    import xarray as xr
+    from refnx.analysis import GlobalObjective, Interval, Parameter
 
     from pyref.fitting import ReflectModel
 
 demove = [(DEMove(sigma=1e-7), 0.95), (DEMove(sigma=1e-7, gamma0=1), 0.05)]
-gmove = GaussianMove(1e-7)
+MA = np.asin(np.sqrt(2 / 3))
 
 
 class AnisotropyObjective(Objective):
@@ -270,15 +272,15 @@ class AnisotropyObjective(Objective):
                 # Show 1-sigma and 2-sigma confidence intervals
                 ax.fill_between(
                     self.data.x,
-                    np.percentile(models, 16, axis=0),
-                    np.percentile(models, 84, axis=0),
+                    np.percentile(models, 16, axis=0),  # type: ignore
+                    np.percentile(models, 84, axis=0),  # type: ignore
                     color="C1",
                     alpha=0.5,
                 )
                 ax.fill_between(
                     self.data.x,
-                    np.percentile(models, 2.5, axis=0),
-                    np.percentile(models, 97.5, axis=0),
+                    np.percentile(models, 2.5, axis=0),  # type: ignore
+                    np.percentile(models, 97.5, axis=0),  # type: ignore
                     color="C1",
                     alpha=0.2,
                 )
@@ -334,6 +336,34 @@ class AnisotropyObjective(Objective):
 
         return ax, ax_anisotropy
 
+    @classmethod
+    def build_objective(
+        cls, model: ReflectModel, data: XrayReflectDataset, ani_weight: float = 0.5
+    ) -> AnisotropyObjective:
+        """
+        Build a new AnisotropyObjective.
+
+        Parameters
+        ----------
+        model : ReflectModel
+            The reflectivity model to use.
+        data : XrayReflectDataset
+            The dataset containing the reflectivity data.
+        ani_weight : float, optional
+            Weight for the anisotropy data in the log-likelihood calculation.
+
+        Returns
+        -------
+        AnisotropyObjective
+            A new AnisotropyObjective instance.
+        """
+        obj: AnisotropyObjective = cls(
+            model=model, data=data, logp_anisotropy_weight=ani_weight
+        )
+        lpe: LogpExtra = LogpExtra(obj)
+        obj.logp_extra = lpe
+        return obj
+
 
 class Fitter(CurveFitter):
     """Overload the CurveFitter class to include custom sampling."""
@@ -343,17 +373,19 @@ class Fitter(CurveFitter):
         objective: Objective | AnisotropyObjective | GlobalObjective,
         ntemps: int = -1,
         nwalkers: int | None = None,
+        walkers_per_param: int = 10,
         **mcmc_kws: Any,
     ) -> None:
         nparams = len(objective.varying_parameters())
+        ideal_walkers = nparams * walkers_per_param
         if nwalkers is None:
-            nwalkers = max(2 * nparams, 200)
-        elif nwalkers < 2 * nparams:
+            nwalkers = max(ideal_walkers, 200)
+        elif nwalkers < ideal_walkers:
             import warnings
 
-            nwalkers = 2 * nparams
+            nwalkers = ideal_walkers
             warnings.warn(
-                f"Number of walkers should be at least 2 * nparams. "
+                f"Number of walkers should be at least {ideal_walkers}. "
                 f"Setting nwalkers = {nwalkers}",
                 stacklevel=2,
             )
@@ -371,7 +403,7 @@ class Fitter(CurveFitter):
         skip_check=False,
     ):
         """
-        Performs sampling from the objective.
+        Perform sampling from the objective.
 
         Parameters
         ----------
@@ -430,7 +462,7 @@ class Fitter(CurveFitter):
         >>> fitter.sample(40, nthin=50)
 
         One can also burn and thin in `Curvefitter.process_chain`.
-        """  # noqa: D401
+        """
         self._check_vars_unchanged()
 
         # setup a random number generator
@@ -463,15 +495,6 @@ class Fitter(CurveFitter):
         for param in flat_params:
             param.stderr = None
             param.chain = None
-
-        # make sure the checkpoint file exists
-        if f is not None:
-            with possibly_open_file(f, "w") as h:  # type: ignore
-                # write the shape of each step of the chain
-                h.write("# ")
-                shape = self._state.coords.shape
-                h.write(", ".join(map(str, shape)))
-                h.write("\n")
 
         # set the random state of the sampler
         # normally one could give this as an argument to the sample method
@@ -514,7 +537,7 @@ class Fitter(CurveFitter):
 
             # perform the sampling
             for state in self.sampler.sample(self._state, **sampler_kws):
-                self._state = state
+                self._state = state  # type: ignore
                 _callback_wrapper(state, h=h)
 
         if isinstance(self.sampler, emcee.EnsembleSampler):
@@ -532,7 +555,7 @@ class Fitter(CurveFitter):
             raise ValueError(msg)
         return chain
 
-    def to_arviz(self, burn: int = 0, thin: int = 1) -> arviz.InferenceData:
+    def to_arviz(self) -> az.InferenceData:
         """
         Convert MCMC results to an ArviZ InferenceData object.
 
@@ -549,79 +572,22 @@ class Fitter(CurveFitter):
             ArviZ InferenceData object.
         """
         var_names = [p.name for p in self.objective.varying_parameters()]
-        return arviz.from_emcee(
+        return az.from_emcee(
             sampler=self.sampler,
             var_names=var_names,
             coords={"chain": np.arange(self._nwalkers)},
         )
 
-    def visualize(
-        self,
-        burn: int = 0,
-        thin: int = 1,
-        var_names: list[str] | None = None,
-        figsize: tuple | None = None,
-    ):
+    def diagnose(self, **kwargs) -> pd.DataFrame | xr.Dataset:
         """
-        Visualize MCMC results using ArviZ.
-
-        Parameters
-        ----------
-        burn : int, optional
-            Number of initial samples to discard.
-        thin : int, optional
-            Thinning factor for the chain.
-        var_names : list of str | None, optional
-            Variables to include in the plot.
-        figsize : tuple | None, optional
-            Figure size for the plot.
+        Run ArviZ diagnostics on the MCMC chain.
 
         Returns
         -------
-        None
+        DataFrame or Dataset
+            ArviZ diagnostics results.
         """
-        idata = self.to_arviz(burn=burn, thin=thin)
-        arviz.plot_trace(idata, var_names=var_names, figsize=figsize)
-
-
-def _run_sampler(fitter, pool, sampler_kws, h, callback):
-    """
-    Run the sampler with appropriate settings.
-
-    Parameters
-    ----------
-    fitter : Fitter
-        The fitter instance
-    pool : map-like object
-        The pool for parallelization
-    sampler_kws : dict
-        Keywords to pass to the sampler
-    h : file or None
-        File handle for text-based checkpointing (ptemcee)
-    callback : callable
-        Callback function for each step
-    """
-    # if you're not creating more than 1 thread, then don't bother with a pool
-    if isinstance(fitter.sampler, emcee.EnsembleSampler):
-        fitter.sampler.pool = pool
-
-        # For emcee backend
-        for state in fitter.sampler.sample(fitter._state, **sampler_kws):
-            fitter._state = state
-            if callback is not None:
-                callback(state.coords, state.log_prob)
-    else:
-        # For ptemcee
-        sampler_kws["mapper"] = pool
-
-        # perform the sampling with text-based checkpointing
-        for state in fitter.sampler.sample(fitter._state, **sampler_kws):
-            fitter._state = state
-            if h is not None:
-                h.write(" ".join(map(str, state.coords.ravel())))
-                h.write("\n")
-            if callback is not None:
-                callback(state.coords, state.log_prob)
+        return az.summary(self.to_arviz(), **kwargs)
 
 
 class LogpExtra:
@@ -654,244 +620,87 @@ def sort_pars(pars, str_check, vary=None, str_not=" "):
     ]
 
 
-def enhanced_convergence_check(
-    fitter, min_ess=1000, max_rhat=1.01, stable_frac=0.85, logp_tol=0.01
-):
+def rounded_values(
+    parameter: Parameter,
+) -> tuple[float, float]:
+    """Round the values and errors to n significant figures."""
+    x = float(parameter.value)
+    xerr: Literal[0] | float = parameter.stderr if parameter.stderr else 0
+    if xerr > 0:
+        err = float(sigfig.round(xerr, 1))  # type: ignore
+        val = round(x, -int(np.floor(np.log10(err))))  # type: ignore
+    else:
+        err = xerr
+        val = x
+    return val, err
+
+
+def _fix_bound(parameter: Parameter, nsigma=5, *, by_bounds=False) -> None:
+    val, err = rounded_values(parameter)
+    bounds: Interval = parameter.bounds
+    # round err and value to proper sig figs
+    if not by_bounds and bounds is not None:
+        min_val: float = float(sigfig.round(val - nsigma * err, 1))  # type: ignore
+        max_val: float = float(sigfig.round(val + nsigma * err, 1))  # type: ignore
+    else:
+        spread = bounds.ub - bounds.lb
+        min_val = val - spread / 2
+        max_val = val + spread / 2
+    if "thick" in parameter.name or "rough" in parameter.name:  # type: ignore
+        min_val = 0
+    if parameter.name.split("_")[-1] == "rho":  # type: ignore
+        min_val = 1
+        max_val += 0.5
+    if "rotation" in parameter.name:  # type: ignore
+        max_val = np.radians(90)
+        min_val = MA
+    if err > 0:
+        better_bounds = (min_val, max_val)
+        parameter.setp(bounds=better_bounds)
+
+
+def _fix_bounds(obj, nsigma=5, by_bounds=False) -> None:
+    params = obj.varying_parameters()
+    for p in params:
+        _fix_bound(p, nsigma=nsigma, by_bounds=by_bounds)
+
+
+def fit(
+    obj, recursion_limit=2, workers=-1, **kwargs
+) -> tuple[AnisotropyObjective, Fitter]:
     """
-    Enhanced convergence check using multiple diagnostics.
+    Fit the model to the data using the provided objective.
 
     Parameters
     ----------
-    fitter : Fitter
-        The fitter object containing chains
-    min_ess : float
-        Minimum effective sample size required
-    max_rhat : float
-        Maximum acceptable R-hat statistic
-    stable_frac : float
-        Required fraction of parameters with stable distributions
-    logp_tol : float
-        Tolerance for log-posterior stability
+    obj : AnisotropyObjective
+        The objective function to minimize.
 
     Returns
     -------
-    bool
-        Whether chains have converged
-    dict
-        Diagnostic statistics
+    tuple[AnisotropyObjective, Fitter]
+        The fitted objective and the fitter used.
     """
-    import arviz as az
+    import copy
 
-    # Convert to arviz format
-    idata = fitter.to_arviz()
-
-    # 1. Basic convergence diagnostics
-    ess_stats = az.ess(idata)
-    bulk_ess = ess_stats.ess_bulk.to_array().min().item()
-    tail_ess = ess_stats.ess_tail.to_array().min().item()
-
-    # Handle potential different return types from az.rhat
-    rhat_result = az.rhat(idata)
-    if hasattr(rhat_result, "to_array"):
-        rhat_val = rhat_result.to_array().max().item()  # type: ignore
-    else:
-        # If rhat_result is already a float or a numpy array
-        rhat_val = (
-            np.max(rhat_result).item()
-            if hasattr(rhat_result, "item")
-            else float(rhat_result)
+    objective: AnisotropyObjective = copy.deepcopy(obj)
+    fitter: Fitter = Fitter(objective, **kwargs)
+    target = "nlpost"  # nlpost accounts for uncertainty in the data
+    # Recursively use the differential evolution algorithm to locate the minima
+    for _ in range(recursion_limit):
+        fitter.fit(
+            "differential_evolution",
+            target=target,
+            workers=workers,
         )
-
-    # 2. Check log-posterior stability
-    log_post = -np.array(fitter.sampler.get_log_prob())
-    n_steps = log_post.shape[0]
-    window_size = min(200, n_steps // 5)
-
-    if n_steps > 2 * window_size:
-        first_window = log_post[:window_size].mean()
-        last_window = log_post[-window_size:].mean()
-        logp_change = np.abs(
-            (last_window - first_window) / (np.abs(first_window) + 1e-10)
-        )
-        logp_stable = logp_change < logp_tol
-    else:
-        logp_stable = False
-
-    # Final convergence assessment
-    converged = (
-        bulk_ess > min_ess
-        and tail_ess > min_ess * 0.5  # Tail ESS can be lower
-        and rhat_val < max_rhat
-        and logp_stable
+        _fix_bounds(objective, by_bounds=True)
+    # Once you are in the minima based on the recursive DE, use L-BFGS-B to refine
+    fitter.fit("L-BFGS-B", target=target, options={"workers": workers})
+    _fix_bounds(objective, by_bounds=False)  # user error estimates to zoom parameters
+    # Finally, use MCMC to sample the posterior distribution
+    fitter.sample(
+        steps=1000,
+        nthin=10,
+        random_state=42,
     )
-
-    # Return diagnostics along with convergence result
-    diagnostics = {
-        "bulk_ess": bulk_ess,
-        "tail_ess": tail_ess,
-        "rhat": rhat_val,
-        "logp_stable": logp_stable,
-    }
-
-    return converged, diagnostics
-
-
-def adaptive_sampling(obj, target_ess=2000, max_samples=50000, initial_steps=1000):
-    """
-    Run MCMC with adaptive sampling until convergence criteria are met.
-
-    Parameters
-    ----------
-    obj : Objective
-        The objective function to sample
-    target_ess : int
-        Target effective sample size
-    max_samples : int
-        Maximum number of total samples to draw
-    initial_steps : int
-        Size of initial sampling batch
-    """
-    import time
-
-    import arviz as az
-    import matplotlib.pyplot as plt
-
-    # Create fitter with HDF5 backend
-    fitter = Fitter(obj)
-
-    # Initial optimization to find good starting point
-    print("Running initial optimization...")
-    fitter.fit(
-        method="differential_evolution",
-        workers=-1,
-        x0=[p.value for p in obj.varying_parameters()],
-    )
-    # Initialize with jitter around optimum
-    from multiprocessing import Pool
-
-    with Pool() as pool:
-        fitter = Fitter(obj, pool=pool)
-        ess_history, rhat_history, sampling_history = perform_sampling(
-            target_ess, max_samples, initial_steps, time, fitter
-        )
-
-    # Final diagnostics
-    idata = fitter.to_arviz()
-
-    # Plot
-    fig, axes = plt.subplots(3, 1, figsize=(10, 12))
-
-    # ESS history
-    axes[0].plot(sampling_history, ess_history)
-    axes[0].axhline(target_ess, color="red", linestyle="--")
-    axes[0].set_ylabel("Effective Sample Size")
-
-    # R-hat history
-    axes[1].plot(sampling_history, rhat_history)
-    axes[1].axhline(1.01, color="red", linestyle="--")
-    axes[1].set_ylabel("R-hat")
-
-    # Log-probability
-    log_probs = -np.array(fitter.sampler.get_log_prob())
-    axes[2].plot(range(len(log_probs)), log_probs, alpha=0.3, color="gray")
-    axes[2].plot(
-        range(len(log_probs)),
-        np.convolve(log_probs, np.ones(50) / 50, mode="same"),
-        color="blue",
-    )
-    axes[2].set_ylabel("Log Probability")
-    axes[2].set_xlabel("Iteration (post-burnin)")
-
-    plt.tight_layout()
-    plt.savefig("sampling_diagnostics.png")
-
-    # Create trace plots
-    az.plot_trace(idata)
-    plt.savefig("trace_plots.png")
-
-    # Generate summary
-    summary = az.summary(idata)
-
-    # Save results
-    results = {
-        "idata": idata,
-        "obj": obj,
-        "fitter": fitter,
-        "summary": summary,
-        "convergence_stats": {
-            "ess_history": ess_history,
-            "rhat_history": rhat_history,
-            "sampling_history": sampling_history,
-        },
-    }
-
-    with Path(f"{obj.name}_mcmc_results.pkl").open("wb") as f:
-        import pickle
-
-        pickle.dump(results, f)
-
-    return fitter
-
-
-def perform_sampling(target_ess, max_samples, initial_steps, time, fitter):
-    """
-    Perform the sampling process with adaptive batch sizes.
-    """
-    fitter.initialise("jitter")
-
-    # Track diagnostics over time
-    ess_history = []
-    rhat_history = []
-    logp_history = []
-    sampling_history = []
-
-    # Main sampling loop
-    total_samples = 0
-    batch_size = initial_steps
-    start_time = time.time()
-
-    while total_samples < max_samples:
-        print(f"Sampling batch of {batch_size} steps (total so far: {total_samples})")
-
-        # Run batch of samples
-        fitter.sample(batch_size, use_checkpoint=True, verbose=True)
-        total_samples += batch_size
-
-        # Check convergence
-        converged, stats = enhanced_convergence_check(fitter, min_ess=target_ess)
-
-        # Record diagnostics
-        ess_history.append(stats["bulk_ess"])
-        rhat_history.append(stats["rhat"])
-        logp_history.append(stats.get("logp_stable", False))
-        sampling_history.append(total_samples)
-
-        # Print diagnostics
-        elapsed = time.time() - start_time
-        print(f"Diagnostics after {total_samples} samples ({elapsed:.1f}s):")
-        print(f"  - ESS: {stats['bulk_ess']:.1f}/{target_ess}")
-        print(f"  - R-hat: {stats['rhat']:.4f}")
-        print(f"  - Stable params: {stats['stable_fraction']:.2f}")
-        print(f"  - Log-P stable: {stats['logp_stable']}")
-
-        # Exit if converged
-        if converged:
-            print(f"Convergence achieved after {total_samples} samples!")
-            break
-
-        # Adjust batch size based on progress
-        if stats["bulk_ess"] < target_ess * 0.1:
-            # Far from target, use larger batches
-            batch_size = min(5000, max_samples - total_samples)
-        elif stats["bulk_ess"] < target_ess * 0.5:
-            # Getting closer, medium batches
-            batch_size = min(2000, max_samples - total_samples)
-        else:
-            # Near target, smaller batches
-            batch_size = min(1000, max_samples - total_samples)
-
-        # If we're out of samples, break
-        if batch_size <= 0:
-            print(f"Reached maximum samples ({max_samples}) without convergence")
-            break
-    return ess_history, rhat_history, sampling_history
+    return objective, fitter

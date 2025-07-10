@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import numbers
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from refnx.analysis import Parameters, possibly_create_parameter
 from scipy.interpolate import splev, splrep
 
 from pyref.fitting.uniaxial import uniaxial_reflectivity
+
+if TYPE_CHECKING:
+    from refnx.analysis import Parameter
+
+    from pyref.fitting.io import XrayReflectDataset
+    from pyref.fitting.structure import Structure
 
 # some definitions for resolution smearing
 _FWHM = 2 * np.sqrt(2 * np.log(2.0))
@@ -53,22 +59,21 @@ class ReflectModel:
 
     def __init__(
         self,
-        structure,
+        structure: Structure,
         energy: float | None = None,
         pol: Literal["s", "p", "sp", "ps"] = "s",
-        name="",
+        name: str = "",
         *,
-        scale_s=1,
-        scale_p=1,
-        bkg=0,
-        dq=0.0,
-        q_offset=0.0,
-        en_offset=0.0,
-        theta_offset_s=0.0,
-        theta_offset_p=0.0,
-        phi=0,
-        backend="uni",
-    ):
+        scale_s: float = 1,
+        scale_p: float = 1,
+        bkg: float = 0,
+        dq: float = 0.0,
+        q_offset: float = 0.0,
+        theta_offset_s: float = 0.0,
+        theta_offset_p: float = 0.0,
+        phi: float = 0.0,
+        backend: str = "uni",
+    ) -> None:
         self.name = name
         self._parameters: Parameters | None = None
         self.backend = backend
@@ -77,33 +82,33 @@ class ReflectModel:
         self._pol = pol  # Output polarization
 
         # all reflectometry models have an optional scale factor and background
-        self._scale_s: Parameters = possibly_create_parameter(scale_s, name="scale_s")  # type: ignore
-        self._scale_p: Parameters = possibly_create_parameter(scale_p, name="scale_p")  # type: ignore
+        self._scale_s: Parameter = possibly_create_parameter(scale_s, name="scale_s")  # type: ignore
+        self._scale_p: Parameter = possibly_create_parameter(scale_p, name="scale_p")  # type: ignore
 
-        self._bkg: Parameters = possibly_create_parameter(bkg, name="bkg")  # type: ignore
-        self._q_offset: Parameters = possibly_create_parameter(  # type: ignore
+        self._bkg: Parameter = possibly_create_parameter(bkg, name="bkg")  # type: ignore
+        self._q_offset: Parameter = possibly_create_parameter(  # type: ignore
             q_offset, name="q_offset"
         )
-        self._theta_offset: Parameters = possibly_create_parameter(  # type: ignore
-            0, name="theta_offset"
-        )
 
-        # New model parameter en_offset : 10/21/2021
-        self._en_offset = possibly_create_parameter(en_offset, name="en_offset")
+        # New model parameter energy_offset : 10/21/2021
+        self._energy_offset: Parameter = possibly_create_parameter(  # type: ignore
+            0.0, name="energy_offset", vary=False, bounds=(-1, 1)
+        )
+        structure.energy_offset = self._energy_offset
 
         # we can optimize the resolution (but this is always overridden by
         # x_err if supplied. There is therefore possibly no dependence on it.
         self._dq = possibly_create_parameter(dq, name="dq - resolution")
 
         # New model parameters for theta_offset
-        self._theta_offset_s = possibly_create_parameter(
+        self._theta_offset_s: Parameter = possibly_create_parameter(  # type: ignore
             theta_offset_s, name="theta_offset_s"
         )
-        self._theta_offset_p = possibly_create_parameter(
+        self._theta_offset_p: Parameter = possibly_create_parameter(  # type: ignore
             theta_offset_p, name="theta_offset_p"
         )
 
-        self._structure = None
+        self._structure: Structure | None = None
         self.structure = structure
 
     def __call__(self, x, p=None, x_err=None):
@@ -136,11 +141,10 @@ class ReflectModel:
     def __repr__(self):
         """Representation of the ReflectModel."""
         return (
-            "ReflectModel({_structure!r}, name={name!r},"
-            " scale=({_scale_s!r} {_scale_p}), bkg={_bkg!r},"
-            " dq={_dq!r}"
-            " quad_order={quad_order}),"
-            " q_offset={_q_offset!r}".format(**self.__dict__)
+            f"ReflectModel({self._structure!r}, name={self.name!r},"
+            f" scale=({self._scale_s!r} {self._scale_p}), bkg={self._bkg!r},"
+            f" dq={self._dq!r}"
+            f" q_offset={self._q_offset!r})"
         )
 
     @property
@@ -248,18 +252,20 @@ class ReflectModel:
         self._theta_offset_p.value = value  # type: ignore
 
     @property
-    def en_offset(self):
+    def energy_offset(self) -> Parameter:
         r"""
         :class:`refnx.analysis.Parameter`.
 
         - offset in q-vector due to experimental error
 
         """
-        return self._en_offset
+        return self._energy_offset
 
-    @en_offset.setter
-    def en_offset(self, value):
-        self._en_offset.value = value  # type: ignore
+    @energy_offset.setter
+    def energy_offset(self, value: float) -> None:
+        self._energy_offset.value = value
+        if self._structure is not None:
+            self._structure.energy_offset = self._energy_offset
 
     @property
     def energy(self):
@@ -530,8 +536,10 @@ class ReflectModel:
         return self._structure
 
     @structure.setter
-    def structure(self, structure):
+    def structure(self, structure) -> None:
         self._structure = structure
+        if self._structure is not None:
+            self._structure.energy_offset = self._energy_offset
         p = Parameters(name="instrument parameters")
         p.extend(
             [
@@ -540,7 +548,7 @@ class ReflectModel:
                 self.bkg,
                 self.dq,
                 self.q_offset,
-                self.en_offset,
+                self.energy_offset,
                 self.theta_offset_s,
                 self.theta_offset_p,
             ]
@@ -558,6 +566,44 @@ class ReflectModel:
         """
         self.structure = self._structure
         return self._parameters
+
+    @classmethod
+    def build_model(
+        cls, energy: float, structure: Structure, data: XrayReflectDataset, *, name=""
+    ) -> ReflectModel:
+        """
+        Defualt model builder.
+
+        Parameters
+        ----------
+        energy : float
+            Photon energy to evaluate the resonant reflectivity.
+        structure : Structure
+            The interfacial structure.
+        data : XrayReflectDataset
+            The dataset to fit the model to.
+
+        Returns
+        -------
+        ReflectModel
+            A ReflectModel instance with the specified energy and structure.
+        """
+        model = cls(
+            structure,
+            pol="sp",
+            energy=energy,
+            name=f"{name}_{energy}",
+            theta_offset_s=1e-3,
+            theta_offset_p=1e-3,
+            scale_p=1.0,
+            scale_s=1.0,
+        )
+        model._theta_offset_s.setp(vary=True, bounds=(-0.8, 0.8))
+        model._theta_offset_p.setp(vary=True, bounds=(-0.8, 0.8))
+        model._scale_s.setp(vary=True, bounds=(0.6, 1.4))
+        model._scale_p.setp(vary=True, bounds=(0.6, 1.4))
+        model._bkg.value = data.p.y.min()
+        return model
 
 
 def reflectivity(

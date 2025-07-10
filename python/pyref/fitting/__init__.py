@@ -7,14 +7,12 @@ from pyref.fitting.fitters import (
     AnisotropyObjective,
     LogpExtra,
     ReflectModel,
-    XrayReflectDataset,
     demove,
-    gmove,
 )
 from pyref.fitting.fitters import (
     Fitter as CurveFitter,
 )
-from pyref.fitting.refnx_converters import to_reflect_dataset
+from pyref.fitting.io import XrayReflectDataset
 from pyref.fitting.structure import SLD, MaterialSLD, UniTensorSLD
 
 __all__ = [
@@ -31,6 +29,4 @@ __all__ = [
     "UniTensorSLD",
     "XrayReflectDataset",
     "demove",
-    "gmove",
-    "to_reflect_dataset",
 ]

@@ -1,3 +1,12 @@
+## v0.8.2 (2025-07-09)
+
+### Fix
+
+- fixed bugs, finalized types
+- formatting and typing for reflect models
+- fixed formatting and typing in uniaxial modeling
+- add `energy_offset` to MaterialSLD
+
 ## v0.8.1 (2025-07-01)
 
 ### Fix

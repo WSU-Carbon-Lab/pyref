@@ -24,7 +24,7 @@ name = "pyref"
 readme = "README.md"
 requires-python = ">=3.12"
 urls = {Documentation = "https://wsu-carbon-lab.github.io/pyref/", Source = "https://github.com/WSU-Carbon-Lab/pyref"}
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
     "fastparquet>=2024.11.0",
     "matplotlib>=3.10.3",

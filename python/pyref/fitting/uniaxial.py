@@ -26,6 +26,8 @@ DEALINGS IN THIS SOFTWARE.
 
 """
 
+import warnings
+
 import numpy as np
 from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
@@ -600,10 +602,19 @@ def calculate_output(
     t_pp: np.ndarray = M[:, 0, 0] / denom
 
     # Clip reflection coefficients to physical values
-    refl[:, 0, 0] = np.clip(np.real(np.multiply(r_ss, np.conj(r_ss))), 0, 1)
-    refl[:, 0, 1] = np.clip(np.real(np.multiply(r_sp, np.conj(r_sp))), 0, 1)
-    refl[:, 1, 0] = np.clip(np.real(np.multiply(r_ps, np.conj(r_ps))), 0, 1)
-    refl[:, 1, 1] = np.clip(np.real(np.multiply(r_pp, np.conj(r_pp))), 0, 1)
+    refl[:, 0, 0] = np.real(np.multiply(r_ss, np.conj(r_ss)))
+    refl[:, 0, 1] = np.real(np.multiply(r_sp, np.conj(r_sp)))
+    refl[:, 1, 0] = np.real(np.multiply(r_ps, np.conj(r_ps)))
+    refl[:, 1, 1] = np.real(np.multiply(r_pp, np.conj(r_pp)))
+
+    if np.any(refl > 1):
+        # Clip reflection coefficients to a maximum of 1
+        warnings.warn(
+            "Reflection coefficients exceed 1, clipping to 1.",
+            UserWarning,
+            stacklevel=2,
+        )
+        refl = np.clip(refl, 0, 1)
 
     # Store transmission coefficients
     tran[:, 0, 0] = t_ss

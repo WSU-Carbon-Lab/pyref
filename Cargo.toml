@@ -1,14 +1,22 @@
-[package]
-authors = ["Harlan Heilman Harlan.Heilman@wsu.edu"]
-description = "Enable running pyref workloads in Python"
-documentation = "https://docs.rs/pyref/latest"
+[workspace]
+members = ["crates/pyref-core"]
+resolver = "2"
+
+[workspace.package]
 edition = "2021"
 license = "GPL-3.0"
-name = "pyref_rs"
-repository = "https://github.com/WSU-Carbon-Lab/pyref"
-version = "0.1.0"
+authors = ["Harlan Heilman <Harlan.Heilman@wsu.edu>"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package]
+name = "pyref_rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Harlan Heilman <Harlan.Heilman@wsu.edu>"]
+description = "Enable running pyref workloads in Python"
+documentation = "https://docs.rs/pyref/latest"
+license = "GPL-3.0"
+repository = "https://github.com/WSU-Carbon-Lab/pyref"
+
 [lib]
 crate-type = ["cdylib"]
 name = "pyref"
@@ -20,6 +28,6 @@ numpy = "0.22.0"
 polars = {version = "0.45.0", features = ["fmt", "dtype-u16", "lazy", "dtype-struct"]}
 pyo3 = {version = "0.22.0", features = ["extension-module", "generate-import-lib", "abi3", "abi3-py312"]}
 pyo3-polars = {version = "0.19.0", features = ["lazy", "dtype-struct", "derive"]}
-pyref-core = "0.5.2"
+pyref-core = { path = "crates/pyref-core" }
 rayon = "1.10.0"
 serde = "1.0.210"

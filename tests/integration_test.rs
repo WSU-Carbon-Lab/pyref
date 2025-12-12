@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 // Import the crate to test
-use pyref_core::{
+use pyref::{
     errors::FitsLoaderError,
     loader::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits},
 };

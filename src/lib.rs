@@ -2,7 +2,15 @@ use polars::{prelude::*, series::amortized_iter::*};
 use polars_core::{export::num::Pow, utils::align_chunks_binary};
 use pyo3::prelude::*;
 use pyo3_polars::{derive::polars_expr, PolarsAllocator, PyDataFrame};
-use pyref_core::loader::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits};
+
+// Internal modules
+pub mod errors;
+pub mod io;
+pub mod loader;
+
+// Re-export public API
+pub use errors::FitsLoaderError;
+pub use loader::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits};
 
 #[global_allocator]
 static ALLOC: PolarsAllocator = PolarsAllocator::new();

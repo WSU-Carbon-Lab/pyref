@@ -1,12 +1,3 @@
-[workspace]
-members = ["crates/pyref-core"]
-resolver = "2"
-
-[workspace.package]
-edition = "2021"
-license = "GPL-3.0"
-authors = ["Harlan Heilman <Harlan.Heilman@wsu.edu>"]
-
 [package]
 name = "pyref_rs"
 version = "0.1.0"
@@ -18,16 +9,25 @@ license = "GPL-3.0"
 repository = "https://github.com/WSU-Carbon-Lab/pyref"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 name = "pyref"
 path = "src/lib.rs"
 
 [dependencies]
 astrors-fork = "0.1.10"
+chrono = "0.4.39"
+glob-match = "0.2.1"
+ndarray = "0.15.6"
 numpy = "0.22.0"
-polars = {version = "0.45.0", features = ["fmt", "dtype-u16", "lazy", "dtype-struct"]}
+physical_constants = "0.5.0"
+polars = {version = "0.45.1", features = ["fmt", "dtype-u16", "lazy", "dtype-struct", "dtype-array", "dtype-datetime", "round_series", "ipc", "performant"]}
 pyo3 = {version = "0.22.0", features = ["extension-module", "generate-import-lib", "abi3", "abi3-py312"]}
 pyo3-polars = {version = "0.19.0", features = ["lazy", "dtype-struct", "derive"]}
-pyref-core = { path = "crates/pyref-core" }
 rayon = "1.10.0"
-serde = "1.0.210"
+serde = {version = "1.0", features = ["derive"]}
+thiserror = "2.0.11"
+
+[dev-dependencies]
+tempfile = "3.10.1"
+rstest = "0.18.2"
+predicates = "3.1.0"

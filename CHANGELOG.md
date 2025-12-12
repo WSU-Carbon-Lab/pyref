@@ -1,3 +1,19 @@
+## v0.8.3 (2025-12-12)
+
+### Refactor
+
+- **migration**: Migrated to monorepo structure following Maturin recommendations
+- **rust**: Merged pyref-ccd (pyref-core) into main pyref repository
+- **rust**: All Rust code now lives under `src/` directory
+- **rust**: Removed separate pyref-core crate dependency, now using internal modules
+- **rust**: Updated module structure: `errors`, `io`, and `loader` are now internal modules
+- **tests**: Migrated integration tests from pyref-ccd to main repository
+
+### Breaking Changes
+
+- **rust**: Removed `pyref-core` as external dependency - functionality now internal
+- **structure**: Dropped pyref-core naming scheme while preserving all functionality
+
 ## v0.8.2 (2025-07-09)
 
 ### Fix

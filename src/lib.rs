@@ -10,15 +10,13 @@
 ///
 /// # Example
 ///
-/// ```
-/// use pyref_core::{read_fits, loader::ExperimentType};
-/// use std::path::Path;
+/// ```no_run
+/// use pyref_core::read_fits;
+/// use std::path::PathBuf;
 ///
-/// // Using experiment type
-/// let df = read_fits("path/to/file.fits", ExperimentType::Xrr);
-///
-/// // Using raw header keys
-/// let df = read_fits("path/to/file.fits", &["LAMBDA", "THETA", "DATA"]);
+/// // Read a FITS file with specific header keys
+/// let header_keys = vec!["DATE".to_string(), "Beamline Energy".to_string(), "EXPOSURE".to_string()];
+/// let df = read_fits(PathBuf::from("path/to/file.fits"), &header_keys).unwrap();
 /// ```
 /// Documentation for read_multiple_fits, read_experiment, and read_experiment_pattern
 /// functions is available in the loader module where they are defined.

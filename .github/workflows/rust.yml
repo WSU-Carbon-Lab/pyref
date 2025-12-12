@@ -1,0 +1,58 @@
+name: Main
+
+on:
+  push:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+
+  build-test:
+    name: Build and test (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swatinem/rust-cache@v2
+      - name: Build
+        run: >
+          cargo build
+          --verbose
+
+      # - name: Run tests (with coverage)
+      #   if: matrix.os == 'ubuntu-latest'
+      #   run: >
+      #     cargo install cargo-tarpaulin
+      #     && cargo tarpaulin
+      #     --verbose
+      #     --out Xml
+      #     --engine llvm
+      #     --skip-clean
+      #   continue-on-error: true
+      # - name: Upload coverage reports to Codecov
+      #   if: matrix.os == 'ubuntu-latest'
+      #   uses: codecov/codecov-action@v3
+
+
+  publish:
+    name: Publish to crates.io
+
+    needs: build-test
+    if: "startsWith(github.event.head_commit.message, 'bump:')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: swatinem/rust-cache@v2
+
+      - name: Publish
+        run: >
+          cargo publish
+          --verbose
+          --allow-dirty
+          --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

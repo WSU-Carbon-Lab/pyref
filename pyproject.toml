@@ -27,6 +27,7 @@ urls = {Documentation = "https://wsu-carbon-lab.github.io/pyref/", Source = "htt
 version = "0.8.2"
 dependencies = [
     "arviz>=0.21.0",
+    "astropy>=7.2.0",
     "fastparquet>=2024.11.0",
     "matplotlib>=3.10.3",
     "numba>=0.61.2",

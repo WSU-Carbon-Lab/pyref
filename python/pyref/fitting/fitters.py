@@ -624,6 +624,8 @@ def rounded_values(
     parameter: Parameter,
 ) -> tuple[float, float]:
     """Round the values and errors to n significant figures."""
+    if parameter.value is None:
+        raise ValueError("Parameter value is None; cannot round value.")
     x = float(parameter.value)
     xerr: Literal[0] | float = parameter.stderr if parameter.stderr else 0
     if xerr > 0:
@@ -637,15 +639,12 @@ def rounded_values(
 
 def _fix_bound(parameter: Parameter, nsigma=5, *, by_bounds=False) -> None:
     val, err = rounded_values(parameter)
+    if parameter.bounds is not Interval:
+        raise ValueError("Parameter bounds are None; cannot fix bounds.")
     bounds: Interval = parameter.bounds
     # round err and value to proper sig figs
-    if not by_bounds and bounds is not None:
-        min_val: float = float(sigfig.round(val - nsigma * err, 1))  # type: ignore
-        max_val: float = float(sigfig.round(val + nsigma * err, 1))  # type: ignore
-    else:
-        spread = bounds.ub - bounds.lb
-        min_val = val - spread / 2
-        max_val = val + spread / 2
+    min_val: float = float(sigfig.round(val - nsigma * err, 1))  # type: ignore
+    max_val: float = float(sigfig.round(val + nsigma * err, 1))  # type: ignore
     if "thick" in parameter.name or "rough" in parameter.name:  # type: ignore
         min_val = 0
     if parameter.name.split("_")[-1] == "rho":  # type: ignore

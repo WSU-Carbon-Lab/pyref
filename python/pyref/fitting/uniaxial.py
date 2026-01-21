@@ -585,9 +585,9 @@ def calculate_output(
     M: np.ndarray = M_full
 
     # Calculate denominator with numerical stability check
-    denom: np.ndarray = M[:, 0, 0] * M[:, 2, 2] - M[:, 0, 2] * M[:, 2, 0]
+    denom = M[:, 0, 0] * M[:, 2, 2] - M[:, 0, 2] * M[:, 2, 0]
     # Add tiny constant to avoid division by zero
-    denom: np.ndarray = np.where(denom < TINY, denom + TINY, denom)
+    denom = np.where(np.abs(denom) < TINY, denom + TINY, denom)
 
     # Calculate reflection coefficients
     r_ss: np.ndarray = (M[:, 1, 0] * M[:, 2, 2] - M[:, 1, 2] * M[:, 2, 0]) / denom

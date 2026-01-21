@@ -7,6 +7,8 @@ import pandas as pd
 from refnx.analysis import Parameter, Parameters, possibly_create_parameter
 from scipy.interpolate import interp1d
 
+from pyref.fitting.structure import Scatterer
+
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 

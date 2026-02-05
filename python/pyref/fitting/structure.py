@@ -75,13 +75,10 @@ def slice_range(
         start = max(end - min_length, 0)
         return df.iloc[start:end]
     mask_res = df[mask]
-    match type(mask_res):
-        case pd.DataFrame | pd.Series:
-            return mask_res.to_frame()
-        case _:
-            raise TypeError(
-                f"Expected pd.DataFrame or pd.Series, got {type(mask_res)}")
-
+    if isinstance(mask_res, pd.DataFrame):
+        return mask_res
+    raise TypeError(
+        f"Expected pd.DataFrame or pd.Series, got {type(mask_res)}")
 # ==============/ Base Classes /===================
 
 

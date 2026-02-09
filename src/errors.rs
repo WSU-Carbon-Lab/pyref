@@ -2,7 +2,8 @@ use polars::error::PolarsError;
 use std::io::Error as IoError;
 use thiserror::Error;
 
-/// Custom error type for FITS processing.
+use crate::fits::FitsReadError;
+
 #[derive(Error, Debug)]
 pub enum FitsLoaderError {
     #[error("FITS processing error: {0}")]
@@ -31,4 +32,10 @@ pub enum FitsLoaderError {
 
     #[error("Other error: {0}")]
     Other(String),
+}
+
+impl From<FitsReadError> for FitsLoaderError {
+    fn from(e: FitsReadError) -> Self {
+        FitsLoaderError::FitsError(e.to_string())
+    }
 }

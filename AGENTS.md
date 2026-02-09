@@ -1,5 +1,12 @@
 # PyRef Architecture and Data Flow
 
+## Build and test (uv, maturin, cargo only)
+
+- **Install and run tests**: `uv sync` then `uv run pytest tests/test_rust_fits_io.py` (or `uv run pytest` for full suite). `uv sync` builds the Rust extension via the maturin build backend and installs the project.
+- **Build wheel only**: `uv run --group dev maturin build`. Output: `target/wheels/pyref-*.whl`.
+- **Rust**: Use `cargo build` only for checking compilation of non-cdylib targets (e.g. bins). The Python extension is built by maturin so that linker flags for the extension are correct. Do not rely on `cargo test` for the main crate; it links the cdylib into the test binary and fails with unresolved Python symbols. Rust unit tests live in `src/` (e.g. `src/fits/header.rs`); integration tests in `tests/integration_test.rs` are `#[ignore]` (require Python runtime; validate via pytest instead).
+- **TUI binary**: The lib is built with default feature `extension-module` (pyo3/pyo3-polars). Building the standalone TUI must not link Python. Use: `cargo run --bin pyref-tui --no-default-features --features tui`. The `--no-default-features` disables `extension-module`, so the lib is built without pyo3 and the binary links successfully. Running the TUI requires a real TTY (interactive terminal); in a headless or IDE run context you may see "Device not configured".
+
 ## Overview
 
 PyRef is a library for reducing 2D X-ray reflectivity detector images into 1D reflectivity signals. The library handles experimental data collected in "stitches" - separate measurement chunks where beamline configuration parameters (higher-order suppressor, exit slits, exposure times) are adjusted to capture reflectivity across multiple orders of magnitude.

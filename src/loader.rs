@@ -1,12 +1,10 @@
-use astrors_fork::fits;
-use astrors_fork::io::hdulist::HDU;
-
 use polars::{lazy::prelude::*, prelude::*};
 use rayon::prelude::*;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::errors::FitsLoaderError;
+use crate::fits::{Hdu, HduList};
 use crate::io::{add_calculated_domains, process_file_name, process_image, process_metadata};
 
 /// Reads a single FITS file and converts it to a Polars DataFrame.
@@ -32,22 +30,16 @@ pub fn read_fits(
         .to_str()
         .ok_or_else(|| FitsLoaderError::InvalidFileName("Invalid UTF-8 in path".into()))?;
 
-    // Use try block pattern for more concise error handling
     let result = (|| {
-        let hdul = fits::fromfile(path_str)?;
-
-        // Process primary header metadata
+        let hdul = HduList::from_file(path_str)?;
         let meta = match hdul.hdus.get(0) {
-            Some(HDU::Primary(hdu)) => process_metadata(hdu, header_items)?,
+            Some(Hdu::Primary(hdu)) => process_metadata(hdu, header_items)?,
             _ => return Err(FitsLoaderError::NoData),
         };
-
-        // Process image data
         let img_data = match hdul.hdus.get(2) {
-            Some(HDU::Image(hdu)) => process_image(hdu)?,
-            // If there's no image at index 2, try index 1 as a fallback
+            Some(Hdu::Image(hdu)) => process_image(hdu)?,
             _ => match hdul.hdus.get(1) {
-                Some(HDU::Image(hdu)) => process_image(hdu)?,
+                Some(Hdu::Image(hdu)) => process_image(hdu)?,
                 _ => return Err(FitsLoaderError::NoData),
             },
         };

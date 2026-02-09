@@ -56,7 +56,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     let super_ = mods.contains(KeyModifiers::SUPER);
 
     if keymap == "emacs" {
-        if shift && !ctrl && !alt && !super_ && code == KeyCode::Char('s') {
+        if !ctrl && !alt && !super_ && (code == KeyCode::Char('S') || (shift && code == KeyCode::Char('s'))) {
             return Action::Search;
         }
         if ctrl && !shift && !alt {
@@ -87,7 +87,8 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
         }
         if !ctrl && !alt && !super_ {
             match code {
-                KeyCode::Char('s') => return if shift { Action::Search } else { Action::FocusSample },
+                KeyCode::Char('S') => return Action::Search,
+                KeyCode::Char('s') => return Action::FocusSample,
                 KeyCode::Char('t') => return if shift { Action::Retag } else { Action::FocusTag },
                 KeyCode::Char('e') => return Action::FocusExperiment,
                 KeyCode::Char('b') => return Action::FocusBrowser,
@@ -99,7 +100,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     }
 
     if keymap == "vi" {
-        if shift && !ctrl && !alt && !super_ && code == KeyCode::Char('s') {
+        if !ctrl && !alt && !super_ && (code == KeyCode::Char('S') || (shift && code == KeyCode::Char('s'))) {
             return Action::Search;
         }
         if code == KeyCode::Char('q') && mods.is_empty() {
@@ -131,6 +132,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
         }
         if mods.is_empty() {
             match code {
+                KeyCode::Char('S') => return Action::Search,
                 KeyCode::Char('s') => return Action::FocusSample,
                 KeyCode::Char('t') => return Action::FocusTag,
                 KeyCode::Char('e') => return Action::FocusExperiment,

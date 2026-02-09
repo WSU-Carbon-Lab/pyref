@@ -10,7 +10,7 @@ pub const DOUBLE_UP: &str = "\u{21C8}";
 pub const DOUBLE_DOWN: &str = "\u{21CA}";
 
 pub const BROWSE_TITLE: &str = " Browse [b] ";
-pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag ";
+pub const BROWSE_SHORTCUTS: &str = " d Dir  r Rename  R Retag ";
 
 pub fn bottom_bar_line() -> String {
     format!(
@@ -44,6 +44,7 @@ pub enum Action {
     Rename,
     Retag,
     Open,
+    ChangeDir,
     None,
 }
 
@@ -93,6 +94,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('e') => return Action::FocusExperiment,
                 KeyCode::Char('b') => return Action::FocusBrowser,
                 KeyCode::Char('r') => return Action::Rename,
+                KeyCode::Char('d') => return Action::ChangeDir,
                 _ => {}
             }
         }
@@ -138,6 +140,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('e') => return Action::FocusExperiment,
                 KeyCode::Char('b') => return Action::FocusBrowser,
                 KeyCode::Char('r') => return Action::Rename,
+                KeyCode::Char('d') => return Action::ChangeDir,
                 _ => {}
             }
         }

@@ -67,13 +67,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
-    let path_display = truncate_path(&app.current_root, NAV_PATH_TRUNCATE);
-    let filter_hint = if !app.search_query.is_empty() && app.mode != AppMode::Search {
-        format!("  filter: {}", app.search_query)
+    let line = if app.mode == AppMode::ChangeDir {
+        Line::from(format!("  Path: {}  [Enter] open  [Esc] cancel", app.path_input))
     } else {
-        String::new()
+        let path_display = truncate_path(&app.current_root, NAV_PATH_TRUNCATE);
+        let filter_hint = if !app.search_query.is_empty() && app.mode != AppMode::Search {
+            format!("  filter: {}", app.search_query)
+        } else {
+            String::new()
+        };
+        Line::from(format!("  {}  [d] dir{}", path_display, filter_hint))
     };
-    let line = Line::from(format!("  {}  [up] [back] [fwd]{}", path_display, filter_hint));
     let para = Paragraph::new(line);
     frame.render_widget(para, area);
 }

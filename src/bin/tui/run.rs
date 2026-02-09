@@ -64,6 +64,29 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         return false;
     }
 
+    if app.mode == super::app::AppMode::ChangeDir {
+        let action = keymap::from_key_event(key, &app.keymap);
+        match action {
+            Action::Cancel => {
+                app.set_mode_normal();
+                app.path_clear();
+            }
+            Action::Open => {
+                app.apply_path();
+            }
+            Action::None => {
+                if let crossterm::event::KeyCode::Char(c) = key.code {
+                    app.path_push_char(c);
+                }
+                if key.code == crossterm::event::KeyCode::Backspace {
+                    app.path_pop_char();
+                }
+            }
+            _ => {}
+        }
+        return false;
+    }
+
     if app.mode != super::app::AppMode::Normal {
         let action = keymap::from_key_event(key, &app.keymap);
         if action == Action::Cancel {
@@ -86,6 +109,7 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         Action::MoveFirst => app.list_first(),
         Action::MoveLast => app.list_last(),
         Action::Search => app.set_mode_search(),
+        Action::ChangeDir => app.set_mode_change_dir(),
         Action::Cancel => {}
         Action::Rename => app.set_mode_rename(),
         Action::Retag => app.set_mode_retag(),

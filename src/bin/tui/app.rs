@@ -3,6 +3,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use ratatui::widgets::{ListState, TableState};
 use std::cmp;
 use std::collections::HashSet;
+use std::path::Path;
 
 use pyref::errors::FitsLoaderError;
 use pyref::loader::read_experiment_metadata;
@@ -191,6 +192,7 @@ pub enum AppMode {
     RenameSample,
     EditTag,
     Search,
+    ChangeDir,
 }
 
 pub struct App {
@@ -210,6 +212,7 @@ pub struct App {
     pub mode: AppMode,
     pub current_root: String,
     pub search_query: String,
+    pub path_input: String,
     pub needs_redraw: bool,
     pub layout: String,
     pub keymap: String,
@@ -267,6 +270,7 @@ impl App {
             mode: AppMode::Normal,
             current_root,
             search_query: String::new(),
+            path_input: String::new(),
             needs_redraw: true,
             layout,
             keymap,
@@ -546,6 +550,86 @@ impl App {
     pub fn search_clear(&mut self) {
         self.search_query.clear();
         self.refresh_filtered();
+    }
+
+    pub fn set_mode_change_dir(&mut self) {
+        self.mode = AppMode::ChangeDir;
+        self.path_input = self.current_root.clone();
+        self.needs_redraw = true;
+    }
+
+    pub fn path_push_char(&mut self, c: char) {
+        if c.is_ascii() && !c.is_control() {
+            self.path_input.push(c);
+        }
+    }
+
+    pub fn path_pop_char(&mut self) {
+        self.path_input.pop();
+    }
+
+    pub fn path_clear(&mut self) {
+        self.path_input.clear();
+    }
+
+    pub fn apply_path(&mut self) {
+        let raw = self.path_input.trim();
+        if raw.is_empty() {
+            self.set_mode_normal();
+            return;
+        }
+        let path = Path::new(raw);
+        let canonical = path.canonicalize().ok().filter(|p| p.is_dir());
+        let new_root = match canonical {
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => {
+                if path.is_dir() {
+                    path.to_string_lossy().into_owned()
+                } else {
+                    self.set_mode_normal();
+                    return;
+                }
+            }
+        };
+        self.current_root = new_root.clone();
+        let (all_profiles, samples, tags, experiments) =
+            match load_catalog_from_path(&new_root) {
+                Ok(t) => t,
+                Err(_) => (vec![], vec![], vec![], vec![]),
+            };
+        self.all_profiles = all_profiles.clone();
+        self.samples = samples.clone();
+        self.tags = tags.clone();
+        self.experiments = experiments.clone();
+        self.selected_samples.clear();
+        self.selected_tags.clear();
+        self.selected_experiments.clear();
+        self.sample_state = ListState::default();
+        self.tag_state = ListState::default();
+        self.experiment_state = ListState::default();
+        self.table_state = TableState::default();
+        if !self.samples.is_empty() {
+            self.sample_state.select(Some(0));
+        }
+        if !self.tags.is_empty() {
+            self.tag_state.select(Some(0));
+        }
+        if !self.experiments.is_empty() {
+            self.experiment_state.select(Some(0));
+        }
+        self.filtered_profiles = Self::filter_profiles(
+            &self.all_profiles,
+            &self.selected_samples,
+            &self.selected_tags,
+            &self.selected_experiments,
+            &self.search_query,
+        );
+        if !self.filtered_profiles.is_empty() {
+            self.table_state.select(Some(0));
+        }
+        self.path_input.clear();
+        self.set_mode_normal();
+        self.needs_redraw = true;
     }
 
     pub fn list_first(&mut self) {

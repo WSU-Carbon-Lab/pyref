@@ -21,6 +21,54 @@ pub struct ProfileRow {
     pub experiment_number: u32,
 }
 
+fn home_dir() -> Option<String> {
+    std::env::var("HOME").ok()
+}
+
+fn expand_tilde(path: &str) -> String {
+    let path = path.trim();
+    if path == "~" {
+        return home_dir().unwrap_or_else(|| path.to_string());
+    }
+    if path.starts_with("~/") {
+        if let Some(home) = home_dir() {
+            return format!("{}/{}", home.trim_end_matches('/'), path.trim_start_matches("~/"));
+        }
+    }
+    if path.starts_with("~") && path.len() > 1 && !path.chars().nth(1).map_or(false, |c| c == '/') {
+        return path.to_string();
+    }
+    path.to_string()
+}
+
+fn resolved_browse_dir(expanded_path: &str) -> String {
+    let path = expanded_path.trim();
+    if path.is_empty() {
+        return home_dir().unwrap_or_else(|| ".".to_string());
+    }
+    let p = Path::new(path);
+    if p.exists() && p.is_dir() {
+        return p
+            .canonicalize()
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string());
+    }
+    if let Some(parent) = p.parent() {
+        let parent_str = parent.to_string_lossy();
+        if parent_str.is_empty() || parent_str == "." {
+            return home_dir().unwrap_or_else(|| ".".to_string());
+        }
+        let parent_path = Path::new(parent);
+        if parent_path.exists() && parent_path.is_dir() {
+            return parent_path
+                .canonicalize()
+                .map(|c| c.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| parent_str.into_owned());
+        }
+    }
+    home_dir().unwrap_or_else(|| ".".to_string())
+}
+
 fn common_prefix_slice(names: &[String]) -> String {
     if names.is_empty() {
         return String::new();
@@ -135,6 +183,8 @@ pub struct App {
     pub current_root: String,
     pub search_query: String,
     pub path_input: String,
+    pub dir_browser_entries: Vec<String>,
+    pub dir_browser_state: ListState,
     pub needs_redraw: bool,
     pub layout: String,
     pub keymap: String,
@@ -194,6 +244,8 @@ impl App {
             current_root,
             search_query: String::new(),
             path_input: String::new(),
+            dir_browser_entries: Vec::new(),
+            dir_browser_state: ListState::default(),
             needs_redraw: true,
             layout,
             keymap,
@@ -477,18 +529,125 @@ impl App {
 
     pub fn set_mode_change_dir(&mut self) {
         self.mode = AppMode::ChangeDir;
-        self.path_input = self.current_root.clone();
+        self.path_input = if self.current_root.is_empty() {
+            expand_tilde("~")
+        } else {
+            self.current_root.clone()
+        };
+        self.refresh_dir_browser();
         self.needs_redraw = true;
+    }
+
+    pub fn refresh_dir_browser(&mut self) {
+        let expanded = expand_tilde(self.path_input.trim());
+        let resolved = resolved_browse_dir(&expanded);
+        let mut entries = Vec::new();
+        if let Ok(rd) = fs::read_dir(&resolved) {
+            let mut names: Vec<String> = rd
+                .filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let full = Path::new(&resolved).join(&name);
+                    if full.is_dir() {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            names.sort();
+            entries.push("..".to_string());
+            entries.extend(names);
+        } else {
+            entries.push("..".to_string());
+        }
+        self.dir_browser_entries = entries;
+        let len = self.dir_browser_entries.len();
+        let current = self.dir_browser_state.selected().unwrap_or(0);
+        let clamped = if len == 0 {
+            None
+        } else if current >= len {
+            Some(len - 1)
+        } else {
+            Some(current)
+        };
+        self.dir_browser_state.select(clamped);
+        if clamped.is_none() && len > 0 {
+            self.dir_browser_state.select(Some(0));
+        }
+        self.needs_redraw = true;
+    }
+
+    pub fn open_selected_dir(&mut self) {
+        let expanded = expand_tilde(self.path_input.trim());
+        let resolved = resolved_browse_dir(&expanded);
+        let Some(i) = self.dir_browser_state.selected() else {
+            return;
+        };
+        let Some(name) = self.dir_browser_entries.get(i) else {
+            return;
+        };
+        if name == ".." {
+            let parent = Path::new(&resolved).parent();
+            self.path_input = parent
+                .and_then(|p| p.to_str())
+                .map(String::from)
+                .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".to_string()));
+        } else {
+            self.path_input = format!("{}/{}", resolved.trim_end_matches('/'), name);
+        }
+        self.refresh_dir_browser();
+        self.needs_redraw = true;
+    }
+
+    pub fn dir_browser_move_down(&mut self) {
+        let len = self.dir_browser_entries.len();
+        if len == 0 {
+            return;
+        }
+        let i = self.dir_browser_state.selected().unwrap_or(0);
+        let next = if i + 1 >= len { 0 } else { i + 1 };
+        self.dir_browser_state.select(Some(next));
+        self.needs_redraw = true;
+    }
+
+    pub fn dir_browser_move_up(&mut self) {
+        let len = self.dir_browser_entries.len();
+        if len == 0 {
+            return;
+        }
+        let i = self.dir_browser_state.selected().unwrap_or(0);
+        let next = if i == 0 { len - 1 } else { i - 1 };
+        self.dir_browser_state.select(Some(next));
+        self.needs_redraw = true;
+    }
+
+    pub fn dir_browser_move_first(&mut self) {
+        if !self.dir_browser_entries.is_empty() {
+            self.dir_browser_state.select(Some(0));
+            self.needs_redraw = true;
+        }
+    }
+
+    pub fn dir_browser_move_last(&mut self) {
+        let len = self.dir_browser_entries.len();
+        if len > 0 {
+            self.dir_browser_state.select(Some(len - 1));
+            self.needs_redraw = true;
+        }
     }
 
     pub fn path_push_char(&mut self, c: char) {
         if c.is_ascii() && !c.is_control() {
             self.path_input.push(c);
+            self.refresh_dir_browser();
         }
     }
 
     pub fn path_pop_char(&mut self) {
-        self.path_input.pop();
+        if self.path_input.pop().is_some() {
+            self.refresh_dir_browser();
+        }
     }
 
     pub fn path_clear(&mut self) {
@@ -496,11 +655,11 @@ impl App {
     }
 
     pub fn path_autocomplete(&mut self) {
-        let raw = self.path_input.trim();
+        let raw = expand_tilde(self.path_input.trim());
         let (parent, prefix) = if raw.is_empty() {
             (Path::new("."), "")
         } else {
-            let p = Path::new(raw);
+            let p = Path::new(&raw);
             let parent = p.parent().unwrap_or(Path::new("."));
             let prefix = p
                 .file_name()
@@ -550,24 +709,26 @@ impl App {
         };
         let parent_str = parent.to_string_lossy();
         let has_trailing = raw.ends_with('/');
-        self.path_input = if parent_str == "." || parent_str.is_empty() {
+        let new_path = if parent_str == "." || parent_str.is_empty() {
             new_tail
         } else {
             format!("{}/{}", parent_str.trim_end_matches('/'), new_tail.trim_end_matches('/'))
         };
+        self.path_input = new_path;
         if has_trailing && !self.path_input.ends_with('/') && Path::new(&self.path_input).is_dir() {
             self.path_input.push('/');
         }
+        self.refresh_dir_browser();
         self.needs_redraw = true;
     }
 
     pub fn apply_path(&mut self) {
-        let raw = self.path_input.trim();
+        let raw = expand_tilde(self.path_input.trim());
         if raw.is_empty() {
             self.set_mode_normal();
             return;
         }
-        let path = Path::new(raw);
+        let path = Path::new(&raw);
         let canonical = path.canonicalize().ok().filter(|p| p.is_dir());
         let new_root = match canonical {
             Some(p) => p.to_string_lossy().into_owned(),

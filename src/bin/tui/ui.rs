@@ -82,9 +82,13 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
     frame.render_widget(para, area);
 }
 
-fn render_bottom_bar(frame: &mut Frame, _app: &App, area: Rect, theme: ThemeMode) {
+fn render_bottom_bar(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
     let style = super::theme::keybind_bar_style(theme);
-    let content = bottom_bar_line();
+    let content: String = if app.mode == AppMode::ChangeDir {
+        " Enter open  Ctrl+O accept  Esc cancel ".to_string()
+    } else {
+        bottom_bar_line()
+    };
     let line = Line::from(ratatui::text::Span::styled(content, style));
     let para = Paragraph::new(line).alignment(Alignment::Center);
     frame.render_widget(para, area);
@@ -124,6 +128,20 @@ fn render_search_box(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode)
 }
 
 fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+    if app.mode == AppMode::ChangeDir {
+        let block = Block::bordered().title(" Directory [j/k] move [Enter] open [Tab] complete ");
+        let inner = block.inner(area);
+        let items: Vec<ListItem> = app
+            .dir_browser_entries
+            .iter()
+            .map(|s| ListItem::new(s.as_str()))
+            .collect();
+        let list = List::new(items);
+        frame.render_widget(block, area);
+        frame.render_stateful_widget(list, inner, &mut app.dir_browser_state);
+        return;
+    }
+
     let [left_pct, _right_pct] = layout_constraints(app);
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)

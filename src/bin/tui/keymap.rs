@@ -45,6 +45,7 @@ pub enum Action {
     Retag,
     Open,
     ChangeDir,
+    AcceptPath,
     None,
 }
 
@@ -68,6 +69,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('p') => return Action::MoveUp,
                 KeyCode::Char('s') => return Action::Search,
                 KeyCode::Char('k') => return Action::Search,
+                KeyCode::Char('o') => return Action::AcceptPath,
                 _ => {}
             }
         }
@@ -125,6 +127,9 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
         }
         if code == KeyCode::Char('G') || (code == KeyCode::Char('g') && shift) {
             return Action::MoveLast;
+        }
+        if ctrl && !shift && !alt && code == KeyCode::Char('o') {
+            return Action::AcceptPath;
         }
         if code == KeyCode::Char('/') && mods.is_empty() {
             return Action::Search;

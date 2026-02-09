@@ -58,12 +58,33 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     }
 
     if app.mode == super::app::AppMode::ChangeDir {
+        let action = keymap::from_key_event(key, &app.keymap);
+        if action == Action::AcceptPath {
+            app.apply_path();
+            return false;
+        }
+        if action == Action::MoveDown {
+            app.dir_browser_move_down();
+            return false;
+        }
+        if action == Action::MoveUp {
+            app.dir_browser_move_up();
+            return false;
+        }
+        if action == Action::MoveFirst {
+            app.dir_browser_move_first();
+            return false;
+        }
+        if action == Action::MoveLast {
+            app.dir_browser_move_last();
+            return false;
+        }
         match key.code {
             KeyCode::Esc => {
                 app.set_mode_normal();
                 app.path_clear();
             }
-            KeyCode::Enter => app.apply_path(),
+            KeyCode::Enter => app.open_selected_dir(),
             KeyCode::Tab => app.path_autocomplete(),
             KeyCode::Backspace => app.path_pop_char(),
             KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.path_push_char(c),
@@ -108,6 +129,7 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.toggle_filter();
             }
         }
+        Action::AcceptPath => {}
         Action::None => {}
     }
     false

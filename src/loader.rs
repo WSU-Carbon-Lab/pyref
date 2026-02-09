@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use crate::errors::FitsLoaderError;
 use crate::fits::{Hdu, HduList};
-use crate::io::{add_calculated_domains, process_file_name, process_image, process_metadata};
+use crate::io::{
+    add_calculated_domains, process_file_name, process_image, process_image_header, process_metadata,
+};
 
 /// Reads a single FITS file and converts it to a Polars DataFrame.
 ///
@@ -59,6 +61,46 @@ pub fn read_fits(
     // Add file path to error context if an error occurred
     result.map_err(|e| {
         FitsLoaderError::FitsError(format!("Error processing file '{}': {}", path_str, e))
+    })
+}
+
+pub fn read_fits_metadata(
+    file_path: std::path::PathBuf,
+    header_items: &Vec<String>,
+) -> Result<DataFrame, FitsLoaderError> {
+    if file_path.extension().and_then(|ext| ext.to_str()) != Some("fits") {
+        return Err(FitsLoaderError::NoData);
+    }
+    let path_str = file_path
+        .to_str()
+        .ok_or_else(|| FitsLoaderError::InvalidFileName("Invalid UTF-8 in path".into()))?;
+    let result = (|| {
+        let hdul = HduList::from_file_metadata_only(path_str)?;
+        let meta = match hdul.hdus.get(0) {
+            Some(Hdu::Primary(hdu)) => process_metadata(hdu, header_items)?,
+            _ => return Err(FitsLoaderError::NoData),
+        };
+        let naxis_cols = match hdul.hdus.get(2) {
+            Some(Hdu::ImageHeader(h)) => process_image_header(h),
+            _ => match hdul.hdus.get(1) {
+                Some(Hdu::ImageHeader(h)) => process_image_header(h),
+                _ => vec![
+                    Column::new("NAXIS1".into(), vec![0i64]),
+                    Column::new("NAXIS2".into(), vec![0i64]),
+                ],
+            },
+        };
+        let names = process_file_name(file_path.clone());
+        let mut columns = meta;
+        columns.extend(naxis_cols);
+        columns.extend(names);
+        DataFrame::new(columns).map_err(FitsLoaderError::PolarsError)
+    })();
+    result.map_err(|e| {
+        FitsLoaderError::FitsError(format!(
+            "Error reading metadata for file '{}': {}",
+            path_str, e
+        ))
     })
 }
 
@@ -173,6 +215,73 @@ pub fn read_experiment(
 
     // If there is a column for energy, theta add the q column
     Ok(add_calculated_domains(combined_df.lazy()))
+}
+
+pub fn read_multiple_fits_metadata(
+    file_paths: Vec<PathBuf>,
+    header_items: &Vec<String>,
+) -> Result<DataFrame, FitsLoaderError> {
+    if file_paths.is_empty() {
+        return Err(FitsLoaderError::FitsError("No files provided".into()));
+    }
+    for path in &file_paths {
+        if !path.exists() {
+            return Err(FitsLoaderError::FitsError(format!(
+                "File not found: {}",
+                path.display()
+            )));
+        }
+    }
+    let results: Vec<Result<DataFrame, FitsLoaderError>> = file_paths
+        .par_iter()
+        .map(|path| read_fits_metadata(path.clone(), header_items))
+        .collect();
+    let successful_dfs: Vec<DataFrame> = results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .collect();
+    if successful_dfs.is_empty() {
+        return Err(FitsLoaderError::FitsError(
+            "None of the provided files could be read for metadata.".into(),
+        ));
+    }
+    let combined = successful_dfs
+        .into_par_iter()
+        .reduce_with(|acc, df| match acc.vstack(&df) {
+            Ok(c) => c,
+            Err(_) => acc,
+        })
+        .ok_or(FitsLoaderError::NoData)?;
+    let lz = combined
+        .lazy()
+        .sort(["experiment_number", "frame_number"], Default::default());
+    Ok(add_calculated_domains(lz))
+}
+
+pub fn read_experiment_metadata(
+    dir: &str,
+    header_items: &Vec<String>,
+) -> Result<DataFrame, FitsLoaderError> {
+    let dir_path = std::path::PathBuf::from(dir);
+    if !dir_path.exists() {
+        return Err(FitsLoaderError::FitsError(format!(
+            "Directory not found: {}",
+            dir
+        )));
+    }
+    let entries: Vec<PathBuf> = fs::read_dir(dir)
+        .map_err(FitsLoaderError::IoError)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("fits"))
+        .map(|e| e.path())
+        .collect();
+    if entries.is_empty() {
+        return Err(FitsLoaderError::FitsError(format!(
+            "No FITS files found in directory: {}",
+            dir
+        )));
+    }
+    read_multiple_fits_metadata(entries, header_items)
 }
 
 /// Reads multiple specific FITS files and combines them into a single DataFrame.

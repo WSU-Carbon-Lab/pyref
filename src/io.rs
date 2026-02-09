@@ -4,7 +4,7 @@ use regex::Regex;
 use std::ops::Mul;
 
 use crate::errors::FitsLoaderError;
-use crate::fits::{ImageHdu, PrimaryHdu};
+use crate::fits::{ImageHdu, ImageHduHeader, PrimaryHdu};
 
 #[derive(Debug, Clone)]
 pub struct ParsedFitsStem {
@@ -139,37 +139,38 @@ pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {
         );
     }
 
-    // Add Q column if required columns exist
-    lz = lz.with_column(
-        when(
-            col("Sample Theta")
-                .is_not_null()
-                .and(col("Lambda").is_not_null()),
-        )
-        .then(as_struct(vec![col("Sample Theta"), col("Lambda")]).map(
-            move |s| {
-                let struc = s.struct_()?;
-                let th_series = struc.field_by_name("Sample Theta")?;
-                let theta = th_series.f64()?;
-                let lam_series = struc.field_by_name("Lambda")?;
-                let lam = lam_series.f64()?;
+    if has_column("Sample Theta") && has_column("Lambda") {
+        lz = lz.with_column(
+            when(
+                col("Sample Theta")
+                    .is_not_null()
+                    .and(col("Lambda").is_not_null()),
+            )
+            .then(as_struct(vec![col("Sample Theta"), col("Lambda")]).map(
+                move |s| {
+                    let struc = s.struct_()?;
+                    let th_series = struc.field_by_name("Sample Theta")?;
+                    let theta = th_series.f64()?;
+                    let lam_series = struc.field_by_name("Lambda")?;
+                    let lam = lam_series.f64()?;
 
-                let out: Float64Chunked = theta
-                    .into_iter()
-                    .zip(lam.iter())
-                    .map(|(theta, lam)| match (theta, lam) {
-                        (Some(theta), Some(lam)) => Some(q(lam, theta)),
-                        _ => None,
-                    })
-                    .collect();
+                    let out: Float64Chunked = theta
+                        .into_iter()
+                        .zip(lam.iter())
+                        .map(|(theta, lam)| match (theta, lam) {
+                            (Some(theta), Some(lam)) => Some(q(lam, theta)),
+                            _ => None,
+                        })
+                        .collect();
 
-                Ok(Some(out.into_column()))
-            },
-            GetOutput::from_type(DataType::Float64),
-        ))
-        .otherwise(lit(NULL))
-        .alias("Q"),
-    );
+                    Ok(Some(out.into_column()))
+                },
+                GetOutput::from_type(DataType::Float64),
+            ))
+            .otherwise(lit(NULL))
+            .alias("Q"),
+        );
+    }
 
     // Collect the final DataFrame only once at the end
     lz.collect().unwrap_or_else(|_| DataFrame::empty())
@@ -330,6 +331,13 @@ fn subtract_background(
         }
     }
     result.into_dyn()
+}
+
+pub fn process_image_header(img: &ImageHduHeader) -> Vec<Column> {
+    vec![
+        Column::new("NAXIS1".into(), vec![img.naxis1 as i64]),
+        Column::new("NAXIS2".into(), vec![img.naxis2 as i64]),
+    ]
 }
 
 pub fn process_metadata(

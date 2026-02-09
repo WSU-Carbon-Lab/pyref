@@ -4,6 +4,9 @@ use ratatui::widgets::{ListState, TableState};
 use std::cmp;
 use std::collections::HashSet;
 
+use pyref::errors::FitsLoaderError;
+use pyref::loader::read_experiment_metadata;
+
 #[derive(Debug, Clone)]
 pub struct ProfileRow {
     pub sample: String,
@@ -117,6 +120,52 @@ fn mock_experiments() -> Vec<(u32, String)> {
     ]
 }
 
+fn load_catalog_from_path(
+    dir: &str,
+) -> Result<(Vec<ProfileRow>, Vec<String>, Vec<String>, Vec<(u32, String)>), FitsLoaderError> {
+    let header_items: Vec<String> = vec![];
+    let df = read_experiment_metadata(dir, &header_items)?;
+    let n = df.height();
+    let sample_name_series = df.column("sample_name").map_err(|_| FitsLoaderError::NoData)?;
+    let sample_names = sample_name_series.str().map_err(|_| FitsLoaderError::NoData)?;
+    let tag_series = df.column("tag").map_err(|_| FitsLoaderError::NoData)?;
+    let tags_str = tag_series.str().map_err(|_| FitsLoaderError::NoData)?;
+    let exp_series = df.column("experiment_number").map_err(|_| FitsLoaderError::NoData)?;
+    let exp_nums = exp_series.i64().map_err(|_| FitsLoaderError::NoData)?;
+    let mut profiles = Vec::with_capacity(n);
+    let mut samples_set: HashSet<String> = HashSet::new();
+    let mut tags_set: HashSet<String> = HashSet::new();
+    let mut experiments_set: HashSet<(u32, String)> = HashSet::new();
+    for i in 0..n {
+        let sample = sample_names.get(i).unwrap_or("").to_string();
+        let tag = tags_str.get(i).unwrap_or("-").to_string();
+        let exp = exp_nums.get(i).unwrap_or(0);
+        let exp_u = exp.max(0) as u32;
+        samples_set.insert(sample.clone());
+        if tag != "-" {
+            tags_set.insert(tag.clone());
+        }
+        experiments_set.insert((exp_u, format!("CCD Scan {}", exp_u)));
+        profiles.push(ProfileRow {
+            sample: sample.clone(),
+            tag: if tag == "-" { tag } else { tag.clone() },
+            energy_str: "-".to_string(),
+            pol: "-".to_string(),
+            q_range_str: "-".to_string(),
+            data_points: 0,
+            quality_placeholder: "-".to_string(),
+            experiment_number: exp_u,
+        });
+    }
+    let mut samples: Vec<String> = samples_set.into_iter().collect();
+    samples.sort();
+    let mut tags: Vec<String> = tags_set.into_iter().collect();
+    tags.sort();
+    let mut experiments: Vec<(u32, String)> = experiments_set.into_iter().collect();
+    experiments.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((profiles, samples, tags, experiments))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Nav,
@@ -170,10 +219,11 @@ pub struct App {
 
 impl App {
     pub fn new(current_root: String, layout: String, keymap: String, keybind_bar_lines: u8, theme: String) -> Self {
-        let all_profiles = mock_profile_rows();
-        let samples = mock_samples();
-        let tags = mock_tags();
-        let experiments = mock_experiments();
+        let (all_profiles, samples, tags, experiments) =
+            match load_catalog_from_path(&current_root) {
+                Ok(t) => t,
+                Err(_) => (vec![], vec![], vec![], vec![]),
+            };
         let mut sample_state = ListState::default();
         let mut tag_state = ListState::default();
         let mut experiment_state = ListState::default();

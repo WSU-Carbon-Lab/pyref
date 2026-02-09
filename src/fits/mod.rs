@@ -7,5 +7,5 @@ pub mod primary;
 pub use error::FitsReadError;
 pub use header::{Card, CardValue, Header};
 pub use hdulist::{Hdu, HduList};
-pub use image::ImageHdu;
+pub use image::{ImageHdu, ImageHduHeader};
 pub use primary::PrimaryHdu;

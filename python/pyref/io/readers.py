@@ -10,9 +10,12 @@ from typing import TYPE_CHECKING, Literal
 
 from pyref.pyref import (  # type: ignore[import]
     py_read_experiment,
+    py_read_experiment_metadata,
     py_read_experiment_pattern,
     py_read_fits,
+    py_read_fits_metadata,
     py_read_multiple_fits,
+    py_read_multiple_fits_metadata,
 )
 
 if TYPE_CHECKING:
@@ -226,3 +229,58 @@ def read_experiment(
         return polars_data.to_pandas()
     elif engine == "polars":
         return polars_data
+
+
+def read_fits_metadata(
+    file_path: FilePath | FilePathList,
+    headers: list[str] | None = None,
+    *,
+    engine: Literal["pandas", "polars"] = "polars",
+) -> pd.DataFrame | pl.DataFrame:
+    """
+    Read FITS metadata (headers + file_name + NAXIS1/NAXIS2) without loading image data.
+    Use this for catalogs when files may have different image dimensions.
+    """
+    if headers is None:
+        headers = []
+    if isinstance(file_path, list):
+        path_strs = [str(Path(p).resolve()) for p in file_path]
+        for p in path_strs:
+            if not Path(p).is_file():
+                raise FileNotFoundError(f"{p} is not a valid file.")
+        out = py_read_multiple_fits_metadata(path_strs, headers)
+    else:
+        p = Path(file_path).resolve()
+        if not p.is_file():
+            raise FileNotFoundError(f"{p} is not a valid file.")
+        if p.suffix != ".fits":
+            raise ValueError(f"{p} is not a FITS file.")
+        out = py_read_fits_metadata(str(p), headers)
+    if engine == "pandas":
+        return out.to_pandas()
+    return out
+
+
+def read_experiment_metadata(
+    file_path: FileDirectory,
+    headers: list[str] | None = None,
+    *,
+    engine: Literal["pandas", "polars"] = "polars",
+) -> pd.DataFrame | pl.DataFrame:
+    """
+    Read metadata for all FITS files in a directory (no image data).
+    Use for catalogs when files may have different image dimensions.
+    """
+    if headers is None:
+        headers = []
+    path_obj = Path(file_path).resolve()
+    if not path_obj.is_dir():
+        raise FileNotFoundError(f"{path_obj} is not a valid directory.")
+    paths = sorted(path_obj.glob("*.fits"))
+    if not paths:
+        raise FileNotFoundError(f"{path_obj} does not contain any FITS files.")
+    path_strs = [str(p) for p in paths]
+    out = py_read_experiment_metadata(str(path_obj), headers)
+    if engine == "pandas":
+        return out.to_pandas()
+    return out

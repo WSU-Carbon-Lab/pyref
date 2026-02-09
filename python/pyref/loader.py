@@ -16,7 +16,12 @@ from IPython.display import display
 from ipywidgets import VBox, interactive
 
 from pyref.io.experiment_names import parse_fits_stem
-from pyref.io.readers import read_experiment, read_fits
+from pyref.io.readers import (
+    read_experiment,
+    read_experiment_metadata,
+    read_fits,
+    read_fits_metadata,
+)
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue
 
@@ -220,6 +225,9 @@ class PrsoxrLoader:
     paths : list[Path] | list[str] | None, optional
         If provided, load only these FITS paths instead of discovering under directory.
         directory may be None in that case.
+    metadata_only : bool, optional
+        If True, load only metadata (no image data). Use for directories with mixed
+        image sizes. Reflectivity and mask are not available until reduce_at is called.
     """
 
     def __init__(
@@ -227,6 +235,8 @@ class PrsoxrLoader:
         directory: Path | None = None,
         extra_keys: list[HeaderValue] | None = None,
         paths: list[Path] | list[str] | None = None,
+        *,
+        metadata_only: bool = False,
     ):
         default_keys: list[str] = [
             HeaderValue.BEAMLINE_ENERGY.hdu(),
@@ -238,23 +248,41 @@ class PrsoxrLoader:
         if extra_keys:
             default_keys.extend([key.hdu() for key in extra_keys])
 
+        self._metadata_only = metadata_only
         if paths is not None:
             path_list = [Path(p).resolve() for p in paths]
             if not path_list:
                 msg = "paths must not be empty."
                 raise ValueError(msg)
             self.path = Path(directory).resolve() if directory is not None else path_list[0].parent
-            meta = read_fits(path_list, headers=default_keys, engine="polars")  # type: ignore[arg-type]
-            self.meta = cast("pl.DataFrame", meta)
+            if metadata_only:
+                meta = read_fits_metadata(path_list, headers=default_keys, engine="polars")
+                self.meta = cast("pl.DataFrame", meta)
+                path_df = pl.DataFrame({"path": [str(p) for p in path_list], "file_name": [p.stem for p in path_list]})
+                self.meta = self.meta.join(path_df, on="file_name", how="left")
+            else:
+                meta = read_fits(path_list, headers=default_keys, engine="polars")  # type: ignore[arg-type]
+                self.meta = cast("pl.DataFrame", meta)
         else:
             if directory is None:
                 msg = "directory is required when paths is not provided."
                 raise ValueError(msg)
             self.path = Path(directory).resolve()
-            self.meta = cast(
-                "pl.DataFrame",
-                read_experiment(self.path, headers=default_keys, engine="polars"),
-            )
+            if metadata_only:
+                self.meta = cast(
+                    "pl.DataFrame",
+                    read_experiment_metadata(self.path, headers=default_keys, engine="polars"),
+                )
+                path_series = pl.Series(
+                    "path",
+                    [str(self.path / (fn + ".fits")) for fn in self.meta["file_name"].to_list()],
+                )
+                self.meta = self.meta.with_columns(path_series)
+            else:
+                self.meta = cast(
+                    "pl.DataFrame",
+                    read_experiment(self.path, headers=default_keys, engine="polars"),
+                )
 
         if "file_name" in self.meta.columns and "sample_name" not in self.meta.columns:
             stems = self.meta.get_column("file_name")
@@ -281,17 +309,26 @@ class PrsoxrLoader:
                 pl.Series("frame_number", frame_nums),
             )
 
-        self.refl = self.meta.select(
-            "file_name",
-            "EPU Polarization",
-            "Beamline Energy",
-            "Q",
-            pl.col("Simple Reflectivity").alias("r"),
-            pl.col("Simple Reflectivity").sqrt().alias("dr"),
-        )
+        if metadata_only:
+            refl_cols = ["file_name", "EPU Polarization", "Beamline Energy", "Q"]
+            available = [c for c in refl_cols if c in self.meta.columns]
+            self.refl = self.meta.select(available).with_columns(
+                pl.lit(None).cast(pl.Float64).alias("r"),
+                pl.lit(None).cast(pl.Float64).alias("dr"),
+            )
+            self.mask = None
+        else:
+            self.refl = self.meta.select(
+                "file_name",
+                "EPU Polarization",
+                "Beamline Energy",
+                "Q",
+                pl.col("Simple Reflectivity").alias("r"),
+                pl.col("Simple Reflectivity").sqrt().alias("dr"),
+            )
+            self.mask = self.meta["RAW"].image.mask()  # type: ignore
         self.shape = len(self.meta)
         self._polarization: Literal["s", "p"] | None = None
-        self.mask: np.ndarray = self.meta["RAW"].image.mask()  # type: ignore
         self.masker: InteractiveImageMasker | None = None
 
     @property
@@ -358,6 +395,9 @@ class PrsoxrLoader:
 
     def check_spot(self):
         """Interactive plot for a selected frame with ROI and blur settings."""
+        if self._metadata_only:
+            msg = "check_spot requires full load; use reduce_at first or load without metadata_only."
+            raise RuntimeError(msg)
         import matplotlib
 
         matplotlib.use("module://ipympl.backend_nbagg")
@@ -434,7 +474,9 @@ class PrsoxrLoader:
         rectangle to create a mask. The initial mask is based on the automatically
         generated mask.
         """
-        # set backend to use the widget backend
+        if self._metadata_only:
+            msg = "mask_image requires full load; use reduce_at first or load without metadata_only."
+            raise RuntimeError(msg)
         matplotlib.use("module://ipympl.backend_nbagg")
         min_frame = self.meta.select(
             pl.col("SUBTRACTED").is_not_null(),
@@ -445,6 +487,43 @@ class PrsoxrLoader:
         image = min_frame["SUBTRACTED"].to_numpy()
         self.masker = InteractiveImageMasker(image, mask=self.mask)
         self.mask = self.masker.get_mask()
+
+    def reduce_at(self, index: int) -> pl.DataFrame:
+        """
+        Load the FITS file at the given index and return its reflectivity row.
+        For use when the loader was created with metadata_only=True.
+        """
+        if not self._metadata_only:
+            return self.refl.slice(index, 1)
+        if "path" not in self.meta.columns:
+            msg = "metadata_only catalog has no path column."
+            raise RuntimeError(msg)
+        path = Path(self.meta["path"][index])
+        if not path.is_file():
+            msg = f"path not found: {path}"
+            raise FileNotFoundError(msg)
+        default_keys = [
+            HeaderValue.BEAMLINE_ENERGY.hdu(),
+            HeaderValue.EPU_POLARIZATION.hdu(),
+            HeaderValue.SAMPLE_THETA.hdu(),
+            "Sample Name",
+            "Scan ID",
+        ]
+        full = read_fits(path, headers=default_keys, engine="polars")
+        if full.height == 0 or "Simple Reflectivity" not in full.columns:
+            msg = f"no reflectivity from {path}"
+            raise RuntimeError(msg)
+        row = full.row(0, named=True)
+        r_val = float(row["Simple Reflectivity"])
+        out = {
+            "file_name": [row["file_name"]],
+            "r": [r_val],
+            "dr": [r_val**0.5],
+        }
+        for key in ("EPU Polarization", "Beamline Energy", "Q"):
+            if key in row:
+                out[key] = [row[key]]
+        return pl.DataFrame(out)
 
     def write_csv(self):
         """

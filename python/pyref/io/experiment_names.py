@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import polars as pl
 
-from pyref.io.readers import read_fits
+from pyref.io.readers import read_fits, read_fits_metadata
 
 STEM_PATTERN = re.compile(r"^(.+?)[\s\-_]?(\d{5})-(\d{5})$")
 
@@ -179,7 +179,7 @@ def build_catalog(
         header_keys.append("Sample Theta")
     path_strs = [str(p) for p in path_list]
     try:
-        meta = read_fits(path_strs, headers=header_keys, engine="polars")  # type: ignore[arg-type]
+        meta = read_fits_metadata(path_strs, headers=header_keys, engine="polars")
     except Exception:
         return catalog
     if not isinstance(meta, pl.DataFrame) or "file_name" not in meta.columns:

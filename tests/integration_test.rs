@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 // Import the crate to test
 use pyref::{
     errors::FitsLoaderError,
-    loader::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits},
+    loader::{
+        read_experiment, read_experiment_metadata, read_experiment_pattern, read_fits,
+        read_multiple_fits,
+    },
 };
 
 const TEST_DATA_DIR: &str = "tests/fixtures";
@@ -206,6 +209,68 @@ fn test_read_experiment_pattern() {
     println!("DataFrame head: {:#?}", df.head(Some(5)));
 }
 
+fn minimal_fits_bytes(naxis1: u32, naxis2: u32) -> Vec<u8> {
+    let card = |s: &str| {
+        let mut buf = [b' '; 80];
+        let b = s.as_bytes();
+        let n = b.len().min(80);
+        buf[..n].copy_from_slice(&b[..n]);
+        buf.to_vec()
+    };
+    let mut out = Vec::new();
+    out.extend(card("SIMPLE  =                    T"));
+    out.extend(card("BITPIX  =                    8"));
+    out.extend(card("NAXIS   =                    0"));
+    out.extend(card("END"));
+    while out.len() % 2880 != 0 {
+        out.push(b' ');
+    }
+    out.extend(card("XTENSION= 'IMAGE   '"));
+    out.extend(card("BITPIX  =                   16"));
+    out.extend(card("NAXIS   =                    2"));
+    out.extend(card(&format!("NAXIS1  = {:>20}", naxis1)));
+    out.extend(card(&format!("NAXIS2  = {:>20}", naxis2)));
+    out.extend(card("PCOUNT  =                    0"));
+    out.extend(card("GCOUNT  =                    1"));
+    out.extend(card("END"));
+    while out.len() % 2880 != 0 {
+        out.push(b' ');
+    }
+    let nelem = (naxis1 as usize) * (naxis2 as usize) * 2;
+    out.resize(out.len() + nelem, 0);
+    while out.len() % 2880 != 0 {
+        out.push(b' ');
+    }
+    out
+}
+
+#[test]
+fn test_read_experiment_metadata_mixed_sizes_no_image_columns() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dir_path = dir.path();
+    let a = dir_path.join("sample_rt_81041-00001.fits");
+    let b = dir_path.join("other_81042-00002.fits");
+    std::fs::write(&a, minimal_fits_bytes(10, 20)).expect("write fits a");
+    std::fs::write(&b, minimal_fits_bytes(5, 10)).expect("write fits b");
+    let dir_str = dir_path.to_str().unwrap();
+    let n_fits: usize = std::fs::read_dir(dir_str)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|e| e.to_str()) == Some("fits"))
+        .count();
+    assert_eq!(n_fits, 2, "temp dir should contain 2 FITS files at {}", dir_str);
+    let header_items: Vec<String> = vec![];
+    let result = read_experiment_metadata(dir_str, &header_items);
+    let df = result.expect("read_experiment_metadata should succeed");
+    assert_eq!(df.height(), 2, "expected 2 rows");
+    assert!(df.column("file_name").is_ok());
+    assert!(df.column("sample_name").is_ok());
+    assert!(df.column("NAXIS1").is_ok());
+    assert!(df.column("NAXIS2").is_ok());
+    assert!(df.column("RAW").is_err(), "metadata-only must not have RAW");
+    assert!(df.column("SUBTRACTED").is_err(), "metadata-only must not have SUBTRACTED");
+}
+
 #[test]
 #[ignore = "requires Python runtime; run Python tests via pytest"]
 fn test_read_fits_includes_parsed_filename_columns() {
@@ -226,7 +291,7 @@ fn test_read_fits_includes_parsed_filename_columns() {
     assert!(df.column("frame_number").is_ok(), "Missing 'frame_number' column");
     let stem = first_file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     if stem.starts_with("monlayerjune") && stem.contains("81041") {
-        let sample = df.column("sample_name").unwrap().str().unwrap().get(0).flatten();
+        let sample = df.column("sample_name").unwrap().str().unwrap().get(0);
         let exp = df.column("experiment_number").unwrap().i64().unwrap().get(0);
         let frame = df.column("frame_number").unwrap().i64().unwrap().get(0);
         assert_eq!(sample, Some("monlayerjune"), "sample_name for monlayerjune stem");

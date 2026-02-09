@@ -158,3 +158,14 @@ def test_read_fits_meta_has_parsed_columns() -> None:
         assert meta["sample_name"][0] == parsed.sample_name
         assert meta["experiment_number"][0] == parsed.experiment_number
         assert meta["frame_number"][0] == parsed.frame_number
+
+
+def test_build_catalog_with_headers_has_no_image_columns() -> None:
+    data_dir = get_data_path()
+    paths = discover_fits(data_dir, recursive=False)
+    if not paths:
+        pytest.skip("No FITS files")
+    catalog = build_catalog(paths[:5], headers=["Beamline Energy", "Sample Theta"])
+    assert not catalog.is_empty()
+    assert "RAW" not in catalog.columns
+    assert "SUBTRACTED" not in catalog.columns

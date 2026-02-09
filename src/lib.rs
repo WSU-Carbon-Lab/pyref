@@ -7,17 +7,24 @@ pub mod io;
 pub mod loader;
 
 pub use errors::FitsLoaderError;
-pub use loader::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits};
+pub use loader::{
+    read_experiment, read_experiment_metadata, read_experiment_pattern, read_fits,
+    read_fits_metadata, read_multiple_fits, read_multiple_fits_metadata,
+};
 
 #[cfg(feature = "extension-module")]
 mod extension {
+    use std::path::PathBuf;
     use polars::prelude::*;
     use polars::series::amortized_iter::*;
     use polars_core::{export::num::Pow, utils::align_chunks_binary};
     use pyo3::prelude::*;
     use pyo3_polars::{derive::polars_expr, PolarsAllocator, PyDataFrame};
 
-    use crate::{read_experiment, read_experiment_pattern, read_fits, read_multiple_fits};
+    use crate::{
+        read_experiment, read_experiment_metadata, read_experiment_pattern, read_fits,
+        read_fits_metadata, read_multiple_fits, read_multiple_fits_metadata,
+    };
 
     #[global_allocator]
     static ALLOC: PolarsAllocator = PolarsAllocator::new();
@@ -70,6 +77,45 @@ mod extension {
     #[pyo3(signature = (dir, header_items, /), text_signature = "(dir, header_items, /)")]
     pub fn py_read_experiment(dir: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
         match read_experiment(dir, &header_items) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[pyfunction]
+    #[pyo3(name = "py_read_fits_metadata", signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
+    pub fn py_read_fits_metadata(path: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
+        match read_fits_metadata(path.into(), &header_items) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[pyfunction]
+    #[pyo3(name = "py_read_multiple_fits_metadata")]
+    #[pyo3(signature = (file_paths, header_items, /), text_signature = "(file_paths, header_items, /)")]
+    pub fn py_read_multiple_fits_metadata(
+        file_paths: Vec<String>,
+        header_items: Vec<String>,
+    ) -> PyResult<PyDataFrame> {
+        let paths: Vec<_> = file_paths.into_iter().map(PathBuf::from).collect();
+        match read_multiple_fits_metadata(paths, &header_items) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[pyfunction]
+    #[pyo3(name = "py_read_experiment_metadata")]
+    #[pyo3(signature = (dir, header_items, /), text_signature = "(dir, header_items, /)")]
+    pub fn py_read_experiment_metadata(dir: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
+        match read_experiment_metadata(dir, &header_items) {
             Ok(df) => Ok(PyDataFrame(df)),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 e.to_string(),
@@ -220,6 +266,9 @@ mod extension {
         m.add_function(pyo3::wrap_pyfunction!(py_read_experiment, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_read_experiment_pattern, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_read_multiple_fits, m)?)?;
+        m.add_function(pyo3::wrap_pyfunction!(py_read_fits_metadata, m)?)?;
+        m.add_function(pyo3::wrap_pyfunction!(py_read_multiple_fits_metadata, m)?)?;
+        m.add_function(pyo3::wrap_pyfunction!(py_read_experiment_metadata, m)?)?;
         Ok(())
     }
 }

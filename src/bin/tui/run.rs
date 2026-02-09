@@ -11,12 +11,7 @@ pub fn run<B: Backend>(
     app: &mut App,
     poll_duration: Duration,
 ) -> io::Result<()> {
-    terminal.clear()?;
-    terminal.draw(|f| super::ui::render(f, app))?;
     loop {
-        if app.try_complete_loading() {
-            app.needs_redraw = true;
-        }
         if app.needs_redraw {
             terminal.draw(|f| super::ui::render(f, app))?;
             app.needs_redraw = false;

@@ -727,14 +727,17 @@ impl App {
             }
         };
         let parent_str = parent.to_string_lossy();
-        let has_trailing = raw.ends_with('/');
         let new_path = if parent_str == "." || parent_str.is_empty() {
             new_tail
         } else {
-            format!("{}/{}", parent_str.trim_end_matches('/'), new_tail.trim_end_matches('/'))
+            format!(
+                "{}/{}",
+                parent_str.trim_end_matches('/'),
+                new_tail
+            )
         };
         self.path_input = to_tilde_form(&new_path);
-        if has_trailing && !self.path_input.ends_with('/') && Path::new(&self.path_input).is_dir() {
+        if Path::new(&expand_tilde(self.path_input.trim())).is_dir() && !self.path_input.ends_with('/') {
             self.path_input.push('/');
         }
         self.refresh_dir_browser();

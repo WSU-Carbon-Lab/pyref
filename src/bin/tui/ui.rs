@@ -67,9 +67,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
-    let line = if app.mode == AppMode::ChangeDir {
+    let line = if app.loading.is_some() {
+        Line::from("  Loading catalog (parsing FITS)...  [d] dir")
+    } else if app.mode == AppMode::ChangeDir {
         let path_display = truncate_path(&app.path_input, NAV_PATH_TRUNCATE);
         Line::from(format!("  Path: {}  [Enter] open  [Esc] cancel", path_display))
+    } else if app.current_root.is_empty() {
+        Line::from("  No directory selected  [d] select directory")
     } else {
         let path_display = truncate_path(&app.current_root, NAV_PATH_TRUNCATE);
         let filter_hint = if !app.search_query.is_empty() && app.mode != AppMode::Search {

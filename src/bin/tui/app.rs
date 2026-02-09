@@ -5,9 +5,21 @@ use std::cmp;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
 
+use polars::prelude::DataFrame;
 use pyref::errors::FitsLoaderError;
-use pyref::loader::read_experiment_metadata;
+use pyref::loader::{
+    read_catalog_parquet, read_experiment_metadata, write_catalog_parquet,
+};
+
+type CatalogData = (
+    Vec<ProfileRow>,
+    Vec<String>,
+    Vec<String>,
+    Vec<(u32, String)>,
+);
 
 #[derive(Debug, Clone)]
 pub struct ProfileRow {
@@ -108,11 +120,9 @@ fn common_prefix_slice(names: &[String]) -> String {
     first[..len].to_string()
 }
 
-fn load_catalog_from_path(
-    dir: &str,
-) -> Result<(Vec<ProfileRow>, Vec<String>, Vec<String>, Vec<(u32, String)>), FitsLoaderError> {
-    let header_items: Vec<String> = vec![];
-    let df = read_experiment_metadata(dir, &header_items)?;
+const CATALOG_PARQUET_NAME: &str = ".pyref_catalog.parquet";
+
+fn catalog_from_df(df: &DataFrame) -> Result<CatalogData, FitsLoaderError> {
     let n = df.height();
     let sample_name_series = df.column("sample_name").map_err(|_| FitsLoaderError::NoData)?;
     let sample_names = sample_name_series.str().map_err(|_| FitsLoaderError::NoData)?;
@@ -152,6 +162,23 @@ fn load_catalog_from_path(
     let mut experiments: Vec<(u32, String)> = experiments_set.into_iter().collect();
     experiments.sort_by(|a, b| a.0.cmp(&b.0));
     Ok((profiles, samples, tags, experiments))
+}
+
+fn load_catalog_from_path(
+    dir: &str,
+) -> Result<CatalogData, FitsLoaderError> {
+    let parquet_path = Path::new(dir).join(CATALOG_PARQUET_NAME);
+    if parquet_path.exists() {
+        if let Ok(df) = read_catalog_parquet(&parquet_path) {
+            if let Ok(catalog) = catalog_from_df(&df) {
+                return Ok(catalog);
+            }
+        }
+    }
+    let header_items: Vec<String> = vec![];
+    let df = read_experiment_metadata(dir, &header_items)?;
+    let _ = write_catalog_parquet(&df, &parquet_path);
+    catalog_from_df(&df)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +229,7 @@ pub struct App {
     pub path_input: String,
     pub dir_browser_entries: Vec<String>,
     pub dir_browser_state: ListState,
+    pub loading: Option<mpsc::Receiver<(String, Result<CatalogData, String>)>>,
     pub needs_redraw: bool,
     pub layout: String,
     pub keymap: String,
@@ -210,12 +238,18 @@ pub struct App {
     pub theme: String,
 }
 
+const PLACEHOLDER_ROOT: &str = "/path/to/experiments";
+
 impl App {
     pub fn new(current_root: String, layout: String, keymap: String, keybind_bar_lines: u8, theme: String) -> Self {
         let (all_profiles, samples, tags, experiments) =
-            match load_catalog_from_path(&current_root) {
-                Ok(t) => t,
-                Err(_) => (vec![], vec![], vec![], vec![]),
+            if current_root.is_empty() || current_root == PLACEHOLDER_ROOT {
+                (vec![], vec![], vec![], vec![])
+            } else {
+                match load_catalog_from_path(&current_root) {
+                    Ok(t) => t,
+                    Err(_) => (vec![], vec![], vec![], vec![]),
+                }
             };
         let mut sample_state = ListState::default();
         let mut tag_state = ListState::default();
@@ -263,6 +297,7 @@ impl App {
             path_input: String::new(),
             dir_browser_entries: Vec::new(),
             dir_browser_state: ListState::default(),
+            loading: None,
             needs_redraw: true,
             layout,
             keymap,
@@ -763,45 +798,71 @@ impl App {
                 }
             }
         };
-        self.current_root = new_root.clone();
-        let (all_profiles, samples, tags, experiments) =
-            match load_catalog_from_path(&new_root) {
-                Ok(t) => t,
-                Err(_) => (vec![], vec![], vec![], vec![]),
-            };
-        self.all_profiles = all_profiles.clone();
-        self.samples = samples.clone();
-        self.tags = tags.clone();
-        self.experiments = experiments.clone();
-        self.selected_samples.clear();
-        self.selected_tags.clear();
-        self.selected_experiments.clear();
-        self.sample_state = ListState::default();
-        self.tag_state = ListState::default();
-        self.experiment_state = ListState::default();
-        self.table_state = TableState::default();
-        if !self.samples.is_empty() {
-            self.sample_state.select(Some(0));
-        }
-        if !self.tags.is_empty() {
-            self.tag_state.select(Some(0));
-        }
-        if !self.experiments.is_empty() {
-            self.experiment_state.select(Some(0));
-        }
-        self.filtered_profiles = Self::filter_profiles(
-            &self.all_profiles,
-            &self.selected_samples,
-            &self.selected_tags,
-            &self.selected_experiments,
-            &self.search_query,
-        );
-        if !self.filtered_profiles.is_empty() {
-            self.table_state.select(Some(0));
-        }
+        let (tx, rx) = mpsc::channel();
+        self.loading = Some(rx);
+        let root = new_root.clone();
+        thread::spawn(move || {
+            let result = load_catalog_from_path(&root).map_err(|e| e.to_string());
+            let _ = tx.send((root, result));
+        });
         self.path_input.clear();
         self.set_mode_normal();
         self.needs_redraw = true;
+    }
+
+    pub fn try_complete_loading(&mut self) -> bool {
+        let Some(rx) = &self.loading else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok((new_root, Ok((all_profiles, samples, tags, experiments)))) => {
+                self.current_root = new_root;
+                self.all_profiles = all_profiles;
+                self.samples = samples;
+                self.tags = tags;
+                self.experiments = experiments;
+                self.selected_samples.clear();
+                self.selected_tags.clear();
+                self.selected_experiments.clear();
+                self.sample_state = ListState::default();
+                self.tag_state = ListState::default();
+                self.experiment_state = ListState::default();
+                self.table_state = TableState::default();
+                if !self.samples.is_empty() {
+                    self.sample_state.select(Some(0));
+                }
+                if !self.tags.is_empty() {
+                    self.tag_state.select(Some(0));
+                }
+                if !self.experiments.is_empty() {
+                    self.experiment_state.select(Some(0));
+                }
+                self.filtered_profiles = Self::filter_profiles(
+                    &self.all_profiles,
+                    &self.selected_samples,
+                    &self.selected_tags,
+                    &self.selected_experiments,
+                    &self.search_query,
+                );
+                if !self.filtered_profiles.is_empty() {
+                    self.table_state.select(Some(0));
+                }
+                self.loading = None;
+                self.needs_redraw = true;
+                true
+            }
+            Ok((_new_root, Err(_))) => {
+                self.loading = None;
+                self.needs_redraw = true;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.loading = None;
+                self.needs_redraw = true;
+                true
+            }
+        }
     }
 
     pub fn list_first(&mut self) {

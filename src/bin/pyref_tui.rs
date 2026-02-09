@@ -11,10 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tui::terminal_guard::install_panic_hook();
 
     let config = tui::TuiConfig::load_or_default();
-    let current_root = config
-        .last_root
-        .clone()
-        .unwrap_or_else(|| "/path/to/experiments".to_string());
+    let current_root = config.last_root.clone().unwrap_or_else(String::new);
 
     let poll_duration = config
         .poll_interval_ms

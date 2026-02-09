@@ -1,6 +1,7 @@
 use polars::{lazy::prelude::*, prelude::*};
 use rayon::prelude::*;
 use std::fs;
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use crate::errors::FitsLoaderError;
@@ -310,6 +311,23 @@ pub fn read_experiment_metadata(
         )));
     }
     read_multiple_fits_metadata(entries, header_items)
+}
+
+pub fn read_catalog_parquet(path: &Path) -> Result<DataFrame, FitsLoaderError> {
+    let file = fs::File::open(path).map_err(FitsLoaderError::IoError)?;
+    ParquetReader::new(file)
+        .finish()
+        .map_err(|e| FitsLoaderError::FitsError(e.to_string()))
+}
+
+pub fn write_catalog_parquet(df: &DataFrame, path: &Path) -> Result<(), FitsLoaderError> {
+    let file = fs::File::create(path).map_err(FitsLoaderError::IoError)?;
+    let mut writer = BufWriter::new(file);
+    let mut df_mut = df.clone();
+    ParquetWriter::new(&mut writer)
+        .finish(&mut df_mut)
+        .map_err(|e| FitsLoaderError::FitsError(e.to_string()))?;
+    Ok(())
 }
 
 /// Reads multiple specific FITS files and combines them into a single DataFrame.

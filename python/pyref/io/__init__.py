@@ -18,9 +18,37 @@ FITS Files
 - :func:`~pyref.io.read_experiment`: Read all FITS files from a directory or based on a
         pattern.
 
+Experiment catalog and discovery
+-------------------------------
+- :func:`~pyref.io.discover_fits`: Discover FITS files under a root path (flat or recursive).
+- :func:`~pyref.io.parse_fits_stem`: Parse a FITS filename stem into sample_name, tag, experiment_number, frame_number.
+- :func:`~pyref.io.build_catalog`: Build a per-file catalog DataFrame (names-only or with headers).
+- :func:`~pyref.io.scan_view`: Aggregate catalog into a per-scan view (file_count, energy/Q range).
+- :func:`~pyref.io.experiment_summary`: Quick view of an experiment directory (scan summary table).
+- :func:`~pyref.io.filter_catalog_paths`: Filter catalog by sample_name, tag, or experiment number(s).
+
 See the specific function documentation for more details on usage and parameters.
 """
 
+from pyref.io.experiment_names import (
+    ParsedFitsName,
+    build_catalog,
+    discover_fits,
+    experiment_summary,
+    filter_catalog_paths,
+    parse_fits_stem,
+    scan_view,
+)
 from pyref.io.readers import read_experiment, read_fits
 
-__all__ = ["read_experiment", "read_fits"]
+__all__ = [
+    "ParsedFitsName",
+    "build_catalog",
+    "discover_fits",
+    "experiment_summary",
+    "filter_catalog_paths",
+    "parse_fits_stem",
+    "read_experiment",
+    "read_fits",
+    "scan_view",
+]

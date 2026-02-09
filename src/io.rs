@@ -4,9 +4,44 @@ use astrors_fork::io::hdus::{
 };
 use ndarray::{ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use polars::prelude::*;
+use regex::Regex;
 use std::ops::Mul;
 
 use crate::errors::FitsLoaderError;
+
+#[derive(Debug, Clone)]
+pub struct ParsedFitsStem {
+    pub file_stem: String,
+    pub sample_name: String,
+    pub tag: Option<String>,
+    pub experiment_number: i64,
+    pub frame_number: i64,
+}
+
+pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
+    let stem = stem.trim();
+    let re = Regex::new(r"^(.+?)[\s\-_]?(\d{5})-(\d{5})$").ok()?;
+    let cap = re.captures(stem)?;
+    let base = cap.get(1)?.as_str().trim();
+    let exp_str = cap.get(2)?.as_str();
+    let frame_str = cap.get(3)?.as_str();
+    let experiment_number: i64 = exp_str.parse().ok()?;
+    let frame_number: i64 = frame_str.parse().ok()?;
+    let (sample_name, tag) = if base.contains('_') {
+        let parts: Vec<&str> = base.split('_').collect();
+        let (last, rest) = parts.split_last()?;
+        (rest.join("_"), Some((*last).to_string()))
+    } else {
+        (base.to_string(), None)
+    };
+    Some(ParsedFitsStem {
+        file_stem: stem.to_string(),
+        sample_name,
+        tag,
+        experiment_number,
+        frame_number,
+    })
+}
 
 pub fn q(lam: f64, theta: f64) -> f64 {
     let theta = theta;
@@ -382,9 +417,79 @@ pub fn process_metadata(
 }
 
 pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
-    // Extract just the file name without extension
     let file_name = path.file_stem().unwrap().to_str().unwrap_or("");
+    let mut columns = vec![Column::new("file_name".into(), vec![file_name.to_string()])];
+    match parse_fits_stem(file_name) {
+        Some(p) => {
+            columns.push(Column::new("sample_name".into(), vec![p.sample_name]));
+            let tag_series = Series::from_iter(std::iter::once(p.tag.as_deref()))
+                .with_name("tag")
+                .into_column();
+            columns.push(tag_series);
+            columns.push(Column::new("experiment_number".into(), vec![p.experiment_number]));
+            columns.push(Column::new("frame_number".into(), vec![p.frame_number]));
+        }
+        None => {
+            columns.push(Column::new("sample_name".into(), vec!["".to_string()]));
+            columns.push(
+                Series::from_iter(std::iter::once(Option::<&str>::None))
+                    .with_name("tag")
+                    .into_column(),
+            );
+            columns.push(Column::new("experiment_number".into(), vec![0i64]));
+            columns.push(Column::new("frame_number".into(), vec![0i64]));
+        }
+    }
+    columns
+}
 
-    // Just return the file name directly, without extracting frame numbers or scan IDs
-    vec![Column::new("file_name".into(), vec![file_name])]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_fits_stem_znpc_variants() {
+        let cases = [
+            ("ZnPc_rt81041-00001", "ZnPc", Some("rt"), 81041, 1),
+            ("ZnPc_rt_81041-00001", "ZnPc", Some("rt"), 81041, 1),
+            ("ZnPc_rt 81041-00001", "ZnPc", Some("rt"), 81041, 1),
+            ("ZnPc_rt-81041-00001", "ZnPc", Some("rt"), 81041, 1),
+        ];
+        for (stem, sample, tag, exp_num, frame_num) in cases {
+            let p = parse_fits_stem(stem).expect(stem);
+            assert_eq!(p.sample_name, sample, "stem: {}", stem);
+            assert_eq!(p.tag.as_deref(), tag, "stem: {}", stem);
+            assert_eq!(p.experiment_number, exp_num, "stem: {}", stem);
+            assert_eq!(p.frame_number, frame_num, "stem: {}", stem);
+        }
+    }
+
+    #[test]
+    fn test_parse_fits_stem_ps_pmma() {
+        let p = parse_fits_stem("ps_pmma_rt 81041-00001").expect("should parse");
+        assert_eq!(p.sample_name, "ps_pmma");
+        assert_eq!(p.tag.as_deref(), Some("rt"));
+        assert_eq!(p.experiment_number, 81041);
+        assert_eq!(p.frame_number, 1);
+    }
+
+    #[test]
+    fn test_parse_fits_stem_monlayerjune() {
+        let p = parse_fits_stem("monlayerjune 81041-00007").expect("should parse");
+        assert_eq!(p.sample_name, "monlayerjune");
+        assert_eq!(p.tag, None);
+        assert_eq!(p.experiment_number, 81041);
+        assert_eq!(p.frame_number, 7);
+        let p2 = parse_fits_stem("monlayerjune 81041-00001").expect("should parse");
+        assert_eq!(p2.sample_name, "monlayerjune");
+        assert_eq!(p2.tag, None);
+        assert_eq!(p2.frame_number, 1);
+    }
+
+    #[test]
+    fn test_parse_fits_stem_invalid() {
+        assert!(parse_fits_stem("notavalidstem").is_none());
+        assert!(parse_fits_stem("short1-00001").is_none());
+        assert!(parse_fits_stem("sample12345-678").is_none());
+    }
 }

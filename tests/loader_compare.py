@@ -8,6 +8,7 @@ from astropy.io import fits
 from astropy.io.fits import ImageHDU
 from typing import cast
 
+from pyref import get_data_path
 from pyref.io import read_fits
 
 
@@ -82,7 +83,7 @@ def describe(path: Path) -> None:
 
 def main() -> None:
     """Run comparisons on selected FITS files."""
-    base = Path(__file__).resolve().parent / "data"
+    base = get_data_path()
     targets = [
         base / "monlayerjune 81041-00001.fits",
         base / "monlayerjune 81041-00325.fits",

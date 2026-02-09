@@ -83,9 +83,10 @@ def _format_value(value: Any) -> str:
 
 def main() -> None:
     """Combine diff stats with FITS metadata."""
+    from pyref import get_data_path
+
     suffix = os.getenv("ANALYSIS_SUFFIX", "")
-    base = Path(__file__).resolve().parent
-    data_dir = base / "data"
+    data_dir = get_data_path()
     summary = load_diff_summary(data_dir / f"npz_diff_summary{suffix}.csv")
     keys = [
         "EXPOSURE",

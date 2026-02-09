@@ -13,6 +13,9 @@ __pycache__/
 # data
 test/
 *.csv
+**/*.fits
+**/*.png
+**/*.npz
 
 # Distribution / packaging
 .Python

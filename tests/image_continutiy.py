@@ -4,14 +4,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.io import fits
-from pyref.pyref import py_read_fits
 
-# grab all the fits files in the tests/data directory and read them
-# it the images are not square, then generate a plot of them
+from pyref import get_data_path
+from pyref.pyref import py_read_fits
 
 suffix = os.getenv("ANALYSIS_SUFFIX", "")
 save_all = bool(suffix)
-data_dir = Path("/home/hduva/projects/pyref/tests/data")
+data_dir = get_data_path()
 fits_files = list(data_dir.glob("*.fits"))
 
 for i, fits_file in enumerate(fits_files):

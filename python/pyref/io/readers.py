@@ -4,6 +4,7 @@ Module contains tools for processing files into DataFrames or other objects.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -21,12 +22,19 @@ if TYPE_CHECKING:
 type FilePath = str | Path
 type FileDirectory = str | Path
 type FilePathList = list[str] | list[Path]
+type RegexPattern = str | re.Pattern[str]
+
+
+def _stem_matches(path: Path, pattern: RegexPattern) -> bool:
+    compiled = re.compile(pattern) if isinstance(pattern, str) else pattern
+    return compiled.search(path.stem) is not None
 
 
 def read_fits(
     file_path: FilePath,
     headers: list[str] | None = None,
     *,
+    pattern: RegexPattern | None = None,
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
@@ -39,6 +47,10 @@ def read_fits(
     headers : list[str] | None, optional
         List of header values to parse from the header; use `None` to read all header
         values, by default None
+    pattern : str | re.Pattern[str] | None, optional
+        Regex applied to file stem (filename without .fits). Only paths whose stem
+        matches are read. E.g. ``r"^znpc"`` or ``r"^ZnPc"`` to match stems starting
+        with znpc. Ignored when None.
 
     Returns
     -------
@@ -50,7 +62,8 @@ def read_fits(
     FileNotFoundError
         If the file_path does not point to a valid file.
     ValueError
-        If the file is not a FITS file (does not end with .fits).
+        If the file is not a FITS file (does not end with .fits), or if pattern
+        is set and no paths match.
 
     Notes
     -----
@@ -77,29 +90,35 @@ def read_fits(
     ...     headers=["DATE", "Beamline Energy", "EXPOSURE"],
     ... )
     >>> print(df)
+    Filter by regex on file stem (e.g. only stems starting with znpc):
+    >>> df = read_fits(path_list, headers=[...], pattern=r"^znpc")
     """
     if isinstance(file_path, list):
-        # Handle list of file paths
-        file_paths_str: list[str] = []
+        file_paths_str = []
         for fp in file_path:
-            file_path_obj = Path(fp)
-            if not file_path_obj.is_file():
-                msg = f"{file_path_obj} is not a valid file."
+            p = Path(fp)
+            if not p.is_file():
+                msg = f"{p} is not a valid file."
                 raise FileNotFoundError(msg)
-            if file_path_obj.suffix != ".fits":
-                msg = f"{file_path_obj} is not a FITS file."
+            if p.suffix != ".fits":
+                msg = f"{p} is not a FITS file."
                 raise ValueError(msg)
-            file_paths_str.append(str(file_path_obj))
+            if pattern is None or _stem_matches(p, pattern):
+                file_paths_str.append(str(p))
+        if pattern is not None and not file_paths_str:
+            msg = "No paths match the given pattern."
+            raise ValueError(msg)
         polars_data = py_read_multiple_fits(file_paths_str, headers)
-
     else:
-        # Handle single file path
         file_path_obj = Path(file_path)
         if not file_path_obj.is_file():
             msg = f"{file_path_obj} is not a valid file."
             raise FileNotFoundError(msg)
         if file_path_obj.suffix != ".fits":
             msg = f"{file_path_obj} is not a FITS file."
+            raise ValueError(msg)
+        if pattern is not None and not _stem_matches(file_path_obj, pattern):
+            msg = "File stem does not match the given pattern."
             raise ValueError(msg)
         polars_data = py_read_fits(str(file_path_obj), headers)
 
@@ -114,6 +133,8 @@ def read_experiment(
     headers: list[str] | None = None,
     pattern: str | None = None,
     *,
+    regex: RegexPattern | None = None,
+    recursive: bool = False,
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
@@ -122,12 +143,21 @@ def read_experiment(
     Parameters
     ----------
     file_path : str | Path | FileDirectory
-        Path to the FITS files to read.
+        Path to the directory containing FITS files.
     headers : list[str] | None, optional
         List of header values to parse from the header use `None` to read all header
         values, by default None
     pattern : str | None, optional
-        Pattern to search in directory, by default None
+        Glob pattern to match filenames (e.g. ``"*85684*"``). Passed to the backend
+        when regex is not set. By default None (all *.fits in directory).
+    regex : str | re.Pattern[str] | None, optional
+        Regex applied to file stem. Only files whose stem matches are read.
+        E.g. ``r"^znpc"`` or ``r"^ZnPc"``. When set, discovery uses recursive
+        if recursive is True. By default None.
+    recursive : bool, optional
+        When regex is set, if True search recursively under file_path (rglob);
+        otherwise only direct children (glob). Ignored when regex is None.
+        By default False.
 
     Returns
     -------
@@ -137,9 +167,10 @@ def read_experiment(
     Raises
     ------
     FileNotFoundError
-        If the file_path does not point to a valid file.
+        If the file_path does not point to a valid directory.
     ValueError
-        If the file is not a FITS file (does not end with .fits).
+        If the file is not a FITS file (does not end with .fits), or if regex
+        is set and no files match.
 
     Notes
     -----
@@ -160,25 +191,37 @@ def read_experiment(
     Alternatively, you can read all the header values by setting `headers` to `None`:
     >>> df = read_experiment("path/to/directory", headers=None)
     >>> print(df)
-    And alternatively, you can read a specific pattern of files in the directory:
+    And alternatively, you can read a specific glob pattern of files in the directory:
     >>> df = read_experiment("path/to/directory", pattern="*85684*")
     >>> print(df)
+    Filter by regex on file stem (e.g. stems starting with znpc), optionally recursive:
+    >>> df = read_experiment("path/to/directory", headers=[...], regex=r"^znpc", recursive=True)
     """
     file_path_obj = Path(file_path)
-    if not pattern and not file_path_obj.is_dir():
+    if not file_path_obj.is_dir():
         msg = f"{file_path_obj} is not a valid directory."
         raise FileNotFoundError(msg)
     if headers is None:
         headers = []
-    if pattern:
-        polars_data = py_read_experiment_pattern(str(file_path_obj), pattern, headers)
 
+    if regex is not None:
+        if recursive:
+            paths = sorted(file_path_obj.rglob("*.fits"))
+        else:
+            paths = sorted(file_path_obj.glob("*.fits"))
+        paths = [p for p in paths if _stem_matches(p, regex)]
+        if not paths:
+            msg = "No FITS files match the given regex."
+            raise ValueError(msg)
+        polars_data = py_read_multiple_fits([str(p) for p in paths], headers)
+    elif pattern:
+        polars_data = py_read_experiment_pattern(str(file_path_obj), pattern, headers)
     else:
-        # Ensure it's at least one FITS file in the directory
         if not any(file_path_obj.glob("*.fits")):
             msg = f"{file_path_obj} does not contain any FITS files."
             raise FileNotFoundError(msg)
         polars_data = py_read_experiment(str(file_path_obj), headers)
+
     if engine == "pandas":
         return polars_data.to_pandas()
     elif engine == "polars":

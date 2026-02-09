@@ -15,7 +15,8 @@ import polars as pl
 from IPython.display import display
 from ipywidgets import VBox, interactive
 
-from pyref.io.readers import read_experiment
+from pyref.io.experiment_names import parse_fits_stem
+from pyref.io.readers import read_experiment, read_fits
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue
 
@@ -210,18 +211,23 @@ class PrsoxrLoader:
 
     Parameters
     ----------
-    directory : Path
-        Path to the directory containing the experiment data.
+    directory : Path | None
+        Path to the directory containing the experiment data. Required when
+        paths is None. When paths is provided, used as experiment root for
+        saving; if None, set to parent of first path.
     extra_keys : list[HeaderValue] | None, optional
         A list of extra header values to load from the data files, by default None.
+    paths : list[Path] | list[str] | None, optional
+        If provided, load only these FITS paths instead of discovering under directory.
+        directory may be None in that case.
     """
 
     def __init__(
         self,
-        directory: Path,
+        directory: Path | None = None,
         extra_keys: list[HeaderValue] | None = None,
+        paths: list[Path] | list[str] | None = None,
     ):
-        self.path: Path = Path(directory)
         default_keys: list[str] = [
             HeaderValue.BEAMLINE_ENERGY.hdu(),
             HeaderValue.EPU_POLARIZATION.hdu(),
@@ -232,12 +238,50 @@ class PrsoxrLoader:
         if extra_keys:
             default_keys.extend([key.hdu() for key in extra_keys])
 
-        self.meta: pl.DataFrame = cast(
-            "pl.DataFrame",
-            read_experiment(self.path, headers=default_keys, engine="polars"),
-        )
-        # using the mask
-        self.refl: pl.DataFrame = self.meta.select(
+        if paths is not None:
+            path_list = [Path(p).resolve() for p in paths]
+            if not path_list:
+                msg = "paths must not be empty."
+                raise ValueError(msg)
+            self.path = Path(directory).resolve() if directory is not None else path_list[0].parent
+            meta = read_fits(path_list, headers=default_keys, engine="polars")  # type: ignore[arg-type]
+            self.meta = cast("pl.DataFrame", meta)
+        else:
+            if directory is None:
+                msg = "directory is required when paths is not provided."
+                raise ValueError(msg)
+            self.path = Path(directory).resolve()
+            self.meta = cast(
+                "pl.DataFrame",
+                read_experiment(self.path, headers=default_keys, engine="polars"),
+            )
+
+        if "file_name" in self.meta.columns and "sample_name" not in self.meta.columns:
+            stems = self.meta.get_column("file_name")
+            sample_names: list[str] = []
+            tags: list[str | None] = []
+            exp_nums: list[int] = []
+            frame_nums: list[int] = []
+            for s in stems:
+                parsed = parse_fits_stem(str(s))
+                if parsed is None:
+                    sample_names.append("")
+                    tags.append(None)
+                    exp_nums.append(0)
+                    frame_nums.append(0)
+                else:
+                    sample_names.append(parsed.sample_name)
+                    tags.append(parsed.tag)
+                    exp_nums.append(parsed.experiment_number)
+                    frame_nums.append(parsed.frame_number)
+            self.meta = self.meta.with_columns(
+                pl.Series("sample_name", sample_names),
+                pl.Series("tag", tags),
+                pl.Series("experiment_number", exp_nums),
+                pl.Series("frame_number", frame_nums),
+            )
+
+        self.refl = self.meta.select(
             "file_name",
             "EPU Polarization",
             "Beamline Energy",

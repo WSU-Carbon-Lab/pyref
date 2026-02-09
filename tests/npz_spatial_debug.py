@@ -58,10 +58,12 @@ def render_debug(pyref_img: np.ndarray, astropy_img: np.ndarray, diff: np.ndarra
 
 def main() -> None:
     """Generate spatial debug plots for all NPZ bundles."""
+    from pyref import get_data_path
+
     suffix = os.getenv("ANALYSIS_SUFFIX", "")
-    base = Path(__file__).resolve().parent
-    npz_dir = base / "data" / f"npz{suffix}"
-    debug_dir = base / "data" / f"debug{suffix}"
+    data_dir = get_data_path()
+    npz_dir = data_dir / f"npz{suffix}"
+    debug_dir = data_dir / f"debug{suffix}"
     for path in sorted(npz_dir.glob("*.npz")):
         data = np.load(path)
         pyref_img = np.asarray(data["pyref_img"])

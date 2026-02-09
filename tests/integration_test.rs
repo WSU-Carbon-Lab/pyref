@@ -7,7 +7,7 @@ use pyref::{
 };
 
 // Test constants
-const TEST_DATA_DIR: &str = "./tests/data";
+const TEST_DATA_DIR: &str = "python/pyref/data";
 const HEADER_KEYS: &[&str] = &[
     "DATE",
     "Beamline Energy",
@@ -203,4 +203,32 @@ fn test_read_experiment_pattern() {
     println!("DataFrame schema: {:#?}", df.schema());
     println!("DataFrame shape: {:?}", df.shape());
     println!("DataFrame head: {:#?}", df.head(Some(5)));
+}
+
+#[test]
+fn test_read_fits_includes_parsed_filename_columns() {
+    let fits_files = get_all_test_fits_files();
+    assert!(
+        !fits_files.is_empty(),
+        "No .fits files found in test data directory"
+    );
+    let first_file = &fits_files[0];
+    let header_keys = header_keys_vec(0);
+    let result = read_fits(first_file.clone(), &header_keys);
+    assert!(result.is_ok(), "read_fits failed: {:?}", result.err());
+    let df = result.unwrap();
+    assert!(df.column("file_name").is_ok(), "Missing 'file_name' column");
+    assert!(df.column("sample_name").is_ok(), "Missing 'sample_name' column");
+    assert!(df.column("tag").is_ok(), "Missing 'tag' column");
+    assert!(df.column("experiment_number").is_ok(), "Missing 'experiment_number' column");
+    assert!(df.column("frame_number").is_ok(), "Missing 'frame_number' column");
+    let stem = first_file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if stem.starts_with("monlayerjune") && stem.contains("81041") {
+        let sample = df.column("sample_name").unwrap().str().unwrap().get(0).flatten();
+        let exp = df.column("experiment_number").unwrap().i64().unwrap().get(0);
+        let frame = df.column("frame_number").unwrap().i64().unwrap().get(0);
+        assert_eq!(sample, Some("monlayerjune"), "sample_name for monlayerjune stem");
+        assert_eq!(exp, Some(81041), "experiment_number");
+        assert!(frame.is_some(), "frame_number present");
+    }
 }

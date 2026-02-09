@@ -161,10 +161,12 @@ def _dataframe_to_markdown(df: pd.DataFrame) -> str:
 
 def main() -> None:
     """Generate metrics for all NPZ diff bundles."""
+    from pyref import get_data_path
+
     suffix = os.getenv("ANALYSIS_SUFFIX", "")
-    base = Path(__file__).resolve().parent
-    npz_dir = base / "data" / f"npz{suffix}"
-    output_dir = base / "data"
+    data_dir = get_data_path()
+    npz_dir = data_dir / f"npz{suffix}"
+    output_dir = data_dir
     records: list[dict[str, object]] = []
     for path in sorted(npz_dir.glob("*.npz")):
         records.append(summarize_file(path))

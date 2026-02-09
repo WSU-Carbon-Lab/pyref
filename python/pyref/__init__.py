@@ -9,6 +9,8 @@ faith effort to provide the same functionality as the original PRSoXR package, b
 a more modern and user-friendly interface, and rust bindings for I/O operations.
 """
 
+from pathlib import Path
+
 __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
 
@@ -17,11 +19,18 @@ from pyref.loader import PrsoxrLoader
 from pyref.masking import InteractiveImageMasker
 from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std
 
+
+def get_data_path() -> Path:
+    """Return the path to the package test/fixture data directory."""
+    return Path(__file__).resolve().parent / "data"
+
+
 __all__ = [
     "InteractiveImageMasker",
     "PrsoxrLoader",
     "err_prop_div",
     "err_prop_mult",
+    "get_data_path",
     "read_experiment",
     "read_fits",
     "weighted_mean",

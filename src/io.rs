@@ -1,13 +1,10 @@
-use astrors_fork::io::hdus::{
-    image::{imagehdu::ImageHDU, ImageData},
-    primaryhdu::PrimaryHDU,
-};
 use ndarray::{ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use polars::prelude::*;
 use regex::Regex;
 use std::ops::Mul;
 
 use crate::errors::FitsLoaderError;
+use crate::fits::{ImageHdu, PrimaryHdu};
 
 #[derive(Debug, Clone)]
 pub struct ParsedFitsStem {
@@ -188,7 +185,7 @@ pub fn add_calculated_domains(lzf: LazyFrame) -> DataFrame {
 /// # Returns
 ///
 /// A `Result` containing either the DataFrame or a `FitsLoaderError`.
-pub fn process_image(img: &ImageHDU) -> Result<Vec<Column>, FitsLoaderError> {
+pub fn process_image(img: &ImageHdu) -> Result<Vec<Column>, FitsLoaderError> {
     let bzero = img
         .header
         .get_card("BZERO")
@@ -196,55 +193,40 @@ pub fn process_image(img: &ImageHDU) -> Result<Vec<Column>, FitsLoaderError> {
         .value
         .as_int()
         .ok_or_else(|| FitsLoaderError::FitsError("BZERO not an integer".into()))?;
-
-    match &img.data {
-        ImageData::I16(image) => {
-            let data = image.map(|&x| i64::from(x as i64 + bzero));
-            // Implement row-by-row background subtraction
-            let subtracted = subtract_background(&data);
-            // Locate the index tuple with the maximum value
-            // Find the coordinates of the maximum value in the 2D array
-            let max_coords = {
-                let mut max_coords = (0, 0);
-                let mut max_val = i64::MIN;
-
-                for (idx, &val) in subtracted.indexed_iter() {
-                    if val > max_val {
-                        max_val = val;
-                        max_coords = (idx[0], idx[1]);
-                    }
-                }
-
-                max_coords
-            };
-
-            // Check if the beam is too close to any edge (top, bottom, left, right)
-            let msg = if max_coords.0 < 20
-                || max_coords.0 > (subtracted.len_of(Axis(0)) - 20)
-                || max_coords.1 < 20
-                || max_coords.1 > (subtracted.len_of(Axis(1)) - 20)
-            {
-                "Simple Detection Error: Beam is too close to the edge"
-            } else {
-                ""
-            };
-            // Calculate a simple reflectivity result from the subtracted data
-            let (db_sum, scaled_bg) = { simple_reflectivity(&subtracted, max_coords) };
-
-            Ok(vec![
-                col_from_array("RAW".into(), data.clone()).unwrap(),
-                col_from_array("SUBTRACTED".into(), subtracted.clone()).unwrap(),
-                Column::new("Simple Spot X".into(), vec![max_coords.0 as u64]),
-                Column::new("Simple Spot Y".into(), vec![max_coords.1 as u64]),
-                Column::new(
-                    "Simple Reflectivity".into(),
-                    vec![(db_sum - scaled_bg) as f64],
-                ),
-                Series::new("status".into(), vec![msg.to_string()]).into_column(),
-            ])
+    let data = img.data.map(|&x| x as i64 + bzero).into_dyn();
+    let subtracted = subtract_background(&data);
+    let max_coords = {
+        let mut max_coords = (0, 0);
+        let mut max_val = i64::MIN;
+        for (idx, &val) in subtracted.indexed_iter() {
+            if val > max_val {
+                max_val = val;
+                max_coords = (idx[0], idx[1]);
+            }
         }
-        _ => Err(FitsLoaderError::UnsupportedImageData),
-    }
+        max_coords
+    };
+    let msg = if max_coords.0 < 20
+        || max_coords.0 > (subtracted.len_of(Axis(0)) - 20)
+        || max_coords.1 < 20
+        || max_coords.1 > (subtracted.len_of(Axis(1)) - 20)
+    {
+        "Simple Detection Error: Beam is too close to the edge"
+    } else {
+        ""
+    };
+    let (db_sum, scaled_bg) = simple_reflectivity(&subtracted, max_coords);
+    Ok(vec![
+        col_from_array("RAW".into(), data.clone())?,
+        col_from_array("SUBTRACTED".into(), subtracted.clone())?,
+        Column::new("Simple Spot X".into(), vec![max_coords.0 as u64]),
+        Column::new("Simple Spot Y".into(), vec![max_coords.1 as u64]),
+        Column::new(
+            "Simple Reflectivity".into(),
+            vec![(db_sum - scaled_bg) as f64],
+        ),
+        Series::new("status".into(), vec![msg.to_string()]).into_column(),
+    ])
 }
 
 fn simple_reflectivity(
@@ -304,7 +286,11 @@ fn simple_reflectivity(
 fn subtract_background(
     data: &ArrayBase<OwnedRepr<i64>, Dim<IxDynImpl>>,
 ) -> ArrayBase<OwnedRepr<i64>, Dim<IxDynImpl>> {
-    // Get a view of the data with 5 pixels sliced from each side
+    let rows = data.len_of(Axis(0));
+    let cols = data.len_of(Axis(1));
+    if rows < 11 || cols < 41 {
+        return data.to_owned();
+    }
     let view = data.slice(ndarray::s![5..-5, 5..-5]);
     let rows = view.len_of(Axis(0));
     let cols = view.len_of(Axis(1));
@@ -347,7 +333,7 @@ fn subtract_background(
 }
 
 pub fn process_metadata(
-    hdu: &PrimaryHDU,
+    hdu: &PrimaryHdu,
     keys: &Vec<String>,
 ) -> Result<Vec<Column>, FitsLoaderError> {
     if keys.is_empty() {
@@ -423,7 +409,7 @@ pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
         Some(p) => {
             columns.push(Column::new("sample_name".into(), vec![p.sample_name]));
             let tag_series = Series::from_iter(std::iter::once(p.tag.as_deref()))
-                .with_name("tag")
+                .with_name("tag".into())
                 .into_column();
             columns.push(tag_series);
             columns.push(Column::new("experiment_number".into(), vec![p.experiment_number]));
@@ -433,7 +419,7 @@ pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
             columns.push(Column::new("sample_name".into(), vec!["".to_string()]));
             columns.push(
                 Series::from_iter(std::iter::once(Option::<&str>::None))
-                    .with_name("tag")
+                    .with_name("tag".into())
                     .into_column(),
             );
             columns.push(Column::new("experiment_number".into(), vec![0i64]));

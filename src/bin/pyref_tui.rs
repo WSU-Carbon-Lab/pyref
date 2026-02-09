@@ -143,6 +143,10 @@ fn handle_event(app: &mut tui::App, key: crossterm::event::KeyEvent) -> bool {
         tui::keymap::Action::Quit => return true,
         tui::keymap::Action::FocusNext => app.focus_next(),
         tui::keymap::Action::FocusPrev => app.focus_prev(),
+        tui::keymap::Action::FocusSample => app.focus_sample(),
+        tui::keymap::Action::FocusTag => app.focus_tag(),
+        tui::keymap::Action::FocusExperiment => app.focus_experiment(),
+        tui::keymap::Action::FocusBrowser => app.focus_browser(),
         tui::keymap::Action::MoveDown => app.list_down(),
         tui::keymap::Action::MoveUp => app.list_up(),
         tui::keymap::Action::MoveFirst => app.list_first(),
@@ -151,7 +155,14 @@ fn handle_event(app: &mut tui::App, key: crossterm::event::KeyEvent) -> bool {
         tui::keymap::Action::Cancel => {}
         tui::keymap::Action::Rename => app.set_mode_rename(),
         tui::keymap::Action::Retag => app.set_mode_retag(),
-        tui::keymap::Action::Open => {}
+        tui::keymap::Action::Open => {
+            if matches!(
+                app.focus,
+                tui::Focus::SampleList | tui::Focus::TagList | tui::Focus::ExperimentList
+            ) {
+                app.toggle_filter();
+            }
+        }
         tui::keymap::Action::None => {}
     }
     false

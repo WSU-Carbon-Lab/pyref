@@ -1,10 +1,17 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+pub const CMD_SYMBOL: &str = "\u{2318}";
+pub const CTRL_SYMBOL: &str = "\u{2303}";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Quit,
     FocusNext,
     FocusPrev,
+    FocusSample,
+    FocusTag,
+    FocusExperiment,
+    FocusBrowser,
     MoveDown,
     MoveUp,
     MoveFirst,
@@ -23,8 +30,12 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let shift = mods.contains(KeyModifiers::SHIFT);
     let alt = mods.contains(KeyModifiers::ALT);
+    let super_ = mods.contains(KeyModifiers::SUPER);
 
     if keymap == "emacs" {
+        if (ctrl || super_) && !shift && !alt && code == KeyCode::Char('k') {
+            return Action::Search;
+        }
         if ctrl && !shift && !alt {
             match code {
                 KeyCode::Char('c') => return Action::Quit,
@@ -32,6 +43,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('n') => return Action::MoveDown,
                 KeyCode::Char('p') => return Action::MoveUp,
                 KeyCode::Char('s') => return Action::Search,
+                KeyCode::Char('k') => return Action::Search,
                 _ => {}
             }
         }
@@ -50,10 +62,13 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
         if code == KeyCode::Esc {
             return Action::Cancel;
         }
-        if !ctrl && !alt {
+        if !ctrl && !alt && !super_ {
             match code {
+                KeyCode::Char('s') if !shift => return Action::FocusSample,
+                KeyCode::Char('t') => return if shift { Action::Retag } else { Action::FocusTag },
+                KeyCode::Char('e') => return Action::FocusExperiment,
+                KeyCode::Char('b') => return Action::FocusBrowser,
                 KeyCode::Char('r') => return Action::Rename,
-                KeyCode::Char('t') => return Action::Retag,
                 _ => {}
             }
         }
@@ -61,6 +76,9 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     }
 
     if keymap == "vi" {
+        if (ctrl || super_) && !shift && !alt && code == KeyCode::Char('k') {
+            return Action::Search;
+        }
         if code == KeyCode::Char('q') && mods.is_empty() {
             return Action::Quit;
         }
@@ -88,10 +106,17 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
         if code == KeyCode::Enter {
             return Action::Open;
         }
-        if code == KeyCode::Char('r') && mods.is_empty() {
-            return Action::Rename;
+        if mods.is_empty() {
+            match code {
+                KeyCode::Char('s') => return Action::FocusSample,
+                KeyCode::Char('t') => return Action::FocusTag,
+                KeyCode::Char('e') => return Action::FocusExperiment,
+                KeyCode::Char('b') => return Action::FocusBrowser,
+                KeyCode::Char('r') => return Action::Rename,
+                _ => {}
+            }
         }
-        if code == KeyCode::Char('t') && mods.is_empty() {
+        if code == KeyCode::Char('R') && shift {
             return Action::Retag;
         }
     }
@@ -99,32 +124,67 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     Action::None
 }
 
-pub fn keybind_bar_lines_vi() -> [(String, String); 10] {
+pub fn search_bar_hint(keymap: &str) -> String {
+    if keymap == "emacs" {
+        format!("{}K Search", CMD_SYMBOL)
+    } else {
+        format!("{}K or / Search", CMD_SYMBOL)
+    }
+}
+
+pub fn keybind_bar_lines_vi() -> [(String, String); 12] {
     [
-        ("j".to_string(), "Down".to_string()),
-        ("k".to_string(), "Up".to_string()),
-        ("gg".to_string(), "Top".to_string()),
-        ("G".to_string(), "End".to_string()),
+        ("s".to_string(), "Sample".to_string()),
+        ("t".to_string(), "Tag".to_string()),
+        ("e".to_string(), "Experiment".to_string()),
+        ("b".to_string(), "Browser".to_string()),
+        ("j/k".to_string(), "Down/Up".to_string()),
+        ("gg/G".to_string(), "Top/End".to_string()),
         ("Tab".to_string(), "Focus".to_string()),
-        ("/".to_string(), "Search".to_string()),
+        (format!("{}K", CMD_SYMBOL), "Search".to_string()),
         ("r".to_string(), "Rename".to_string()),
-        ("t".to_string(), "Retag".to_string()),
+        ("R".to_string(), "Retag".to_string()),
         ("Enter".to_string(), "Open".to_string()),
         ("q".to_string(), "Quit".to_string()),
     ]
 }
 
-pub fn keybind_bar_lines_emacs() -> [(String, String); 10] {
+pub fn keybind_bar_lines_emacs() -> [(String, String); 12] {
     [
-        ("^N".to_string(), "Down".to_string()),
-        ("^P".to_string(), "Up".to_string()),
+        ("s".to_string(), "Sample".to_string()),
+        ("t".to_string(), "Tag".to_string()),
+        ("e".to_string(), "Experiment".to_string()),
+        ("b".to_string(), "Browser".to_string()),
+        ("^N/^P".to_string(), "Down/Up".to_string()),
         ("Tab".to_string(), "Focus".to_string()),
-        ("^S".to_string(), "Search".to_string()),
+        (format!("{}K", CMD_SYMBOL), "Search".to_string()),
         ("r".to_string(), "Rename".to_string()),
-        ("t".to_string(), "Retag".to_string()),
         ("Enter".to_string(), "Open".to_string()),
         ("^G".to_string(), "Cancel".to_string()),
-        ("^X^C".to_string(), "Quit".to_string()),
+        (format!("{}X{}C", CTRL_SYMBOL, CTRL_SYMBOL), "Quit".to_string()),
         ("".to_string(), "".to_string()),
     ]
+}
+
+pub fn search_line_hotkeys(keymap: &str) -> String {
+    let pairs = if keymap == "emacs" {
+        [
+            ("s", "Sample"),
+            ("t", "Tag"),
+            ("e", "Experiment"),
+            ("b", "Browser"),
+        ]
+    } else {
+        [
+            ("s", "Sample"),
+            ("t", "Tag"),
+            ("e", "Experiment"),
+            ("b", "Browser"),
+        ]
+    };
+    pairs
+        .iter()
+        .map(|(k, d)| format!("{} {}", k, d))
+        .collect::<Vec<_>>()
+        .join("  ")
 }

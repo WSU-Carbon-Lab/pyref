@@ -2,6 +2,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ratatui::widgets::{ListState, TableState};
 use std::cmp;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct ProfileRow {
@@ -149,6 +150,9 @@ pub struct App {
     pub samples: Vec<String>,
     pub tags: Vec<String>,
     pub experiments: Vec<(u32, String)>,
+    pub selected_samples: HashSet<String>,
+    pub selected_tags: HashSet<String>,
+    pub selected_experiments: HashSet<u32>,
     pub sample_state: ListState,
     pub tag_state: ListState,
     pub experiment_state: ListState,
@@ -183,7 +187,16 @@ impl App {
         if !experiments.is_empty() {
             experiment_state.select(Some(0));
         }
-        let filtered = Self::filter_profiles(&all_profiles, None, None, None, "");
+        let selected_samples = HashSet::new();
+        let selected_tags = HashSet::new();
+        let selected_experiments = HashSet::new();
+        let filtered = Self::filter_profiles(
+            &all_profiles,
+            &selected_samples,
+            &selected_tags,
+            &selected_experiments,
+            "",
+        );
         if !filtered.is_empty() {
             table_state.select(Some(0));
         }
@@ -193,6 +206,9 @@ impl App {
             samples,
             tags,
             experiments,
+            selected_samples,
+            selected_tags,
+            selected_experiments,
             sample_state,
             tag_state,
             experiment_state,
@@ -211,9 +227,9 @@ impl App {
 
     fn filter_profiles(
         profiles: &[ProfileRow],
-        sample: Option<&str>,
-        tag: Option<&str>,
-        experiment: Option<u32>,
+        samples: &HashSet<String>,
+        tags: &HashSet<String>,
+        experiments: &HashSet<u32>,
         search: &str,
     ) -> Vec<ProfileRow> {
         let search_lower = search.to_lowercase();
@@ -221,9 +237,9 @@ impl App {
         profiles
             .iter()
             .filter(|r| {
-                let sample_ok = sample.map_or(true, |s| r.sample == s);
-                let tag_ok = tag.map_or(true, |t| r.tag == t);
-                let exp_ok = experiment.map_or(true, |e| r.experiment_number == e);
+                let sample_ok = samples.is_empty() || samples.contains(&r.sample);
+                let tag_ok = tags.is_empty() || tags.contains(&r.tag);
+                let exp_ok = experiments.is_empty() || experiments.contains(&r.experiment_number);
                 let search_ok = if search_lower.is_empty() {
                     true
                 } else {
@@ -244,27 +260,12 @@ impl App {
             .collect()
     }
 
-    pub fn selected_sample(&self) -> Option<String> {
-        self.sample_state.selected().map(|i| self.samples.get(i).cloned()).flatten()
-    }
-
-    pub fn selected_tag(&self) -> Option<String> {
-        self.tag_state.selected().map(|i| self.tags.get(i).cloned()).flatten()
-    }
-
-    pub fn selected_experiment(&self) -> Option<u32> {
-        self.experiment_state.selected().map(|i| self.experiments.get(i).map(|(n, _)| *n)).flatten()
-    }
-
     pub fn refresh_filtered(&mut self) {
-        let s = self.selected_sample();
-        let t = self.selected_tag();
-        let e = self.selected_experiment();
         self.filtered_profiles = Self::filter_profiles(
             &self.all_profiles,
-            s.as_deref(),
-            t.as_deref(),
-            e,
+            &self.selected_samples,
+            &self.selected_tags,
+            &self.selected_experiments,
             &self.search_query,
         );
         self.clamp_selections();
@@ -320,6 +321,22 @@ impl App {
         self.focus = FOCUS_ORDER[(idx + FOCUS_ORDER.len() - 1) % FOCUS_ORDER.len()];
     }
 
+    pub fn focus_sample(&mut self) {
+        self.focus = Focus::SampleList;
+    }
+
+    pub fn focus_tag(&mut self) {
+        self.focus = Focus::TagList;
+    }
+
+    pub fn focus_experiment(&mut self) {
+        self.focus = Focus::ExperimentList;
+    }
+
+    pub fn focus_browser(&mut self) {
+        self.focus = Focus::Table;
+    }
+
     pub fn list_down(&mut self) {
         match self.focus {
             Focus::SampleList => {
@@ -327,7 +344,6 @@ impl App {
                 if len > 0 {
                     let i = self.sample_state.selected().unwrap_or(0);
                     self.sample_state.select(Some((i + 1) % len));
-                    self.refresh_filtered();
                 }
             }
             Focus::TagList => {
@@ -335,7 +351,6 @@ impl App {
                 if len > 0 {
                     let i = self.tag_state.selected().unwrap_or(0);
                     self.tag_state.select(Some((i + 1) % len));
-                    self.refresh_filtered();
                 }
             }
             Focus::ExperimentList => {
@@ -343,7 +358,6 @@ impl App {
                 if len > 0 {
                     let i = self.experiment_state.selected().unwrap_or(0);
                     self.experiment_state.select(Some((i + 1) % len));
-                    self.refresh_filtered();
                 }
             }
             Focus::Table => {
@@ -364,7 +378,6 @@ impl App {
                 if len > 0 {
                     let i = self.sample_state.selected().unwrap_or(0);
                     self.sample_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
-                    self.refresh_filtered();
                 }
             }
             Focus::TagList => {
@@ -372,7 +385,6 @@ impl App {
                 if len > 0 {
                     let i = self.tag_state.selected().unwrap_or(0);
                     self.tag_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
-                    self.refresh_filtered();
                 }
             }
             Focus::ExperimentList => {
@@ -380,7 +392,6 @@ impl App {
                 if len > 0 {
                     let i = self.experiment_state.selected().unwrap_or(0);
                     self.experiment_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
-                    self.refresh_filtered();
                 }
             }
             Focus::Table => {
@@ -388,6 +399,48 @@ impl App {
                 if len > 0 {
                     let i = self.table_state.selected().unwrap_or(0);
                     self.table_state.select(Some(if i == 0 { 0 } else { i - 1 }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn toggle_filter(&mut self) {
+        match self.focus {
+            Focus::SampleList => {
+                if let Some(i) = self.sample_state.selected() {
+                    if let Some(s) = self.samples.get(i) {
+                        if self.selected_samples.contains(s) {
+                            self.selected_samples.remove(s);
+                        } else {
+                            self.selected_samples.insert(s.clone());
+                        }
+                        self.refresh_filtered();
+                    }
+                }
+            }
+            Focus::TagList => {
+                if let Some(i) = self.tag_state.selected() {
+                    if let Some(t) = self.tags.get(i) {
+                        if self.selected_tags.contains(t) {
+                            self.selected_tags.remove(t);
+                        } else {
+                            self.selected_tags.insert(t.clone());
+                        }
+                        self.refresh_filtered();
+                    }
+                }
+            }
+            Focus::ExperimentList => {
+                if let Some(i) = self.experiment_state.selected() {
+                    if let Some((n, _)) = self.experiments.get(i) {
+                        if self.selected_experiments.contains(n) {
+                            self.selected_experiments.remove(n);
+                        } else {
+                            self.selected_experiments.insert(*n);
+                        }
+                        self.refresh_filtered();
+                    }
                 }
             }
             _ => {}
@@ -431,15 +484,12 @@ impl App {
         match self.focus {
             Focus::SampleList if !self.samples.is_empty() => {
                 self.sample_state.select(Some(0));
-                self.refresh_filtered();
             }
             Focus::TagList if !self.tags.is_empty() => {
                 self.tag_state.select(Some(0));
-                self.refresh_filtered();
             }
             Focus::ExperimentList if !self.experiments.is_empty() => {
                 self.experiment_state.select(Some(0));
-                self.refresh_filtered();
             }
             Focus::Table if !self.filtered_profiles.is_empty() => {
                 self.table_state.select(Some(0));
@@ -454,17 +504,14 @@ impl App {
             Focus::SampleList if !self.samples.is_empty() => {
                 let n = self.samples.len() - 1;
                 self.sample_state.select(Some(n));
-                self.refresh_filtered();
             }
             Focus::TagList if !self.tags.is_empty() => {
                 let n = self.tags.len() - 1;
                 self.tag_state.select(Some(n));
-                self.refresh_filtered();
             }
             Focus::ExperimentList if !self.experiments.is_empty() => {
                 let n = self.experiments.len() - 1;
                 self.experiment_state.select(Some(n));
-                self.refresh_filtered();
             }
             Focus::Table if !self.filtered_profiles.is_empty() => {
                 let n = self.filtered_profiles.len() - 1;

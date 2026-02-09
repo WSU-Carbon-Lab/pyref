@@ -2,9 +2,10 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Cell, List, ListItem, Paragraph, Row, Table};
 use ratatui::Frame;
+use ratatui::layout::Alignment;
 
 use super::app::{App, AppMode, Focus, ProfileRow};
-use super::keymap::{keybind_bar_lines_emacs, keybind_bar_lines_vi};
+use super::keymap::{keybind_bar_lines_emacs, keybind_bar_lines_vi, search_bar_hint, search_line_hotkeys};
 use super::theme::ThemeMode;
 
 const NAV_PATH_TRUNCATE: usize = 60;
@@ -41,10 +42,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let theme = theme_mode(app);
 
-    let mut vertical = vec![Constraint::Length(1)];
-    if app.mode == AppMode::Search {
-        vertical.push(Constraint::Length(1));
-    }
+    let mut vertical = vec![Constraint::Length(1), Constraint::Length(1)];
     vertical.push(Constraint::Fill(1));
     for _ in 0..app.keybind_bar_lines {
         vertical.push(Constraint::Length(1));
@@ -55,24 +53,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .constraints(vertical)
         .split(area);
 
-    let mut i = 0;
-    let nav_area = chunks[i];
-    i += 1;
-    let search_area = if app.mode == AppMode::Search {
-        let r = chunks[i];
-        i += 1;
-        Some(r)
-    } else {
-        None
-    };
-    let body_area = chunks[i];
+    let nav_area = chunks[0];
+    let search_area = chunks[1];
+    let body_area = chunks[2];
     let keybind_start = chunks.len().saturating_sub(app.keybind_bar_lines as usize);
     let keybind_areas: Vec<Rect> = (keybind_start..chunks.len()).map(|j| chunks[j]).collect();
 
     render_nav(frame, app, nav_area, theme);
-    if let Some(rect) = search_area {
-        render_search_bar(frame, app, rect, theme);
-    }
+    render_search_bar(frame, app, search_area, theme);
     render_body(frame, app, body_area, theme);
     for (idx, rect) in keybind_areas.into_iter().enumerate() {
         render_keybind_bar(frame, app, rect, theme, idx);
@@ -98,12 +86,31 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
 
 fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
     let prompt_style = super::theme::search_prompt_style(theme);
-    let line = Line::from(vec![
-        ratatui::text::Span::styled("/ ", prompt_style),
-        ratatui::text::Span::raw(app.search_query.as_str()),
-    ]);
-    let para = Paragraph::new(line);
-    frame.render_widget(para, area);
+    let style = super::theme::keybind_bar_style(theme);
+    let search_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(12), Constraint::Fill(1)])
+        .split(area);
+    let search_slot = search_chunks[0];
+    let hotkeys_slot = search_chunks[1];
+
+    let search_line = if app.mode == AppMode::Search {
+        Line::from(vec![
+            ratatui::text::Span::styled("/ ", prompt_style),
+            ratatui::text::Span::raw(app.search_query.as_str()),
+        ])
+    } else {
+        Line::from(ratatui::text::Span::styled(
+            search_bar_hint(&app.keymap),
+            prompt_style,
+        ))
+    };
+    frame.render_widget(Paragraph::new(search_line), search_slot);
+
+    let hotkeys = search_line_hotkeys(&app.keymap);
+    let hotkeys_para = Paragraph::new(Line::from(ratatui::text::Span::styled(hotkeys, style)))
+        .alignment(Alignment::Center);
+    frame.render_widget(hotkeys_para, hotkeys_slot);
 }
 
 fn render_keybind_bar(
@@ -144,7 +151,7 @@ fn render_keybind_bar(
             .join("  ")
     };
     let line = Line::from(ratatui::text::Span::styled(parts, style));
-    let para = Paragraph::new(line);
+    let para = Paragraph::new(line).alignment(Alignment::Center);
     frame.render_widget(para, area);
 }
 
@@ -195,7 +202,7 @@ fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: Theme
         ratatui::style::Style::default()
     };
     let list = List::new(items)
-        .block(Block::bordered().title(" Sample ").border_style(border_style))
+        .block(Block::bordered().title(" Sample [s] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, area, &mut app.sample_state);
@@ -209,7 +216,7 @@ fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
         ratatui::style::Style::default()
     };
     let list = List::new(items)
-        .block(Block::bordered().title(" Tag ").border_style(border_style))
+        .block(Block::bordered().title(" Tag [t] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, area, &mut app.tag_state);
@@ -227,7 +234,7 @@ fn render_experiment_list(frame: &mut Frame, app: &mut App, area: Rect, theme: T
         ratatui::style::Style::default()
     };
     let list = List::new(items)
-        .block(Block::bordered().title(" Experiment ").border_style(border_style))
+        .block(Block::bordered().title(" Experiment [e] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, area, &mut app.experiment_state);
@@ -289,7 +296,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
         )))
         .block(
             Block::bordered()
-                .title(" Reflectivity profiles ")
+                .title(" Reflectivity profiles [b] ")
                 .border_style(border_style),
         );
         frame.render_widget(msg, area);
@@ -300,7 +307,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
         .header(header)
         .block(
             Block::bordered()
-                .title(" Reflectivity profiles ")
+                .title(" Reflectivity profiles [b] ")
                 .border_style(border_style),
         )
         .column_spacing(1)

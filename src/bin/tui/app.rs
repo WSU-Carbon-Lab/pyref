@@ -3,6 +3,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use ratatui::widgets::{ListState, TableState};
 use std::cmp;
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 
 use pyref::errors::FitsLoaderError;
@@ -119,6 +120,28 @@ fn mock_experiments() -> Vec<(u32, String)> {
         (81041, "CCD Scan 81041".to_string()),
         (81042, "CCD Scan 81042".to_string()),
     ]
+}
+
+fn common_prefix_slice(names: &[String]) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let first = names[0].as_str();
+    let mut len = first.len();
+    for name in names.iter().skip(1) {
+        let n = name.len();
+        len = cmp::min(len, n);
+        for (i, (a, b)) in first.bytes().zip(name.bytes()).enumerate() {
+            if i >= len {
+                break;
+            }
+            if (a as char).to_ascii_lowercase() != (b as char).to_ascii_lowercase() {
+                len = i;
+                break;
+            }
+        }
+    }
+    first[..len].to_string()
 }
 
 fn load_catalog_from_path(
@@ -570,6 +593,72 @@ impl App {
 
     pub fn path_clear(&mut self) {
         self.path_input.clear();
+    }
+
+    pub fn path_autocomplete(&mut self) {
+        let raw = self.path_input.trim();
+        let (parent, prefix) = if raw.is_empty() {
+            (Path::new("."), "")
+        } else {
+            let p = Path::new(raw);
+            let parent = p.parent().unwrap_or(Path::new("."));
+            let prefix = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            (parent, prefix)
+        };
+        let Ok(entries) = fs::read_dir(parent) else {
+            return;
+        };
+        let prefix_lower = prefix.to_lowercase();
+        let mut names: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if prefix_lower.is_empty() || name.to_lowercase().starts_with(&prefix_lower) {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        names.sort();
+        if names.is_empty() {
+            return;
+        }
+        let new_tail = if names.len() == 1 {
+            let entry = &names[0];
+            let full = parent.join(entry);
+            if full.is_dir() {
+                format!("{}/", entry)
+            } else {
+                entry.clone()
+            }
+        } else {
+            let common = common_prefix_slice(&names);
+            if common.len() > prefix.len() {
+                let full = parent.join(&common);
+                if full.is_dir() {
+                    format!("{}/", common)
+                } else {
+                    common
+                }
+            } else {
+                return;
+            }
+        };
+        let parent_str = parent.to_string_lossy();
+        let has_trailing = raw.ends_with('/');
+        self.path_input = if parent_str == "." || parent_str.is_empty() {
+            new_tail
+        } else {
+            format!("{}/{}", parent_str.trim_end_matches('/'), new_tail.trim_end_matches('/'))
+        };
+        if has_trailing && !self.path_input.ends_with('/') && Path::new(&self.path_input).is_dir() {
+            self.path_input.push('/');
+        }
+        self.needs_redraw = true;
     }
 
     pub fn apply_path(&mut self) {

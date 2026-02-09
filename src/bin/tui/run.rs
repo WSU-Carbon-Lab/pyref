@@ -39,49 +39,34 @@ pub fn run<B: Backend>(
 }
 
 pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::KeyCode;
+
     if app.mode == super::app::AppMode::Search {
-        let action = keymap::from_key_event(key, &app.keymap);
-        match action {
-            Action::Cancel => {
+        match key.code {
+            KeyCode::Esc => {
                 app.set_mode_normal();
                 app.search_clear();
             }
-            Action::Open => {
+            KeyCode::Enter => {
                 app.set_mode_normal();
             }
-            Action::None => {
-                if let crossterm::event::KeyCode::Char(c) = key.code {
-                    if c.is_ascii() && !c.is_control() {
-                        app.search_push_char(c);
-                    }
-                }
-                if key.code == crossterm::event::KeyCode::Backspace {
-                    app.search_pop_char();
-                }
-            }
+            KeyCode::Backspace => app.search_pop_char(),
+            KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.search_push_char(c),
             _ => {}
         }
         return false;
     }
 
     if app.mode == super::app::AppMode::ChangeDir {
-        let action = keymap::from_key_event(key, &app.keymap);
-        match action {
-            Action::Cancel => {
+        match key.code {
+            KeyCode::Esc => {
                 app.set_mode_normal();
                 app.path_clear();
             }
-            Action::Open => {
-                app.apply_path();
-            }
-            Action::None => {
-                if let crossterm::event::KeyCode::Char(c) = key.code {
-                    app.path_push_char(c);
-                }
-                if key.code == crossterm::event::KeyCode::Backspace {
-                    app.path_pop_char();
-                }
-            }
+            KeyCode::Enter => app.apply_path(),
+            KeyCode::Tab => app.path_autocomplete(),
+            KeyCode::Backspace => app.path_pop_char(),
+            KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.path_push_char(c),
             _ => {}
         }
         return false;

@@ -152,6 +152,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     Action::None
 }
 
+#[allow(dead_code)]
 pub fn search_bar_hint(keymap: &str) -> String {
     if keymap == "emacs" {
         format!("{}K Search", CMD_SYMBOL)
@@ -196,6 +197,7 @@ pub fn keybind_bar_lines_emacs() -> [(String, String); 12] {
     ]
 }
 
+#[allow(dead_code)]
 pub fn search_line_hotkeys(keymap: &str) -> String {
     let pairs = if keymap == "emacs" {
         [

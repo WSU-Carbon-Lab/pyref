@@ -21,107 +21,6 @@ pub struct ProfileRow {
     pub experiment_number: u32,
 }
 
-fn mock_profile_rows() -> Vec<ProfileRow> {
-    vec![
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-60 deg".to_string(),
-            data_points: 120,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "283.7 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-40 deg".to_string(),
-            data_points: 80,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "284.2 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-45 deg".to_string(),
-            data_points: 90,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV - 320 eV".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "1 deg".to_string(),
-            data_points: 140,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV - 320 eV".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "2 deg".to_string(),
-            data_points: 140,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV - 320 eV".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "5 deg".to_string(),
-            data_points: 140,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "ps_pmma".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "285 eV fixed".to_string(),
-            pol: "p".to_string(),
-            q_range_str: "0-30 deg".to_string(),
-            data_points: 60,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 81041,
-        },
-        ProfileRow {
-            sample: "ps_pmma".to_string(),
-            tag: "vacuum".to_string(),
-            energy_str: "300 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-25 deg".to_string(),
-            data_points: 50,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 81042,
-        },
-    ]
-}
-
-fn mock_samples() -> Vec<String> {
-    vec!["znpc".to_string(), "ps_pmma".to_string()]
-}
-
-fn mock_tags() -> Vec<String> {
-    vec!["rt".to_string(), "vacuum".to_string()]
-}
-
-fn mock_experiments() -> Vec<(u32, String)> {
-    vec![
-        (11111, "CCD Scan 11111".to_string()),
-        (81041, "CCD Scan 81041".to_string()),
-        (81042, "CCD Scan 81042".to_string()),
-    ]
-}
-
 fn common_prefix_slice(names: &[String]) -> String {
     if names.is_empty() {
         return String::new();
@@ -239,6 +138,7 @@ pub struct App {
     pub needs_redraw: bool,
     pub layout: String,
     pub keymap: String,
+    #[allow(dead_code)]
     pub keybind_bar_lines: u8,
     pub theme: String,
 }

@@ -1,3 +1,5 @@
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::widgets::{ListState, TableState};
 use std::cmp;
 
@@ -121,14 +123,16 @@ pub enum Focus {
     TagList,
     ExperimentList,
     Table,
+    SearchBar,
 }
 
-const FOCUS_ORDER: [Focus; 5] = [
+const FOCUS_ORDER: [Focus; 6] = [
     Focus::Nav,
     Focus::SampleList,
     Focus::TagList,
     Focus::ExperimentList,
     Focus::Table,
+    Focus::SearchBar,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +140,7 @@ pub enum AppMode {
     Normal,
     RenameSample,
     EditTag,
+    Search,
 }
 
 pub struct App {
@@ -151,10 +156,16 @@ pub struct App {
     pub focus: Focus,
     pub mode: AppMode,
     pub current_root: String,
+    pub search_query: String,
+    pub needs_redraw: bool,
+    pub layout: String,
+    pub keymap: String,
+    pub keybind_bar_lines: u8,
+    pub theme: String,
 }
 
 impl App {
-    pub fn new(current_root: String) -> Self {
+    pub fn new(current_root: String, layout: String, keymap: String, keybind_bar_lines: u8, theme: String) -> Self {
         let all_profiles = mock_profile_rows();
         let samples = mock_samples();
         let tags = mock_tags();
@@ -172,7 +183,7 @@ impl App {
         if !experiments.is_empty() {
             experiment_state.select(Some(0));
         }
-        let filtered = Self::filter_profiles(&all_profiles, None, None, None);
+        let filtered = Self::filter_profiles(&all_profiles, None, None, None, "");
         if !filtered.is_empty() {
             table_state.select(Some(0));
         }
@@ -189,6 +200,12 @@ impl App {
             focus: Focus::SampleList,
             mode: AppMode::Normal,
             current_root,
+            search_query: String::new(),
+            needs_redraw: true,
+            layout,
+            keymap,
+            keybind_bar_lines,
+            theme,
         }
     }
 
@@ -197,13 +214,31 @@ impl App {
         sample: Option<&str>,
         tag: Option<&str>,
         experiment: Option<u32>,
+        search: &str,
     ) -> Vec<ProfileRow> {
+        let search_lower = search.to_lowercase();
+        let matcher = SkimMatcherV2::default();
         profiles
             .iter()
             .filter(|r| {
-                sample.map_or(true, |s| r.sample == s)
-                    && tag.map_or(true, |t| r.tag == t)
-                    && experiment.map_or(true, |e| r.experiment_number == e)
+                let sample_ok = sample.map_or(true, |s| r.sample == s);
+                let tag_ok = tag.map_or(true, |t| r.tag == t);
+                let exp_ok = experiment.map_or(true, |e| r.experiment_number == e);
+                let search_ok = if search_lower.is_empty() {
+                    true
+                } else {
+                    let haystack = format!(
+                        "{} {} {} {} {}",
+                        r.sample,
+                        r.tag,
+                        r.energy_str,
+                        r.pol,
+                        r.q_range_str
+                    )
+                    .to_lowercase();
+                    matcher.fuzzy_match(&haystack, &search_lower).is_some()
+                };
+                sample_ok && tag_ok && exp_ok && search_ok
             })
             .cloned()
             .collect()
@@ -230,10 +265,48 @@ impl App {
             s.as_deref(),
             t.as_deref(),
             e,
+            &self.search_query,
         );
+        self.clamp_selections();
         self.table_state.select(None);
         if !self.filtered_profiles.is_empty() {
             self.table_state.select(Some(0));
+        }
+        self.needs_redraw = true;
+    }
+
+    fn clamp_selections(&mut self) {
+        let n = self.samples.len();
+        if let Some(i) = self.sample_state.selected() {
+            if i >= n && n > 0 {
+                self.sample_state.select(Some(n - 1));
+            } else if n == 0 {
+                self.sample_state.select(None);
+            }
+        }
+        let n = self.tags.len();
+        if let Some(i) = self.tag_state.selected() {
+            if i >= n && n > 0 {
+                self.tag_state.select(Some(n - 1));
+            } else if n == 0 {
+                self.tag_state.select(None);
+            }
+        }
+        let n = self.experiments.len();
+        if let Some(i) = self.experiment_state.selected() {
+            if i >= n && n > 0 {
+                self.experiment_state.select(Some(n - 1));
+            } else if n == 0 {
+                self.experiment_state.select(None);
+            }
+        }
+        let n = self.filtered_profiles.len();
+        if let Some(i) = self.table_state.selected() {
+            if i >= n && n > 0 {
+                self.table_state.select(Some(n - 1));
+            } else if n == 0 {
+                self.table_state.select(None);
+            }
         }
     }
 
@@ -331,5 +404,74 @@ impl App {
 
     pub fn set_mode_normal(&mut self) {
         self.mode = AppMode::Normal;
+    }
+
+    pub fn set_mode_search(&mut self) {
+        self.mode = AppMode::Search;
+        self.needs_redraw = true;
+    }
+
+    pub fn search_push_char(&mut self, c: char) {
+        self.search_query.push(c);
+        self.refresh_filtered();
+    }
+
+    pub fn search_pop_char(&mut self) {
+        if self.search_query.pop().is_some() {
+            self.refresh_filtered();
+        }
+    }
+
+    pub fn search_clear(&mut self) {
+        self.search_query.clear();
+        self.refresh_filtered();
+    }
+
+    pub fn list_first(&mut self) {
+        match self.focus {
+            Focus::SampleList if !self.samples.is_empty() => {
+                self.sample_state.select(Some(0));
+                self.refresh_filtered();
+            }
+            Focus::TagList if !self.tags.is_empty() => {
+                self.tag_state.select(Some(0));
+                self.refresh_filtered();
+            }
+            Focus::ExperimentList if !self.experiments.is_empty() => {
+                self.experiment_state.select(Some(0));
+                self.refresh_filtered();
+            }
+            Focus::Table if !self.filtered_profiles.is_empty() => {
+                self.table_state.select(Some(0));
+            }
+            _ => {}
+        }
+        self.needs_redraw = true;
+    }
+
+    pub fn list_last(&mut self) {
+        match self.focus {
+            Focus::SampleList if !self.samples.is_empty() => {
+                let n = self.samples.len() - 1;
+                self.sample_state.select(Some(n));
+                self.refresh_filtered();
+            }
+            Focus::TagList if !self.tags.is_empty() => {
+                let n = self.tags.len() - 1;
+                self.tag_state.select(Some(n));
+                self.refresh_filtered();
+            }
+            Focus::ExperimentList if !self.experiments.is_empty() => {
+                let n = self.experiments.len() - 1;
+                self.experiment_state.select(Some(n));
+                self.refresh_filtered();
+            }
+            Focus::Table if !self.filtered_profiles.is_empty() => {
+                let n = self.filtered_profiles.len() - 1;
+                self.table_state.select(Some(n));
+            }
+            _ => {}
+        }
+        self.needs_redraw = true;
     }
 }

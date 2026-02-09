@@ -15,13 +15,61 @@ fn default_config_path() -> PathBuf {
     PathBuf::from(".pyref/tui_metadata.toml")
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuiConfig {
+    #[serde(default)]
     pub last_root: Option<String>,
+    #[serde(default)]
     pub recent_roots: Vec<String>,
+    #[serde(default)]
     pub last_sample: Option<String>,
+    #[serde(default)]
     pub last_tag: Option<String>,
+    #[serde(default)]
     pub last_experiment: Option<String>,
+    #[serde(default = "default_keymap")]
+    pub keymap: String,
+    #[serde(default)]
+    pub poll_interval_ms: Option<u64>,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    #[serde(default)]
+    pub color_scheme: Option<toml::Value>,
+    #[serde(default = "default_layout")]
+    pub layout: String,
+    #[serde(default = "default_keybind_bar_lines")]
+    pub keybind_bar_lines: u8,
+}
+
+fn default_keymap() -> String {
+    "vi".to_string()
+}
+fn default_theme() -> String {
+    "16".to_string()
+}
+fn default_layout() -> String {
+    "balanced".to_string()
+}
+fn default_keybind_bar_lines() -> u8 {
+    2
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            last_root: None,
+            recent_roots: Vec::new(),
+            last_sample: None,
+            last_tag: None,
+            last_experiment: None,
+            keymap: default_keymap(),
+            poll_interval_ms: None,
+            theme: default_theme(),
+            color_scheme: None,
+            layout: default_layout(),
+            keybind_bar_lines: default_keybind_bar_lines(),
+        }
+    }
 }
 
 impl TuiConfig {

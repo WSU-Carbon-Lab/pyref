@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::Alignment;
 
 use super::app::{App, AppMode, Focus, ProfileRow};
-use super::keymap::{bottom_bar_line, search_prompt_display, table_title_padded};
+use super::keymap::{bottom_bar_line, search_prompt_display, BROWSE_SHORTCUTS, BROWSE_TITLE};
 use super::theme::ThemeMode;
 
 const NAV_PATH_TRUNCATE: usize = 60;
@@ -66,7 +66,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_bottom_bar(frame, app, bottom_area, theme);
 }
 
-fn render_nav(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
+fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
     let path_display = truncate_path(&app.current_root, NAV_PATH_TRUNCATE);
     let filter_hint = if !app.search_query.is_empty() && app.mode != AppMode::Search {
         format!("  filter: {}", app.search_query)
@@ -74,12 +74,7 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
         String::new()
     };
     let line = Line::from(format!("  {}  [up] [back] [fwd]{}", path_display, filter_hint));
-    let border_style = if app.focus == Focus::Nav {
-        super::theme::focus_border_style(theme)
-    } else {
-        ratatui::style::Style::default()
-    };
-    let para = Paragraph::new(line).block(Block::bordered().border_style(border_style));
+    let para = Paragraph::new(line);
     frame.render_widget(para, area);
 }
 
@@ -88,6 +83,13 @@ fn render_bottom_bar(frame: &mut Frame, _app: &App, area: Rect, theme: ThemeMode
     let content = bottom_bar_line();
     let line = Line::from(ratatui::text::Span::styled(content, style));
     let para = Paragraph::new(line).alignment(Alignment::Center);
+    frame.render_widget(para, area);
+}
+
+fn render_browse_shortcuts(frame: &mut Frame, area: Rect, theme: ThemeMode) {
+    let style = super::theme::empty_message_style(theme);
+    let line = Line::from(ratatui::text::Span::styled(BROWSE_SHORTCUTS, style));
+    let para = Paragraph::new(line).alignment(Alignment::Right);
     frame.render_widget(para, area);
 }
 
@@ -145,19 +147,24 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     } else {
         ratatui::style::Style::default()
     };
-    let right_title = table_title_padded(right_area.width);
     let right_block = Block::bordered()
-        .title(right_title)
+        .title(BROWSE_TITLE)
         .border_style(right_border_style);
     let right_inner = right_block.inner(right_area);
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Fill(1), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(3),
+        ])
         .split(right_inner);
-    let table_area = right_chunks[0];
-    let search_area = right_chunks[1];
+    let shortcuts_area = right_chunks[0];
+    let table_area = right_chunks[1];
+    let search_area = right_chunks[2];
 
     frame.render_widget(right_block, right_area);
+    render_browse_shortcuts(frame, shortcuts_area, theme);
     render_table(frame, app, table_area, theme);
     render_search_box(frame, app, search_area, theme);
 }

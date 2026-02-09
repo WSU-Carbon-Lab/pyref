@@ -3,25 +3,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub const CMD_SYMBOL: &str = "\u{2318}";
 #[allow(dead_code)]
 pub const CTRL_SYMBOL: &str = "\u{2303}";
+pub const SHIFT_SYMBOL: &str = "\u{21E7}";
 pub const ARROW_UP: &str = "\u{2191}";
 pub const ARROW_DOWN: &str = "\u{2193}";
 pub const DOUBLE_UP: &str = "\u{21C8}";
 pub const DOUBLE_DOWN: &str = "\u{21CA}";
 
-pub const TABLE_TITLE_LEFT: &str = " Reflectivity profiles [b] ";
-pub const TABLE_TITLE_RIGHT: &str = " r Rename  R Retag ";
-
-pub fn table_title_padded(width: u16) -> String {
-    let w = width as usize;
-    let left_len = TABLE_TITLE_LEFT.len();
-    let right_len = TABLE_TITLE_RIGHT.len();
-    if left_len + right_len <= w {
-        let pad = w - left_len - right_len;
-        format!("{}{}{}", TABLE_TITLE_LEFT, " ".repeat(pad), TABLE_TITLE_RIGHT)
-    } else {
-        TABLE_TITLE_LEFT.to_string()
-    }
-}
+pub const BROWSE_TITLE: &str = " Browse [b] ";
+pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag ";
 
 pub fn bottom_bar_line() -> String {
     format!(
@@ -34,7 +23,7 @@ pub fn bottom_bar_line() -> String {
 }
 
 pub fn search_prompt_display() -> String {
-    format!(" {}K Search. ", CMD_SYMBOL)
+    format!(" {}S Search. ", SHIFT_SYMBOL)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +56,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     let super_ = mods.contains(KeyModifiers::SUPER);
 
     if keymap == "emacs" {
-        if (ctrl || super_) && !shift && !alt && code == KeyCode::Char('k') {
+        if shift && !ctrl && !alt && !super_ && code == KeyCode::Char('s') {
             return Action::Search;
         }
         if ctrl && !shift && !alt {
@@ -98,7 +87,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
         }
         if !ctrl && !alt && !super_ {
             match code {
-                KeyCode::Char('s') if !shift => return Action::FocusSample,
+                KeyCode::Char('s') => return if shift { Action::Search } else { Action::FocusSample },
                 KeyCode::Char('t') => return if shift { Action::Retag } else { Action::FocusTag },
                 KeyCode::Char('e') => return Action::FocusExperiment,
                 KeyCode::Char('b') => return Action::FocusBrowser,
@@ -110,7 +99,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     }
 
     if keymap == "vi" {
-        if (ctrl || super_) && !shift && !alt && code == KeyCode::Char('k') {
+        if shift && !ctrl && !alt && !super_ && code == KeyCode::Char('s') {
             return Action::Search;
         }
         if code == KeyCode::Char('q') && mods.is_empty() {

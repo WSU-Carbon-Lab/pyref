@@ -260,6 +260,24 @@ impl App {
             .collect()
     }
 
+    pub fn focused_sample(&self) -> Option<String> {
+        self.sample_state
+            .selected()
+            .and_then(|i| self.samples.get(i).cloned())
+    }
+
+    pub fn focused_tag(&self) -> Option<String> {
+        self.tag_state
+            .selected()
+            .and_then(|i| self.tags.get(i).cloned())
+    }
+
+    pub fn focused_experiment(&self) -> Option<u32> {
+        self.experiment_state
+            .selected()
+            .and_then(|i| self.experiments.get(i).map(|(n, _)| *n))
+    }
+
     pub fn refresh_filtered(&mut self) {
         self.filtered_profiles = Self::filter_profiles(
             &self.all_profiles,

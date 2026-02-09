@@ -61,10 +61,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     config_save.set_last_root(&app.current_root);
-    let exp_str = app.selected_experiment().map(|n| n.to_string());
+    let exp_str = app.focused_experiment().map(|n| n.to_string());
     config_save.set_last_selection(
-        app.selected_sample().as_deref(),
-        app.selected_tag().as_deref(),
+        app.focused_sample().as_deref(),
+        app.focused_tag().as_deref(),
         exp_str.as_deref(),
     );
     let _ = config_save.save();

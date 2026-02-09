@@ -5,10 +5,12 @@ use ratatui::Frame;
 use ratatui::layout::Alignment;
 
 use super::app::{App, AppMode, Focus, ProfileRow};
-use super::keymap::{keybind_bar_lines_emacs, keybind_bar_lines_vi, search_bar_hint, search_line_hotkeys};
+use super::keymap::{bottom_bar_nav_only, search_bar_hint, search_line_hotkeys, table_title_with_hotkeys};
 use super::theme::ThemeMode;
 
 const NAV_PATH_TRUNCATE: usize = 60;
+const CIRCLE_EMPTY: &str = "\u{25CB}";
+const CIRCLE_FILLED: &str = "\u{25CF}";
 
 fn truncate_path(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -62,8 +64,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_nav(frame, app, nav_area, theme);
     render_search_bar(frame, app, search_area, theme);
     render_body(frame, app, body_area, theme);
-    for (idx, rect) in keybind_areas.into_iter().enumerate() {
-        render_keybind_bar(frame, app, rect, theme, idx);
+    for rect in keybind_areas {
+        render_keybind_bar(frame, app, rect, theme);
     }
 }
 
@@ -85,12 +87,20 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
 }
 
 fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
+    let border_style = if app.focus == Focus::SearchBar {
+        super::theme::focus_border_style(theme)
+    } else {
+        ratatui::style::Style::default()
+    };
+    let block = Block::bordered().border_style(border_style);
+    let inner = block.inner(area);
+
     let prompt_style = super::theme::search_prompt_style(theme);
     let style = super::theme::keybind_bar_style(theme);
     let search_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(12), Constraint::Fill(1)])
-        .split(area);
+        .split(inner);
     let search_slot = search_chunks[0];
     let hotkeys_slot = search_chunks[1];
 
@@ -111,46 +121,14 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode)
     let hotkeys_para = Paragraph::new(Line::from(ratatui::text::Span::styled(hotkeys, style)))
         .alignment(Alignment::Center);
     frame.render_widget(hotkeys_para, hotkeys_slot);
+
+    frame.render_widget(block, area);
 }
 
-fn render_keybind_bar(
-    frame: &mut Frame,
-    app: &App,
-    area: Rect,
-    theme: ThemeMode,
-    line_index: usize,
-) {
+fn render_keybind_bar(frame: &mut Frame, _app: &App, area: Rect, theme: ThemeMode) {
     let style = super::theme::keybind_bar_style(theme);
-    let pairs = if app.keymap == "emacs" {
-        keybind_bar_lines_emacs()
-    } else {
-        keybind_bar_lines_vi()
-    };
-    let (keys, descs): (Vec<_>, Vec<_>) = pairs
-        .iter()
-        .filter(|(k, _)| !k.is_empty())
-        .map(|(k, d)| (k.as_str(), d.as_str()))
-        .unzip();
-    let line_len = keys.len();
-    let half = (line_len + 1) / 2;
-    let (first_half_k, second_half_k) = keys.split_at(half);
-    let (first_half_d, second_half_d) = descs.split_at(half);
-    let parts = if line_index == 0 {
-        first_half_k
-            .iter()
-            .zip(first_half_d.iter())
-            .map(|(k, d)| format!("{} {}", k, d))
-            .collect::<Vec<_>>()
-            .join("  ")
-    } else {
-        second_half_k
-            .iter()
-            .zip(second_half_d.iter())
-            .map(|(k, d)| format!("{} {}", k, d))
-            .collect::<Vec<_>>()
-            .join("  ")
-    };
-    let line = Line::from(ratatui::text::Span::styled(parts, style));
+    let content = bottom_bar_nav_only();
+    let line = Line::from(ratatui::text::Span::styled(content, style));
     let para = Paragraph::new(line).alignment(Alignment::Center);
     frame.render_widget(para, area);
 }
@@ -194,7 +172,14 @@ fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: Theme
     let items: Vec<ListItem> = app
         .samples
         .iter()
-        .map(|s| ListItem::new(s.as_str()))
+        .map(|s| {
+            let circle = if app.selected_samples.contains(s) {
+                CIRCLE_FILLED
+            } else {
+                CIRCLE_EMPTY
+            };
+            ListItem::new(format!("{} {}", circle, s))
+        })
         .collect();
     let border_style = if app.focus == Focus::SampleList {
         super::theme::focus_border_style(theme)
@@ -204,12 +189,23 @@ fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: Theme
     let list = List::new(items)
         .block(Block::bordered().title(" Sample [s] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
-        .highlight_symbol("> ");
+        .highlight_symbol("  ");
     frame.render_stateful_widget(list, area, &mut app.sample_state);
 }
 
 fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
-    let items: Vec<ListItem> = app.tags.iter().map(|s| ListItem::new(s.as_str())).collect();
+    let items: Vec<ListItem> = app
+        .tags
+        .iter()
+        .map(|s| {
+            let circle = if app.selected_tags.contains(s) {
+                CIRCLE_FILLED
+            } else {
+                CIRCLE_EMPTY
+            };
+            ListItem::new(format!("{} {}", circle, s))
+        })
+        .collect();
     let border_style = if app.focus == Focus::TagList {
         super::theme::focus_border_style(theme)
     } else {
@@ -218,7 +214,7 @@ fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
     let list = List::new(items)
         .block(Block::bordered().title(" Tag [t] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
-        .highlight_symbol("> ");
+        .highlight_symbol("  ");
     frame.render_stateful_widget(list, area, &mut app.tag_state);
 }
 
@@ -226,7 +222,14 @@ fn render_experiment_list(frame: &mut Frame, app: &mut App, area: Rect, theme: T
     let items: Vec<ListItem> = app
         .experiments
         .iter()
-        .map(|(_, label)| ListItem::new(label.as_str()))
+        .map(|(n, label)| {
+            let circle = if app.selected_experiments.contains(n) {
+                CIRCLE_FILLED
+            } else {
+                CIRCLE_EMPTY
+            };
+            ListItem::new(format!("{} {}", circle, label))
+        })
         .collect();
     let border_style = if app.focus == Focus::ExperimentList {
         super::theme::focus_border_style(theme)
@@ -236,7 +239,7 @@ fn render_experiment_list(frame: &mut Frame, app: &mut App, area: Rect, theme: T
     let list = List::new(items)
         .block(Block::bordered().title(" Experiment [e] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
-        .highlight_symbol("> ");
+        .highlight_symbol("  ");
     frame.render_stateful_widget(list, area, &mut app.experiment_state);
 }
 
@@ -296,7 +299,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
         )))
         .block(
             Block::bordered()
-                .title(" Reflectivity profiles [b] ")
+                .title(table_title_with_hotkeys())
                 .border_style(border_style),
         );
         frame.render_widget(msg, area);
@@ -307,7 +310,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
         .header(header)
         .block(
             Block::bordered()
-                .title(" Reflectivity profiles [b] ")
+                .title(table_title_with_hotkeys())
                 .border_style(border_style),
         )
         .column_spacing(1)

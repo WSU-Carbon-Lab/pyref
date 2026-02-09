@@ -1,7 +1,26 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub const CMD_SYMBOL: &str = "\u{2318}";
+#[allow(dead_code)]
 pub const CTRL_SYMBOL: &str = "\u{2303}";
+pub const ARROW_UP: &str = "\u{2191}";
+pub const ARROW_DOWN: &str = "\u{2193}";
+pub const DOUBLE_UP: &str = "\u{21C8}";
+pub const DOUBLE_DOWN: &str = "\u{21CA}";
+
+pub fn table_title_with_hotkeys() -> String {
+    format!(
+        " Reflectivity profiles [b]  j{} k{}  gg{} G{}  r Rename  R Retag ",
+        ARROW_DOWN,
+        ARROW_UP,
+        DOUBLE_UP,
+        DOUBLE_DOWN
+    )
+}
+
+pub fn bottom_bar_nav_only() -> String {
+    format!("j{} k{}  gg{} G{}", ARROW_DOWN, ARROW_UP, DOUBLE_UP, DOUBLE_DOWN)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -132,6 +151,7 @@ pub fn search_bar_hint(keymap: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn keybind_bar_lines_vi() -> [(String, String); 12] {
     [
         ("s".to_string(), "Sample".to_string()),
@@ -149,6 +169,7 @@ pub fn keybind_bar_lines_vi() -> [(String, String); 12] {
     ]
 }
 
+#[allow(dead_code)]
 pub fn keybind_bar_lines_emacs() -> [(String, String); 12] {
     [
         ("s".to_string(), "Sample".to_string()),

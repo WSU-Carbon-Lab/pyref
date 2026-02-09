@@ -68,7 +68,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
     let line = if app.mode == AppMode::ChangeDir {
-        Line::from(format!("  Path: {}  [Enter] open  [Esc] cancel", app.path_input))
+        let path_display = truncate_path(&app.path_input, NAV_PATH_TRUNCATE);
+        Line::from(format!("  Path: {}  [Enter] open  [Esc] cancel", path_display))
     } else {
         let path_display = truncate_path(&app.current_root, NAV_PATH_TRUNCATE);
         let filter_hint = if !app.search_query.is_empty() && app.mode != AppMode::Search {

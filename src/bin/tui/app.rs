@@ -41,6 +41,23 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+fn to_tilde_form(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        return path.to_string();
+    }
+    if let Some(home) = home_dir() {
+        let home = home.trim_end_matches('/');
+        if path == home {
+            return "~".to_string();
+        }
+        if path.starts_with(home) && path.len() > home.len() && path[home.len()..].starts_with('/') {
+            return format!("~{}", &path[home.len()..]);
+        }
+    }
+    path.to_string()
+}
+
 fn resolved_browse_dir(expanded_path: &str) -> String {
     let path = expanded_path.trim();
     if path.is_empty() {
@@ -530,9 +547,9 @@ impl App {
     pub fn set_mode_change_dir(&mut self) {
         self.mode = AppMode::ChangeDir;
         self.path_input = if self.current_root.is_empty() {
-            expand_tilde("~")
+            "~".to_string()
         } else {
-            self.current_root.clone()
+            to_tilde_form(&self.current_root)
         };
         self.refresh_dir_browser();
         self.needs_redraw = true;
@@ -589,12 +606,14 @@ impl App {
         };
         if name == ".." {
             let parent = Path::new(&resolved).parent();
-            self.path_input = parent
+            let raw = parent
                 .and_then(|p| p.to_str())
                 .map(String::from)
                 .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".to_string()));
+            self.path_input = to_tilde_form(&raw);
         } else {
-            self.path_input = format!("{}/{}", resolved.trim_end_matches('/'), name);
+            let raw = format!("{}/{}", resolved.trim_end_matches('/'), name);
+            self.path_input = to_tilde_form(&raw);
         }
         self.refresh_dir_browser();
         self.needs_redraw = true;
@@ -714,7 +733,7 @@ impl App {
         } else {
             format!("{}/{}", parent_str.trim_end_matches('/'), new_tail.trim_end_matches('/'))
         };
-        self.path_input = new_path;
+        self.path_input = to_tilde_form(&new_path);
         if has_trailing && !self.path_input.ends_with('/') && Path::new(&self.path_input).is_dir() {
             self.path_input.push('/');
         }

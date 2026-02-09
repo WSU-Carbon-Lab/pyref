@@ -87,6 +87,10 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             KeyCode::Enter => app.open_selected_dir(),
             KeyCode::Tab => app.path_autocomplete(),
             KeyCode::Backspace => app.path_pop_char(),
+            KeyCode::Char('j') => app.dir_browser_move_down(),
+            KeyCode::Char('k') => app.dir_browser_move_up(),
+            KeyCode::Down => app.dir_browser_move_down(),
+            KeyCode::Up => app.dir_browser_move_up(),
             KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.path_push_char(c),
             _ => {}
         }

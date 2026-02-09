@@ -1,6 +1,6 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Cell, List, ListItem, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Cell, List, ListItem, Padding, Paragraph, Row, Table};
 use ratatui::Frame;
 use ratatui::layout::Alignment;
 
@@ -44,6 +44,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let theme = theme_mode(app);
 
+    let outer_block = Block::bordered().padding(Padding::new(1, 1, 1, 1));
+    let inner = outer_block.inner(area);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -51,12 +54,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
-        .split(area);
+        .split(inner);
 
     let nav_area = chunks[0];
     let body_area = chunks[1];
     let bottom_area = chunks[2];
 
+    frame.render_widget(outer_block, area);
     render_nav(frame, app, nav_area, theme);
     render_body(frame, app, body_area, theme);
     render_bottom_bar(frame, app, bottom_area, theme);
@@ -114,36 +118,27 @@ fn render_search_box(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode)
 }
 
 fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
-    let constraints = layout_constraints(app);
+    let [left_pct, _right_pct] = layout_constraints(app);
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints(constraints)
+        .constraints([left_pct, Constraint::Length(1), Constraint::Min(0)])
         .split(area);
     let left_area = body_chunks[0];
-    let right_area = body_chunks[1];
+    let right_area = body_chunks[2];
 
-    let left_border_style = if matches!(
-        app.focus,
-        Focus::SampleList | Focus::TagList | Focus::ExperimentList
-    ) {
-        super::theme::focus_border_style(theme)
-    } else {
-        ratatui::style::Style::default()
-    };
-    let left_block = Block::bordered().border_style(left_border_style);
-    let left_inner = left_block.inner(left_area);
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
+            Constraint::Length(1),
             Constraint::Length(4),
+            Constraint::Length(1),
             Constraint::Min(3),
         ])
-        .split(left_inner);
-    frame.render_widget(left_block, left_area);
+        .split(left_area);
     render_sample_list(frame, app, left_chunks[0], theme);
-    render_tag_list(frame, app, left_chunks[1], theme);
-    render_experiment_list(frame, app, left_chunks[2], theme);
+    render_tag_list(frame, app, left_chunks[2], theme);
+    render_experiment_list(frame, app, left_chunks[4], theme);
 
     let right_border_style = if app.focus == Focus::Table || app.focus == Focus::SearchBar {
         super::theme::focus_border_style(theme)
@@ -157,7 +152,7 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let right_inner = right_block.inner(right_area);
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Fill(1), Constraint::Length(1)])
+        .constraints([Constraint::Fill(1), Constraint::Length(3)])
         .split(right_inner);
     let table_area = right_chunks[0];
     let search_area = right_chunks[1];
@@ -188,8 +183,13 @@ fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: Theme
             ListItem::new(format!("{} {}", circle, s))
         })
         .collect();
+    let border_style = if app.focus == Focus::SampleList {
+        super::theme::focus_border_style(theme)
+    } else {
+        ratatui::style::Style::default()
+    };
     let list = List::new(items)
-        .block(Block::default().title(" Sample [s] "))
+        .block(Block::bordered().title(" Sample [s] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
     frame.render_stateful_widget(list, area, &mut app.sample_state);
@@ -208,8 +208,13 @@ fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
             ListItem::new(format!("{} {}", circle, s))
         })
         .collect();
+    let border_style = if app.focus == Focus::TagList {
+        super::theme::focus_border_style(theme)
+    } else {
+        ratatui::style::Style::default()
+    };
     let list = List::new(items)
-        .block(Block::default().title(" Tag [t] "))
+        .block(Block::bordered().title(" Tag [t] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
     frame.render_stateful_widget(list, area, &mut app.tag_state);
@@ -228,8 +233,13 @@ fn render_experiment_list(frame: &mut Frame, app: &mut App, area: Rect, theme: T
             ListItem::new(format!("{} {}", circle, label))
         })
         .collect();
+    let border_style = if app.focus == Focus::ExperimentList {
+        super::theme::focus_border_style(theme)
+    } else {
+        ratatui::style::Style::default()
+    };
     let list = List::new(items)
-        .block(Block::default().title(" Experiment [e] "))
+        .block(Block::bordered().title(" Experiment [e] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
     frame.render_stateful_widget(list, area, &mut app.experiment_state);

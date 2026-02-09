@@ -8,9 +8,24 @@ pub const ARROW_DOWN: &str = "\u{2193}";
 pub const DOUBLE_UP: &str = "\u{21C8}";
 pub const DOUBLE_DOWN: &str = "\u{21CA}";
 
-pub fn table_title_with_hotkeys() -> String {
+pub const TABLE_TITLE_LEFT: &str = " Reflectivity profiles [b] ";
+pub const TABLE_TITLE_RIGHT: &str = " r Rename  R Retag ";
+
+pub fn table_title_padded(width: u16) -> String {
+    let w = width as usize;
+    let left_len = TABLE_TITLE_LEFT.len();
+    let right_len = TABLE_TITLE_RIGHT.len();
+    if left_len + right_len <= w {
+        let pad = w - left_len - right_len;
+        format!("{}{}{}", TABLE_TITLE_LEFT, " ".repeat(pad), TABLE_TITLE_RIGHT)
+    } else {
+        TABLE_TITLE_LEFT.to_string()
+    }
+}
+
+pub fn bottom_bar_line() -> String {
     format!(
-        " Reflectivity profiles [b]  j{} k{}  gg{} G{}  r Rename  R Retag ",
+        "---- j{} k{}  gg{} G{} --------",
         ARROW_DOWN,
         ARROW_UP,
         DOUBLE_UP,
@@ -18,8 +33,8 @@ pub fn table_title_with_hotkeys() -> String {
     )
 }
 
-pub fn bottom_bar_nav_only() -> String {
-    format!("j{} k{}  gg{} G{}", ARROW_DOWN, ARROW_UP, DOUBLE_UP, DOUBLE_DOWN)
+pub fn search_prompt_display() -> String {
+    format!(" {}K Search. ", CMD_SYMBOL)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

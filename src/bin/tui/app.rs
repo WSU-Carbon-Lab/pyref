@@ -5,7 +5,9 @@ use std::cmp;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::time::SystemTime;
 
+use chrono::DateTime;
 use pyref::errors::FitsLoaderError;
 use pyref::loader::read_experiment_metadata;
 
@@ -19,6 +21,14 @@ pub struct ProfileRow {
     pub data_points: u32,
     pub quality_placeholder: String,
     pub experiment_number: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub modified: Option<String>,
+    pub fits_subdir_count: Option<u32>,
 }
 
 fn home_dir() -> Option<String> {
@@ -84,6 +94,45 @@ fn resolved_browse_dir(expanded_path: &str) -> String {
         }
     }
     home_dir().unwrap_or_else(|| ".".to_string())
+}
+
+const FITS_EXT: &str = ".fits";
+
+fn format_modified(system_time: SystemTime) -> Option<String> {
+    let d = system_time.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let dt = DateTime::from_timestamp(d.as_secs() as i64, d.subsec_nanos())?;
+    Some(dt.format("%Y-%m-%d %H:%M").to_string())
+}
+
+fn dir_contains_fits_immediate(path: &Path) -> bool {
+    let Ok(rd) = fs::read_dir(path) else {
+        return false;
+    };
+    for e in rd.filter_map(|e| e.ok()) {
+        let full = path.join(e.file_name());
+        if full.is_file()
+            && full
+                .file_name()
+                .map_or(false, |n| n.to_string_lossy().to_lowercase().ends_with(FITS_EXT))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn count_immediate_subdirs_containing_fits(path: &Path) -> u32 {
+    let Ok(rd) = fs::read_dir(path) else {
+        return 0;
+    };
+    let mut count = 0u32;
+    for e in rd.filter_map(|e| e.ok()) {
+        let full = path.join(e.file_name());
+        if full.is_dir() && dir_contains_fits_immediate(&full) {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn common_prefix_slice(names: &[String]) -> String {
@@ -200,7 +249,7 @@ pub struct App {
     pub current_root: String,
     pub search_query: String,
     pub path_input: String,
-    pub dir_browser_entries: Vec<String>,
+    pub dir_browser_entries: Vec<DirEntry>,
     pub dir_browser_state: ListState,
     pub needs_redraw: bool,
     pub layout: String,
@@ -261,7 +310,7 @@ impl App {
             current_root,
             search_query: String::new(),
             path_input: String::new(),
-            dir_browser_entries: Vec::new(),
+            dir_browser_entries: Vec::<DirEntry>::new(),
             dir_browser_state: ListState::default(),
             needs_redraw: true,
             layout,
@@ -558,26 +607,49 @@ impl App {
     pub fn refresh_dir_browser(&mut self) {
         let expanded = expand_tilde(self.path_input.trim());
         let resolved = resolved_browse_dir(&expanded);
-        let mut entries = Vec::new();
-        if let Ok(rd) = fs::read_dir(&resolved) {
-            let mut names: Vec<String> = rd
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    let full = Path::new(&resolved).join(&name);
-                    if full.is_dir() {
-                        Some(name)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            names.sort();
-            entries.push("..".to_string());
-            entries.extend(names);
-        } else {
-            entries.push("..".to_string());
+        let mut dirs: Vec<DirEntry> = Vec::new();
+        let mut files: Vec<DirEntry> = Vec::new();
+        let has_parent = Path::new(&resolved).parent().is_some_and(|p| p.to_str().map_or(false, |s| !s.is_empty() && s != "."));
+        if has_parent {
+            dirs.push(DirEntry {
+                name: "..".to_string(),
+                is_dir: true,
+                modified: None,
+                fits_subdir_count: None,
+            });
         }
+        if let Ok(rd) = fs::read_dir(&resolved) {
+            for e in rd.filter_map(|e| e.ok()) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let full = Path::new(&resolved).join(&name);
+                let is_dir = full.is_dir();
+                let (modified, fits_subdir_count) = if is_dir && name != ".." {
+                    let modified = fs::metadata(&full).ok().and_then(|m| m.modified().ok()).and_then(format_modified);
+                    let fits_subdir_count = Some(count_immediate_subdirs_containing_fits(&full));
+                    (modified, fits_subdir_count)
+                } else if !is_dir {
+                    let modified = fs::metadata(&full).ok().and_then(|m| m.modified().ok()).and_then(format_modified);
+                    (modified, None)
+                } else {
+                    (None, None)
+                };
+                let entry = DirEntry {
+                    name,
+                    is_dir,
+                    modified,
+                    fits_subdir_count,
+                };
+                if is_dir {
+                    dirs.push(entry);
+                } else {
+                    files.push(entry);
+                }
+            }
+        }
+        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        let mut entries = dirs;
+        entries.extend(files);
         self.dir_browser_entries = entries;
         let len = self.dir_browser_entries.len();
         let current = self.dir_browser_state.selected().unwrap_or(0);
@@ -601,10 +673,13 @@ impl App {
         let Some(i) = self.dir_browser_state.selected() else {
             return;
         };
-        let Some(name) = self.dir_browser_entries.get(i) else {
+        let Some(entry) = self.dir_browser_entries.get(i) else {
             return;
         };
-        if name == ".." {
+        if !entry.is_dir {
+            return;
+        }
+        if entry.name == ".." {
             let parent = Path::new(&resolved).parent();
             let raw = parent
                 .and_then(|p| p.to_str())
@@ -612,7 +687,7 @@ impl App {
                 .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".to_string()));
             self.path_input = to_tilde_form(&raw);
         } else {
-            let raw = format!("{}/{}", resolved.trim_end_matches('/'), name);
+            let raw = format!("{}/{}", resolved.trim_end_matches('/'), entry.name);
             self.path_input = to_tilde_form(&raw);
         }
         self.refresh_dir_browser();

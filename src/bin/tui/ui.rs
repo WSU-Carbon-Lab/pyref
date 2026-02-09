@@ -4,7 +4,7 @@ use ratatui::widgets::{Block, Cell, List, ListItem, Padding, Paragraph, Row, Tab
 use ratatui::Frame;
 use ratatui::layout::Alignment;
 
-use super::app::{App, AppMode, Focus, ProfileRow};
+use super::app::{App, AppMode, DirEntry, Focus, ProfileRow};
 use super::keymap::{bottom_bar_line, search_prompt_display, BROWSE_SHORTCUTS, BROWSE_TITLE};
 use super::theme::ThemeMode;
 
@@ -69,7 +69,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
     let line = if app.mode == AppMode::ChangeDir {
         let path_display = truncate_path(&app.path_input, NAV_PATH_TRUNCATE);
-        Line::from(format!("  Path: {}  [Enter] open  [Esc] cancel", path_display))
+        Line::from(format!("  File browser: {}  [d] close browser", path_display))
+    } else if app.current_root.is_empty() {
+        Line::from("  No directory selected  [d] open file browser")
     } else {
         let path_display = truncate_path(&app.current_root, NAV_PATH_TRUNCATE);
         let filter_hint = if !app.search_query.is_empty() && app.mode != AppMode::Search {
@@ -77,7 +79,7 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
         } else {
             String::new()
         };
-        Line::from(format!("  {}  [d] dir{}", path_display, filter_hint))
+        Line::from(format!("  {}  [d] file browser{}", path_display, filter_hint))
     };
     let para = Paragraph::new(line);
     frame.render_widget(para, area);
@@ -86,7 +88,7 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
 fn render_bottom_bar(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
     let style = super::theme::keybind_bar_style(theme);
     let content: String = if app.mode == AppMode::ChangeDir {
-        " Enter open  Ctrl+O accept  Esc cancel ".to_string()
+        " Tab enter dir  Enter set root / open browser  Esc close ".to_string()
     } else {
         bottom_bar_line()
     };
@@ -128,18 +130,81 @@ fn render_search_box(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode)
     frame.render_widget(block, area);
 }
 
+const DIR_COL_NAME: usize = 36;
+const DIR_COL_MODIFIED: usize = 16;
+const DIR_COL_FITS: usize = 8;
+
+fn format_dir_entry(entry: &DirEntry) -> String {
+    let kind = if entry.is_dir { "  / " } else { "    " };
+    let name_trunc = if entry.name.len() > DIR_COL_NAME {
+        format!("{}...", &entry.name[..(DIR_COL_NAME - 3)])
+    } else {
+        entry.name.clone()
+    };
+    let modified_str = entry
+        .modified
+        .as_deref()
+        .unwrap_or("-")
+        .chars()
+        .take(DIR_COL_MODIFIED)
+        .collect::<String>();
+    let fits_str = entry
+        .fits_subdir_count
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    format!(
+        "{}{:<width_name$}  {:<width_mod$}  {:>width_fits$}",
+        kind,
+        name_trunc,
+        modified_str,
+        fits_str,
+        width_name = DIR_COL_NAME,
+        width_mod = DIR_COL_MODIFIED,
+        width_fits = DIR_COL_FITS
+    )
+}
+
 fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     if app.mode == AppMode::ChangeDir {
-        let block = Block::bordered().title(" Directory [j/k] move [Enter] open [Tab] complete ");
-        let inner = block.inner(area);
+        let path_display = truncate_path(&app.path_input, NAV_PATH_TRUNCATE);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(4)])
+            .split(area);
+        let path_area = chunks[0];
+        let list_area = chunks[1];
+        let path_line = Line::from(format!("  Path: {}", path_display));
+        frame.render_widget(Paragraph::new(path_line), path_area);
+        let block = Block::bordered().title(" File browser  j/k move  Tab enter dir  Enter set root ");
+        let inner = block.inner(list_area);
+        frame.render_widget(block, list_area);
+        let inner_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(2)])
+            .split(inner);
+        let header_style = super::theme::header_style(theme);
+        let header_line = Line::from(ratatui::text::Span::styled(
+            format!(
+                "  {:<width_name$}  {:<width_mod$}  {:>width_fits$}",
+                "Name",
+                "Modified",
+                "Fits",
+                width_name = DIR_COL_NAME,
+                width_mod = DIR_COL_MODIFIED,
+                width_fits = DIR_COL_FITS
+            ),
+            header_style,
+        ));
+        frame.render_widget(Paragraph::new(header_line), inner_chunks[0]);
         let items: Vec<ListItem> = app
             .dir_browser_entries
             .iter()
-            .map(|s| ListItem::new(s.as_str()))
+            .map(|e| ListItem::new(format_dir_entry(e)))
             .collect();
-        let list = List::new(items);
-        frame.render_widget(block, area);
-        frame.render_stateful_widget(list, inner, &mut app.dir_browser_state);
+        let list = List::new(items)
+            .highlight_style(list_style(true, theme))
+            .highlight_symbol(">> ");
+        frame.render_stateful_widget(list, inner_chunks[1], &mut app.dir_browser_state);
         return;
     }
 

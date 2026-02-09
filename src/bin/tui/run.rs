@@ -11,6 +11,9 @@ pub fn run<B: Backend>(
     app: &mut App,
     poll_duration: Duration,
 ) -> io::Result<()> {
+    terminal.clear()?;
+    terminal.draw(|f| super::ui::render(f, app))?;
+    app.needs_redraw = false;
     loop {
         if app.needs_redraw {
             terminal.draw(|f| super::ui::render(f, app))?;
@@ -84,8 +87,8 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.set_mode_normal();
                 app.path_clear();
             }
-            KeyCode::Enter => app.open_selected_dir(),
-            KeyCode::Tab => app.path_autocomplete(),
+            KeyCode::Enter => app.apply_path(),
+            KeyCode::Tab => app.open_selected_dir(),
             KeyCode::Backspace => app.path_pop_char(),
             KeyCode::Char('j') => app.dir_browser_move_down(),
             KeyCode::Char('k') => app.dir_browser_move_up(),

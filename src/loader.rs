@@ -1,7 +1,7 @@
 use polars::{lazy::prelude::*, prelude::*};
 use rayon::prelude::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::errors::FitsLoaderError;
 use crate::fits::{Hdu, HduList};
@@ -255,29 +255,57 @@ pub fn read_multiple_fits_metadata(
     let lz = combined
         .lazy()
         .sort(["experiment_number", "frame_number"], Default::default());
-    Ok(add_calculated_domains(lz))
+    let filtered = lz.filter(
+        col("experiment_number").neq(0).or(col("sample_name").neq(lit(""))),
+    );
+    Ok(add_calculated_domains(filtered))
+}
+
+fn collect_fits_files_recursive(
+    root: &Path,
+    max_depth: usize,
+) -> Result<Vec<PathBuf>, FitsLoaderError> {
+    let mut entries = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((path, depth)) = stack.pop() {
+        if depth > max_depth {
+            continue;
+        }
+        let dir_entries = fs::read_dir(&path).map_err(FitsLoaderError::IoError)?;
+        for entry in dir_entries {
+            let entry = entry.map_err(FitsLoaderError::IoError)?;
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                if depth < max_depth {
+                    stack.push((entry_path, depth + 1));
+                }
+            } else if entry_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                == Some("fits")
+            {
+                entries.push(entry_path);
+            }
+        }
+    }
+    Ok(entries)
 }
 
 pub fn read_experiment_metadata(
     dir: &str,
     header_items: &Vec<String>,
 ) -> Result<DataFrame, FitsLoaderError> {
-    let dir_path = std::path::PathBuf::from(dir);
+    let dir_path = PathBuf::from(dir);
     if !dir_path.exists() {
         return Err(FitsLoaderError::FitsError(format!(
             "Directory not found: {}",
             dir
         )));
     }
-    let entries: Vec<PathBuf> = fs::read_dir(dir)
-        .map_err(FitsLoaderError::IoError)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("fits"))
-        .map(|e| e.path())
-        .collect();
+    let entries = collect_fits_files_recursive(&dir_path, 5)?;
     if entries.is_empty() {
         return Err(FitsLoaderError::FitsError(format!(
-            "No FITS files found in directory: {}",
+            "No FITS files found in directory (searched up to 5 levels deep): {}",
             dir
         )));
     }

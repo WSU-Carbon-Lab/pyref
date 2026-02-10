@@ -4,7 +4,7 @@ use ratatui::widgets::{Block, Cell, List, ListItem, Padding, Paragraph, Row, Tab
 use ratatui::Frame;
 use ratatui::layout::Alignment;
 
-use super::app::{App, AppMode, DirEntry, Focus, ProfileRow};
+use super::app::{App, AppMode, DirEntry, DirIndex, Focus, ProfileRow};
 use super::keymap::{bottom_bar_line, search_prompt_display, BROWSE_SHORTCUTS, BROWSE_TITLE};
 use super::theme::ThemeMode;
 
@@ -69,7 +69,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
     let line = if app.mode == AppMode::ChangeDir {
         let path_display = truncate_path(&app.path_input, NAV_PATH_TRUNCATE);
-        Line::from(format!("  File browser: {}  [d] close browser", path_display))
+        let mode_label = if app.path_input_active {
+            "[TYPE PATH]"
+        } else {
+            "[BROWSE]"
+        };
+        Line::from(format!("  {} Path: {}  [d] close browser", mode_label, path_display))
     } else if app.current_root.is_empty() {
         Line::from("  No directory selected  [d] open file browser")
     } else {
@@ -88,7 +93,11 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
 fn render_bottom_bar(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
     let style = super::theme::keybind_bar_style(theme);
     let content: String = if app.mode == AppMode::ChangeDir {
-        " Tab enter dir  Enter set root / open browser  Esc close ".to_string()
+        if app.path_input_active {
+            " Type path  Enter apply  Esc cancel ".to_string()
+        } else {
+            " j/k move  Tab open  Enter set root  / type path  Esc close ".to_string()
+        }
     } else {
         bottom_bar_line()
     };
@@ -130,14 +139,64 @@ fn render_search_box(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode)
     frame.render_widget(block, area);
 }
 
-const DIR_COL_NAME: usize = 36;
-const DIR_COL_MODIFIED: usize = 16;
-const DIR_COL_FITS: usize = 8;
+fn render_dir_index_panel(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
+    let index_loading = app.dir_index_loading.is_some();
+    let block = Block::bordered().title(" Directory index ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let muted = super::theme::empty_message_style(theme);
+    if index_loading {
+        frame.render_widget(
+            Paragraph::new("  Indexing...").style(muted),
+            inner,
+        );
+        return;
+    }
+    let Some(idx) = &app.current_dir_index else {
+        frame.render_widget(Paragraph::new("  No index").style(muted), inner);
+        return;
+    };
+    let samples_str = if idx.samples.is_empty() {
+        "-".to_string()
+    } else if idx.samples.len() <= 3 {
+        idx.samples.join(", ")
+    } else {
+        format!("{} ({} total)", idx.samples[..3].join(", "), idx.samples.len())
+    };
+    let energy_str = if idx.energies.is_empty() {
+        "-".to_string()
+    } else if idx.energies.len() == 1 {
+        format!("{:.1} eV", idx.energies[0])
+    } else {
+        let min = idx.energies.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = idx.energies.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        format!("{:.0}-{:.0} eV", min, max)
+    };
+    let lines = vec![
+        Line::from({
+            let t: String = samples_str.chars().take(24).collect();
+            let suffix = if samples_str.chars().count() > 24 { ".." } else { "" };
+            format!("  Samples: {}{}", t, suffix)
+        }),
+        Line::from(format!("  Experiments: {}", idx.experiment_count)),
+        Line::from(format!("  Energies: {}", energy_str)),
+        Line::from(format!("  FITS: {} files", idx.fits_count)),
+    ];
+    frame.render_widget(Paragraph::new(lines).style(muted), inner);
+}
+
+const DIR_COL_NAME: usize = 22;
+const DIR_COL_MODIFIED: usize = 12;
+const DIR_COL_FITS: usize = 5;
+const DIR_COL_ENERGY: usize = 10;
+const DIR_COL_POL: usize = 4;
+const DIR_COL_SAMPLE: usize = 12;
+const DIR_COL_TAG: usize = 8;
 
 fn format_dir_entry(entry: &DirEntry) -> String {
     let kind = if entry.is_dir { "  / " } else { "    " };
     let name_trunc = if entry.name.len() > DIR_COL_NAME {
-        format!("{}...", &entry.name[..(DIR_COL_NAME - 3)])
+        format!("{}..", &entry.name[..(DIR_COL_NAME - 2)])
     } else {
         entry.name.clone()
     };
@@ -152,15 +211,27 @@ fn format_dir_entry(entry: &DirEntry) -> String {
         .fits_subdir_count
         .map(|n| n.to_string())
         .unwrap_or_else(|| "-".to_string());
+    let energy_str = entry.energy.as_deref().unwrap_or("-").chars().take(DIR_COL_ENERGY).collect::<String>();
+    let pol_str = entry.pol.as_deref().unwrap_or("-").chars().take(DIR_COL_POL).collect::<String>();
+    let sample_str = entry.sample_name.as_deref().unwrap_or("-").chars().take(DIR_COL_SAMPLE).collect::<String>();
+    let tag_str = entry.experiment_tag.as_deref().unwrap_or("-").chars().take(DIR_COL_TAG).collect::<String>();
     format!(
-        "{}{:<width_name$}  {:<width_mod$}  {:>width_fits$}",
+        "{}{:<n$}  {:<m$}  {:>f$}  {:<e$}  {:<p$}  {:<s$}  {:<t$}",
         kind,
         name_trunc,
         modified_str,
         fits_str,
-        width_name = DIR_COL_NAME,
-        width_mod = DIR_COL_MODIFIED,
-        width_fits = DIR_COL_FITS
+        energy_str,
+        pol_str,
+        sample_str,
+        tag_str,
+        n = DIR_COL_NAME,
+        m = DIR_COL_MODIFIED,
+        f = DIR_COL_FITS,
+        e = DIR_COL_ENERGY,
+        p = DIR_COL_POL,
+        s = DIR_COL_SAMPLE,
+        t = DIR_COL_TAG
     )
 }
 
@@ -172,10 +243,18 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
             .constraints([Constraint::Length(1), Constraint::Min(4)])
             .split(area);
         let path_area = chunks[0];
-        let list_area = chunks[1];
+        let body_row = chunks[1];
         let path_line = Line::from(format!("  Path: {}", path_display));
         frame.render_widget(Paragraph::new(path_line), path_area);
-        let block = Block::bordered().title(" File browser  j/k move  Tab enter dir  Enter set root ");
+        let (list_area, index_area) = {
+            let horz = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(40), Constraint::Length(28)])
+                .split(body_row);
+            (horz[0], horz[1])
+        };
+        let loading = app.dir_browser_loading.is_some();
+        let block = Block::bordered().title(" File browser  j/k move  Tab enter dir  Enter set root  Ctrl+Tab path complete ");
         let inner = block.inner(list_area);
         frame.render_widget(block, list_area);
         let inner_chunks = Layout::default()
@@ -185,26 +264,42 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
         let header_style = super::theme::header_style(theme);
         let header_line = Line::from(ratatui::text::Span::styled(
             format!(
-                "  {:<width_name$}  {:<width_mod$}  {:>width_fits$}",
+                "  {:<n$}  {:<m$}  {:>f$}  {:<e$}  {:<p$}  {:<s$}  {:<t$}",
                 "Name",
-                "Modified",
+                "Mod",
                 "Fits",
-                width_name = DIR_COL_NAME,
-                width_mod = DIR_COL_MODIFIED,
-                width_fits = DIR_COL_FITS
+                "Energy",
+                "Pol",
+                "Sample",
+                "Tag",
+                n = DIR_COL_NAME,
+                m = DIR_COL_MODIFIED,
+                f = DIR_COL_FITS,
+                e = DIR_COL_ENERGY,
+                p = DIR_COL_POL,
+                s = DIR_COL_SAMPLE,
+                t = DIR_COL_TAG
             ),
             header_style,
         ));
         frame.render_widget(Paragraph::new(header_line), inner_chunks[0]);
-        let items: Vec<ListItem> = app
-            .dir_browser_entries
-            .iter()
-            .map(|e| ListItem::new(format_dir_entry(e)))
-            .collect();
-        let list = List::new(items)
-            .highlight_style(list_style(true, theme))
-            .highlight_symbol(">> ");
-        frame.render_stateful_widget(list, inner_chunks[1], &mut app.dir_browser_state);
+        if loading {
+            frame.render_widget(
+                Paragraph::new("  Loading...").style(super::theme::empty_message_style(theme)),
+                inner_chunks[1],
+            );
+        } else {
+            let items: Vec<ListItem> = app
+                .dir_browser_entries
+                .iter()
+                .map(|e| ListItem::new(format_dir_entry(e)))
+                .collect();
+            let list = List::new(items)
+                .highlight_style(list_style(true, theme))
+                .highlight_symbol(">> ");
+            frame.render_stateful_widget(list, inner_chunks[1], &mut app.dir_browser_state);
+        }
+        render_dir_index_panel(frame, app, index_area, theme);
         return;
     }
 

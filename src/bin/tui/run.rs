@@ -15,12 +15,18 @@ pub fn run<B: Backend>(
     terminal.draw(|f| super::ui::render(f, app))?;
     app.needs_redraw = false;
     loop {
+        app.try_complete_dir_browser_loading();
+        app.try_complete_dir_index_loading();
         if app.needs_redraw {
             terminal.draw(|f| super::ui::render(f, app))?;
             app.needs_redraw = false;
         }
-
-        if crossterm::event::poll(poll_duration)? {
+        let poll = if app.dir_browser_loading.is_some() || app.dir_index_loading.is_some() {
+            Duration::from_millis(100)
+        } else {
+            poll_duration
+        };
+        if crossterm::event::poll(poll)? {
             let ev = crossterm::event::read()?;
             match ev {
                 Event::Key(key) => {
@@ -61,6 +67,17 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     }
 
     if app.mode == super::app::AppMode::ChangeDir {
+        if app.path_input_active {
+            match key.code {
+                KeyCode::Esc => app.set_path_input_active(false),
+                KeyCode::Enter => app.apply_path(),
+                KeyCode::Backspace => app.path_pop_char(),
+                KeyCode::Tab => app.path_autocomplete(),
+                KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.path_push_char(c),
+                _ => {}
+            }
+            return false;
+        }
         let action = keymap::from_key_event(key, &app.keymap);
         if action == Action::AcceptPath {
             app.apply_path();
@@ -88,13 +105,18 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.path_clear();
             }
             KeyCode::Enter => app.apply_path(),
-            KeyCode::Tab => app.open_selected_dir(),
-            KeyCode::Backspace => app.path_pop_char(),
+            KeyCode::Tab => {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                    app.path_autocomplete();
+                } else {
+                    app.open_selected_dir();
+                }
+            }
+            KeyCode::Char('/') => app.set_path_input_active(true),
             KeyCode::Char('j') => app.dir_browser_move_down(),
             KeyCode::Char('k') => app.dir_browser_move_up(),
             KeyCode::Down => app.dir_browser_move_down(),
             KeyCode::Up => app.dir_browser_move_up(),
-            KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.path_push_char(c),
             _ => {}
         }
         return false;

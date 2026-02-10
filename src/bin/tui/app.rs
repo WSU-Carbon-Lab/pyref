@@ -2,14 +2,17 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ratatui::widgets::{ListState, TableState};
 use std::cmp;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
 use std::time::SystemTime;
 
 use chrono::DateTime;
 use pyref::errors::FitsLoaderError;
-use pyref::loader::read_experiment_metadata;
+use pyref::io::parse_fits_stem;
+use pyref::loader::{read_experiment_metadata, read_fits_metadata};
 
 #[derive(Debug, Clone)]
 pub struct ProfileRow {
@@ -29,6 +32,157 @@ pub struct DirEntry {
     pub is_dir: bool,
     pub modified: Option<String>,
     pub fits_subdir_count: Option<u32>,
+    pub energy: Option<String>,
+    pub pol: Option<String>,
+    pub sample_name: Option<String>,
+    pub experiment_tag: Option<String>,
+}
+
+pub type DirBrowserResult = (String, Vec<DirEntry>);
+
+#[derive(Debug, Clone, Default)]
+pub struct DirIndex {
+    pub samples: Vec<String>,
+    pub experiment_count: u32,
+    pub energies: Vec<f64>,
+    pub fits_count: u32,
+}
+
+fn build_dir_index_async(resolved_path: String) -> (String, DirIndex) {
+    let path = Path::new(&resolved_path);
+    let mut samples_set: HashSet<String> = HashSet::new();
+    let mut experiment_set: HashSet<i64> = HashSet::new();
+    let mut energies_set: HashSet<u64> = HashSet::new();
+    let mut fits_count: u32 = 0;
+    let header_items: Vec<String> = FITS_HEADER_KEYS.iter().map(|s| (*s).to_string()).collect();
+    if let Ok(rd) = fs::read_dir(path) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.to_lowercase().ends_with(FITS_EXT) {
+                continue;
+            }
+            let full = path.join(&name);
+            if !full.is_file() {
+                continue;
+            }
+            fits_count = fits_count.saturating_add(1);
+            let path_buf = full.to_path_buf();
+            let Ok(df) = read_fits_metadata(path_buf, &header_items) else {
+                if let Some(stem) = full.file_stem().and_then(|s| s.to_str()) {
+                    if let Some(p) = parse_fits_stem(stem) {
+                        if !p.sample_name.is_empty() {
+                            samples_set.insert(p.sample_name);
+                        }
+                        if p.experiment_number > 0 {
+                            experiment_set.insert(p.experiment_number);
+                        }
+                    }
+                }
+                continue;
+            };
+            if let Ok(c) = df.column("sample_name") {
+                if let Ok(s) = c.str() {
+                    if let Some(v) = s.get(0) {
+                        let v = v.to_string();
+                        if !v.is_empty() && v != "null" {
+                            samples_set.insert(v);
+                        }
+                    }
+                }
+            }
+            if let Ok(c) = df.column("experiment_number") {
+                if let Ok(n) = c.i64() {
+                    if let Some(v) = n.get(0) {
+                        if v > 0 {
+                            experiment_set.insert(v);
+                        }
+                    }
+                }
+            }
+            if let Ok(c) = df.column("Beamline Energy") {
+                if let Ok(f) = c.f64() {
+                    if let Some(v) = f.get(0) {
+                        if v > 0.0 {
+                            energies_set.insert((v * 1000.0) as u64);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut samples: Vec<String> = samples_set.into_iter().collect();
+    samples.sort();
+    let experiment_count = experiment_set.len() as u32;
+    let mut energies: Vec<f64> = energies_set.into_iter().map(|u| (u as f64) / 1000.0).collect();
+    energies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    (
+        resolved_path,
+        DirIndex {
+            samples,
+            experiment_count,
+            energies,
+            fits_count,
+        },
+    )
+}
+
+fn build_dir_browser_entries_async(path_input: String) -> DirBrowserResult {
+    let expanded = expand_tilde(path_input.trim());
+    let resolved = resolved_browse_dir(&expanded);
+    let mut dirs: Vec<DirEntry> = Vec::new();
+    let mut files: Vec<DirEntry> = Vec::new();
+    let has_parent = Path::new(&resolved).parent().is_some_and(|p| p.to_str().map_or(false, |s| !s.is_empty() && s != "."));
+    if has_parent {
+        dirs.push(DirEntry {
+            name: "..".to_string(),
+            is_dir: true,
+            modified: None,
+            fits_subdir_count: None,
+            energy: None,
+            pol: None,
+            sample_name: None,
+            experiment_tag: None,
+        });
+    }
+    let resolved_path = Path::new(&resolved);
+    if let Ok(rd) = fs::read_dir(&resolved) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let full = resolved_path.join(&name);
+            let full_canon = full.canonicalize().unwrap_or(full.clone());
+            let is_dir = full_canon.is_dir();
+            let (modified, fits_subdir_count, energy, pol, sample_name, experiment_tag) = if is_dir && name != ".." {
+                let modified = fs::metadata(&full_canon).ok().and_then(|m| m.modified().ok()).and_then(format_modified);
+                let fits_subdir_count = count_immediate_subdirs_containing_fits_safe(&full_canon);
+                (modified, fits_subdir_count, None, None, None, None)
+            } else if !is_dir {
+                let modified = fs::metadata(&full_canon).ok().and_then(|m| m.modified().ok()).and_then(format_modified);
+                (modified, None, None, None, None, None)
+            } else {
+                (None, None, None, None, None, None)
+            };
+            let entry = DirEntry {
+                name,
+                is_dir,
+                modified,
+                fits_subdir_count,
+                energy,
+                pol,
+                sample_name,
+                experiment_tag,
+            };
+            if is_dir {
+                dirs.push(entry);
+            } else {
+                files.push(entry);
+            }
+        }
+    }
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let mut entries = dirs;
+    entries.extend(files);
+    (resolved, entries)
 }
 
 fn home_dir() -> Option<String> {
@@ -82,15 +236,14 @@ fn resolved_browse_dir(expanded_path: &str) -> String {
     }
     if let Some(parent) = p.parent() {
         let parent_str = parent.to_string_lossy();
-        if parent_str.is_empty() || parent_str == "." {
-            return home_dir().unwrap_or_else(|| ".".to_string());
-        }
-        let parent_path = Path::new(parent);
-        if parent_path.exists() && parent_path.is_dir() {
-            return parent_path
-                .canonicalize()
-                .map(|c| c.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| parent_str.into_owned());
+        if !parent_str.is_empty() && parent_str != "." {
+            let parent_path = Path::new(parent);
+            if parent_path.exists() && parent_path.is_dir() {
+                return parent_path
+                    .canonicalize()
+                    .map(|c| c.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| parent_str.into_owned());
+            }
         }
     }
     home_dir().unwrap_or_else(|| ".".to_string())
@@ -129,10 +282,65 @@ fn count_immediate_subdirs_containing_fits(path: &Path) -> u32 {
     for e in rd.filter_map(|e| e.ok()) {
         let full = path.join(e.file_name());
         if full.is_dir() && dir_contains_fits_immediate(&full) {
-            count += 1;
+            count = count.saturating_add(1);
         }
     }
     count
+}
+
+fn count_immediate_subdirs_containing_fits_safe(path: &Path) -> Option<u32> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| count_immediate_subdirs_containing_fits(path))).ok()
+}
+
+const FITS_HEADER_KEYS: [&str; 2] = ["Beamline Energy", "Polarization"];
+
+fn fits_file_metadata(path: &Path) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+    let path_buf = path.to_path_buf();
+    let header_items: Vec<String> = FITS_HEADER_KEYS.iter().map(|s| s.to_string()).collect();
+    let Ok(df) = read_fits_metadata(path_buf.clone(), &header_items) else {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let (sample, tag) = parse_fits_stem(stem)
+            .map(|p| (Some(p.sample_name), p.tag))
+            .unwrap_or((None, None));
+        return (None, None, sample, tag);
+    };
+    let energy = df
+        .column("Beamline Energy")
+        .ok()
+        .and_then(|c| c.f64().ok())
+        .and_then(|s| s.get(0))
+        .filter(|&v| v > 0.0)
+        .map(|v| format!("{:.1} eV", v));
+    let pol = df
+        .column("Polarization")
+        .ok()
+        .and_then(|c| c.f64().ok())
+        .and_then(|s| s.get(0))
+        .map(|v| format!("{:.0}", v))
+        .or_else(|| df.column("POL").ok().and_then(|c| c.f64().ok()).and_then(|s| s.get(0)).map(|v| format!("{:.0}", v)));
+    let sample_name = df
+        .column("sample_name")
+        .ok()
+        .and_then(|c| c.str().ok())
+        .and_then(|s| s.get(0))
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+    let tag = df
+        .column("tag")
+        .ok()
+        .and_then(|c| c.str().ok())
+        .and_then(|s| s.get(0))
+        .map(|s| s.to_string())
+        .filter(|s| s != "null" && !s.is_empty());
+    let exp = df
+        .column("experiment_number")
+        .ok()
+        .and_then(|c| c.i64().ok())
+        .and_then(|s| s.get(0))
+        .filter(|&n| n > 0)
+        .map(|n| n.to_string());
+    let experiment_tag = exp.or(tag.clone());
+    (energy, pol, sample_name, experiment_tag)
 }
 
 fn common_prefix_slice(names: &[String]) -> String {
@@ -251,6 +459,11 @@ pub struct App {
     pub path_input: String,
     pub dir_browser_entries: Vec<DirEntry>,
     pub dir_browser_state: ListState,
+    pub dir_browser_loading: Option<mpsc::Receiver<DirBrowserResult>>,
+    pub dir_index_loading: Option<mpsc::Receiver<(String, DirIndex)>>,
+    pub current_dir_index: Option<DirIndex>,
+    pub dir_index_cache: HashMap<String, DirIndex>,
+    pub path_input_active: bool,
     pub needs_redraw: bool,
     pub layout: String,
     pub keymap: String,
@@ -312,6 +525,11 @@ impl App {
             path_input: String::new(),
             dir_browser_entries: Vec::<DirEntry>::new(),
             dir_browser_state: ListState::default(),
+            dir_browser_loading: None,
+            dir_index_loading: None,
+            current_dir_index: None,
+            dir_index_cache: HashMap::new(),
+            path_input_active: false,
             needs_redraw: true,
             layout,
             keymap,
@@ -595,76 +813,102 @@ impl App {
 
     pub fn set_mode_change_dir(&mut self) {
         self.mode = AppMode::ChangeDir;
+        self.path_input_active = false;
         self.path_input = if self.current_root.is_empty() {
             "~".to_string()
         } else {
             to_tilde_form(&self.current_root)
         };
-        self.refresh_dir_browser();
+        self.request_dir_browser_refresh();
         self.needs_redraw = true;
     }
 
-    pub fn refresh_dir_browser(&mut self) {
-        let expanded = expand_tilde(self.path_input.trim());
-        let resolved = resolved_browse_dir(&expanded);
-        let mut dirs: Vec<DirEntry> = Vec::new();
-        let mut files: Vec<DirEntry> = Vec::new();
-        let has_parent = Path::new(&resolved).parent().is_some_and(|p| p.to_str().map_or(false, |s| !s.is_empty() && s != "."));
-        if has_parent {
-            dirs.push(DirEntry {
-                name: "..".to_string(),
-                is_dir: true,
-                modified: None,
-                fits_subdir_count: None,
-            });
-        }
-        if let Ok(rd) = fs::read_dir(&resolved) {
-            for e in rd.filter_map(|e| e.ok()) {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let full = Path::new(&resolved).join(&name);
-                let is_dir = full.is_dir();
-                let (modified, fits_subdir_count) = if is_dir && name != ".." {
-                    let modified = fs::metadata(&full).ok().and_then(|m| m.modified().ok()).and_then(format_modified);
-                    let fits_subdir_count = Some(count_immediate_subdirs_containing_fits(&full));
-                    (modified, fits_subdir_count)
-                } else if !is_dir {
-                    let modified = fs::metadata(&full).ok().and_then(|m| m.modified().ok()).and_then(format_modified);
-                    (modified, None)
-                } else {
-                    (None, None)
-                };
-                let entry = DirEntry {
-                    name,
-                    is_dir,
-                    modified,
-                    fits_subdir_count,
-                };
-                if is_dir {
-                    dirs.push(entry);
-                } else {
-                    files.push(entry);
-                }
-            }
-        }
-        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        let mut entries = dirs;
-        entries.extend(files);
-        self.dir_browser_entries = entries;
-        let len = self.dir_browser_entries.len();
-        let current = self.dir_browser_state.selected().unwrap_or(0);
-        let clamped = if len == 0 {
-            None
-        } else if current >= len {
-            Some(len - 1)
-        } else {
-            Some(current)
-        };
-        self.dir_browser_state.select(clamped);
-        if clamped.is_none() && len > 0 {
-            self.dir_browser_state.select(Some(0));
-        }
+    pub fn set_path_input_active(&mut self, active: bool) {
+        self.path_input_active = active;
         self.needs_redraw = true;
+    }
+
+    pub fn request_dir_browser_refresh(&mut self) {
+        if self.dir_browser_loading.is_some() {
+            return;
+        }
+        let path_input = self.path_input.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = build_dir_browser_entries_async(path_input);
+            let _ = tx.send(result);
+        });
+        self.dir_browser_loading = Some(rx);
+        self.needs_redraw = true;
+    }
+
+    pub fn try_complete_dir_browser_loading(&mut self) {
+        let Some(rx) = &mut self.dir_browser_loading else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((resolved, entries)) => {
+                self.dir_browser_entries = entries;
+                let len = self.dir_browser_entries.len();
+                let current = self.dir_browser_state.selected().unwrap_or(0);
+                let clamped = if len == 0 {
+                    None
+                } else if current >= len {
+                    Some(len - 1)
+                } else {
+                    Some(current)
+                };
+                self.dir_browser_state.select(clamped);
+                if clamped.is_none() && len > 0 {
+                    self.dir_browser_state.select(Some(0));
+                }
+                self.dir_browser_loading = None;
+                self.request_dir_index_build(resolved);
+                self.needs_redraw = true;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.dir_browser_loading = None;
+                self.needs_redraw = true;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    pub fn request_dir_index_build(&mut self, resolved_path: String) {
+        if let Some(cached) = self.dir_index_cache.get(&resolved_path) {
+            self.current_dir_index = Some(cached.clone());
+        } else {
+            self.current_dir_index = None;
+        }
+        if self.dir_index_loading.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = build_dir_index_async(resolved_path);
+            let _ = tx.send(result);
+        });
+        self.dir_index_loading = Some(rx);
+        self.needs_redraw = true;
+    }
+
+    pub fn try_complete_dir_index_loading(&mut self) {
+        let Some(rx) = &mut self.dir_index_loading else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((path, index)) => {
+                self.dir_index_cache.insert(path, index.clone());
+                self.current_dir_index = Some(index);
+                self.dir_index_loading = None;
+                self.needs_redraw = true;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.dir_index_loading = None;
+                self.needs_redraw = true;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
     }
 
     pub fn open_selected_dir(&mut self) {
@@ -681,16 +925,26 @@ impl App {
         }
         if entry.name == ".." {
             let parent = Path::new(&resolved).parent();
-            let raw = parent
-                .and_then(|p| p.to_str())
-                .map(String::from)
-                .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".to_string()));
+            let raw = match parent {
+                Some(p) if !p.as_os_str().is_empty() => p
+                    .canonicalize()
+                    .ok()
+                    .and_then(|c| c.to_str().map(String::from))
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned()),
+                _ => {
+                    #[cfg(unix)]
+                    let root = "/".to_string();
+                    #[cfg(not(unix))]
+                    let root = format!("{}", std::path::MAIN_SEPARATOR);
+                    root
+                }
+            };
             self.path_input = to_tilde_form(&raw);
         } else {
             let raw = format!("{}/{}", resolved.trim_end_matches('/'), entry.name);
             self.path_input = to_tilde_form(&raw);
         }
-        self.refresh_dir_browser();
+        self.request_dir_browser_refresh();
         self.needs_redraw = true;
     }
 
@@ -734,13 +988,13 @@ impl App {
     pub fn path_push_char(&mut self, c: char) {
         if c.is_ascii() && !c.is_control() {
             self.path_input.push(c);
-            self.refresh_dir_browser();
+            self.request_dir_browser_refresh();
         }
     }
 
     pub fn path_pop_char(&mut self) {
         if self.path_input.pop().is_some() {
-            self.refresh_dir_browser();
+            self.request_dir_browser_refresh();
         }
     }
 
@@ -815,7 +1069,7 @@ impl App {
         if Path::new(&expand_tilde(self.path_input.trim())).is_dir() && !self.path_input.ends_with('/') {
             self.path_input.push('/');
         }
-        self.refresh_dir_browser();
+        self.request_dir_browser_refresh();
         self.needs_redraw = true;
     }
 

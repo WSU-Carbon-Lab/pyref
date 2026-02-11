@@ -12,7 +12,8 @@ use std::time::SystemTime;
 use chrono::DateTime;
 use pyref::errors::FitsLoaderError;
 use pyref::io::parse_fits_stem;
-use pyref::loader::{read_experiment_metadata, read_fits_metadata};
+use pyref::loader::{catalog_from_stems, list_fits_in_dir, read_experiment_metadata, read_fits_metadata};
+use pyref::path_policy;
 
 #[derive(Debug, Clone)]
 pub struct ProfileRow {
@@ -50,78 +51,21 @@ pub struct DirIndex {
 
 fn build_dir_index_async(resolved_path: String) -> (String, DirIndex) {
     let path = Path::new(&resolved_path);
-    let mut samples_set: HashSet<String> = HashSet::new();
-    let mut experiment_set: HashSet<i64> = HashSet::new();
-    let mut energies_set: HashSet<u64> = HashSet::new();
-    let mut fits_count: u32 = 0;
-    let header_items: Vec<String> = FITS_HEADER_KEYS.iter().map(|s| (*s).to_string()).collect();
-    if let Ok(rd) = fs::read_dir(path) {
-        for e in rd.filter_map(|e| e.ok()) {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if !name.to_lowercase().ends_with(FITS_EXT) {
-                continue;
-            }
-            let full = path.join(&name);
-            if !full.is_file() {
-                continue;
-            }
-            fits_count = fits_count.saturating_add(1);
-            let path_buf = full.to_path_buf();
-            let Ok(df) = read_fits_metadata(path_buf, &header_items) else {
-                if let Some(stem) = full.file_stem().and_then(|s| s.to_str()) {
-                    if let Some(p) = parse_fits_stem(stem) {
-                        if !p.sample_name.is_empty() {
-                            samples_set.insert(p.sample_name);
-                        }
-                        if p.experiment_number > 0 {
-                            experiment_set.insert(p.experiment_number);
-                        }
-                    }
-                }
-                continue;
-            };
-            if let Ok(c) = df.column("sample_name") {
-                if let Ok(s) = c.str() {
-                    if let Some(v) = s.get(0) {
-                        let v = v.to_string();
-                        if !v.is_empty() && v != "null" {
-                            samples_set.insert(v);
-                        }
-                    }
-                }
-            }
-            if let Ok(c) = df.column("experiment_number") {
-                if let Ok(n) = c.i64() {
-                    if let Some(v) = n.get(0) {
-                        if v > 0 {
-                            experiment_set.insert(v);
-                        }
-                    }
-                }
-            }
-            if let Ok(c) = df.column("Beamline Energy") {
-                if let Ok(f) = c.f64() {
-                    if let Some(v) = f.get(0) {
-                        if v > 0.0 {
-                            energies_set.insert((v * 1000.0) as u64);
-                        }
-                    }
-                }
-            }
-        }
+    if !path_policy::is_indexable_als_path(path) {
+        return (resolved_path, DirIndex::default());
     }
-    let mut samples: Vec<String> = samples_set.into_iter().collect();
-    samples.sort();
-    let experiment_count = experiment_set.len() as u32;
-    let mut energies: Vec<f64> = energies_set.into_iter().map(|u| (u as f64) / 1000.0).collect();
-    energies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let paths = match list_fits_in_dir(path) {
+        Ok(p) => p,
+        Err(_) => return (resolved_path, DirIndex::default()),
+    };
+    let catalog = catalog_from_stems(&paths);
     (
         resolved_path,
         DirIndex {
-            samples,
-            experiment_count,
-            energies,
-            fits_count,
+            samples: catalog.samples,
+            experiment_count: catalog.experiment_count,
+            energies: Vec::new(),
+            fits_count: catalog.fits_count,
         },
     )
 }
@@ -292,8 +236,10 @@ fn count_immediate_subdirs_containing_fits_safe(path: &Path) -> Option<u32> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| count_immediate_subdirs_containing_fits(path))).ok()
 }
 
+#[allow(dead_code)]
 const FITS_HEADER_KEYS: [&str; 2] = ["Beamline Energy", "Polarization"];
 
+#[allow(dead_code)]
 fn fits_file_metadata(path: &Path) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
     let path_buf = path.to_path_buf();
     let header_items: Vec<String> = FITS_HEADER_KEYS.iter().map(|s| s.to_string()).collect();

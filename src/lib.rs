@@ -5,12 +5,15 @@ pub mod errors;
 pub mod fits;
 pub mod io;
 pub mod loader;
+pub mod path_policy;
 
-pub use errors::FitsLoaderError;
+pub use errors::{FitsLoaderError, LoaderError, LoaderErrorKind};
 pub use loader::{
-    read_experiment, read_experiment_metadata, read_experiment_pattern, read_fits,
-    read_fits_metadata, read_multiple_fits, read_multiple_fits_metadata,
+    catalog_from_stems, list_fits_in_dir, read_experiment, read_experiment_metadata,
+    read_experiment_pattern, read_fits, read_fits_metadata, read_fits_metadata_sampled,
+    read_multiple_fits, read_multiple_fits_metadata, StemCatalog,
 };
+pub use path_policy::is_indexable_als_path;
 
 #[cfg(feature = "extension-module")]
 mod extension {

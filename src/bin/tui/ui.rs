@@ -4,7 +4,7 @@ use ratatui::widgets::{Block, Cell, List, ListItem, Padding, Paragraph, Row, Tab
 use ratatui::Frame;
 use ratatui::layout::Alignment;
 
-use super::app::{App, AppMode, DirEntry, DirIndex, Focus, ProfileRow};
+use super::app::{App, AppMode, DirEntry, Focus, ProfileRow};
 use super::keymap::{bottom_bar_line, search_prompt_display, BROWSE_SHORTCUTS, BROWSE_TITLE};
 use super::theme::ThemeMode;
 

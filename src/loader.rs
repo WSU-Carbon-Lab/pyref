@@ -1,13 +1,131 @@
 use polars::{lazy::prelude::*, prelude::*};
 use rayon::prelude::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::errors::FitsLoaderError;
+use crate::errors::{FitsLoaderError, LoaderError};
 use crate::fits::{Hdu, HduList};
 use crate::io::{
-    add_calculated_domains, process_file_name, process_image, process_image_header, process_metadata,
+    add_calculated_domains, parse_fits_stem, process_file_name, process_image, process_image_header,
+    process_metadata,
 };
+use std::collections::HashSet;
+
+#[derive(Debug, Clone, Default)]
+pub struct StemCatalog {
+    pub samples: Vec<String>,
+    pub experiment_count: u32,
+    pub fits_count: u32,
+}
+
+pub fn catalog_from_stems(paths: &[PathBuf]) -> StemCatalog {
+    let fits_count = paths.len() as u32;
+    if paths.is_empty() {
+        return StemCatalog {
+            samples: Vec::new(),
+            experiment_count: 0,
+            fits_count: 0,
+        };
+    }
+    let (samples_set, experiment_set): (HashSet<String>, HashSet<i64>) = paths
+        .par_iter()
+        .filter_map(|p| {
+            let stem = p.file_stem().and_then(|s| s.to_str())?;
+            parse_fits_stem(stem).map(|parsed| {
+                let samples: HashSet<String> = if parsed.sample_name.is_empty() {
+                    HashSet::new()
+                } else {
+                    [parsed.sample_name].into_iter().collect()
+                };
+                let experiments: HashSet<i64> = if parsed.experiment_number > 0 {
+                    [parsed.experiment_number].into_iter().collect()
+                } else {
+                    HashSet::new()
+                };
+                (samples, experiments)
+            })
+        })
+        .reduce(
+            || (HashSet::new(), HashSet::new()),
+            |(mut a_s, mut a_e), (b_s, b_e)| {
+                a_s.extend(b_s);
+                a_e.extend(b_e);
+                (a_s, a_e)
+            },
+        );
+    let mut samples: Vec<String> = samples_set.into_iter().collect();
+    samples.sort();
+    StemCatalog {
+        samples,
+        experiment_count: experiment_set.len() as u32,
+        fits_count,
+    }
+}
+
+pub fn list_fits_in_dir(dir: &Path) -> Result<Vec<PathBuf>, LoaderError> {
+    let entries = fs::read_dir(dir).map_err(|e| LoaderError::list_fits_io(dir.display(), e))?;
+    let paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            p.extension().and_then(|ext| ext.to_str()) == Some("fits") && p.is_file()
+        })
+        .map(|e| e.path())
+        .collect();
+    Ok(paths)
+}
+
+pub fn read_fits_metadata_sampled(
+    paths: &[PathBuf],
+    header_items: &[String],
+    max_files: usize,
+) -> Result<DataFrame, LoaderError> {
+    if paths.is_empty() {
+        return Err(LoaderError {
+            kind: crate::errors::LoaderErrorKind::ValidationFailed,
+            retryable: false,
+            message: "no paths provided".into(),
+            context: vec![("operation".into(), "read_fits_metadata_sampled".into())],
+            source: None,
+        });
+    }
+    let header_vec: Vec<String> = header_items.to_vec();
+    let sampled: Vec<PathBuf> = paths.iter().take(max_files).cloned().collect();
+    let results: Vec<Result<DataFrame, FitsLoaderError>> = sampled
+        .par_iter()
+        .map(|path| read_fits_metadata(path.clone(), &header_vec))
+        .collect();
+    let successful_dfs: Vec<DataFrame> = results.into_iter().filter_map(|r| r.ok()).collect();
+    if successful_dfs.is_empty() {
+        return Err(LoaderError {
+            kind: crate::errors::LoaderErrorKind::Permanent,
+            retryable: false,
+            message: "none of the sampled files could be read for metadata".into(),
+            context: vec![
+                ("operation".into(), "read_fits_metadata_sampled".into()),
+                ("path_count".into(), sampled.len().to_string()),
+            ],
+            source: None,
+        });
+    }
+    let combined = successful_dfs
+        .into_par_iter()
+        .reduce_with(|acc, df| match acc.vstack(&df) {
+            Ok(c) => c,
+            Err(_) => acc,
+        })
+        .ok_or_else(|| LoaderError {
+            kind: crate::errors::LoaderErrorKind::Permanent,
+            retryable: false,
+            message: "failed to combine metadata".into(),
+            context: vec![("operation".into(), "read_fits_metadata_sampled".into())],
+            source: None,
+        })?;
+    let lz = combined
+        .lazy()
+        .sort(["experiment_number", "frame_number"], Default::default());
+    Ok(add_calculated_domains(lz))
+}
 
 /// Reads a single FITS file and converts it to a Polars DataFrame.
 ///
@@ -398,4 +516,27 @@ pub fn read_experiment_pattern(
     }
 
     read_multiple_fits(entries, &header_items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_from_stems_aggregates_and_skips_invalid() {
+        let paths: Vec<PathBuf> = [
+            "/x/ZnPc_rt 81041-00001.fits",
+            "/x/ZnPc_rt 81041-00002.fits",
+            "/x/monlayerjune 81041-00007.fits",
+            "/x/invalid_stem.fits",
+        ]
+        .iter()
+        .map(|s| PathBuf::from(s))
+        .collect();
+        let catalog = catalog_from_stems(&paths);
+        assert_eq!(catalog.fits_count, 4);
+        assert!(catalog.samples.contains(&"ZnPc".to_string()));
+        assert!(catalog.samples.contains(&"monlayerjune".to_string()));
+        assert_eq!(catalog.experiment_count, 1);
+    }
 }

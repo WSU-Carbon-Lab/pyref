@@ -9,7 +9,6 @@ from astropy.io.fits import ImageHDU
 from typing import cast
 
 from pyref import get_data_path
-from pyref.io import read_fits
 
 
 @dataclass(frozen=True)
@@ -28,9 +27,19 @@ class PatchReport:
 
 
 def load_pyref(path: Path) -> np.ndarray:
-    """Load RAW via pyref."""
-    df = read_fits(str(path), headers=[], engine="polars")
-    return np.asarray(df["RAW"].to_numpy()[0])
+    """Load RAW via pyref (header-only + get_image_for_row when available)."""
+    from pyref.pyref import py_read_fits_headers_only
+
+    df = py_read_fits_headers_only(str(path), [])
+    try:
+        from pyref.pyref import py_get_image_for_row
+    except ImportError:
+        raise NotImplementedError(
+            "Image loading requires py_get_image_for_row (Phase 2). "
+            "Use header-only APIs for metadata until then."
+        ) from None
+    raw, _ = py_get_image_for_row(df, 0)
+    return np.asarray(raw)
 
 
 def load_astropy(path: Path) -> np.ndarray:

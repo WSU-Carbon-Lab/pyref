@@ -28,6 +28,17 @@ Key functions:
 - `read_multiple_fits()`: Reads specific FITS files
 - `combine_dataframes_with_alignment()`: Merges DataFrames with schema alignment
 
+#### FITS DataFrame Accessor (`df.fits`)
+
+For metadata DataFrames from `scan_experiment().collect()`, use the `fits` accessor to load images. Collect your LazyFrame before using: `df = lf.filter(...).collect()` then `df.fits.img[0]`.
+
+- `df.fits.img[i]` / `df.fits.img[slice]`: Raw detector image(s); slice returns iterator
+- `df.fits.corrected(idx, bg_rows=10, bg_cols=10)`: Background-corrected image(s)
+- `df.fits.filtered(idx, sigma, bg_rows=10, bg_cols=10)`: Background-corrected + gaussian blurred (Rust pipeline)
+- `df.fits.custom(idx, callable, **kwargs)`: Apply custom Python callable to image(s)
+
+Background correction uses edge-based subtraction: per-row (left/right) and per-column (top/bottom) with configurable `bg_rows`, `bg_cols`.
+
 ### 2. Image Processing (`python/pyref/image.py`, `src/io.rs`)
 
 Image processing reduces 2D detector images to reflectivity values:

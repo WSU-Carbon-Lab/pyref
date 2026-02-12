@@ -6,23 +6,36 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from pyref.pyref import (  # type: ignore[import]
-    py_read_experiment,
-    py_read_experiment_pattern,
-    py_read_fits,
-    py_read_multiple_fits,
-)
+import polars as pl
 
 if TYPE_CHECKING:
     import pandas as pd
-    import polars as pl
 
 type FilePath = str | Path
 type FileDirectory = str | Path
 type FilePathList = list[str] | list[Path]
 type RegexPattern = str | re.Pattern[str]
+
+DEFAULT_HEADER_KEYS = [
+    "DATE",
+    "Beamline Energy",
+    "Sample Theta",
+    "CCD Theta",
+    "Higher Order Suppressor",
+    "EPU Polarization",
+]
+
+REQUIRED_SCAN_COLUMNS = (
+    "file_path",
+    "data_offset",
+    "naxis1",
+    "naxis2",
+    "bitpix",
+    "bzero",
+    "file_name",
+)
 
 
 def _stem_matches(path: Path, pattern: RegexPattern) -> bool:
@@ -30,68 +43,140 @@ def _stem_matches(path: Path, pattern: RegexPattern) -> bool:
     return compiled.search(path.stem) is not None
 
 
+def resolve_fits_paths(source: FilePath | FilePathList) -> list[str]:
+    if isinstance(source, (list, tuple)):
+        out: list[str] = []
+        for p in source:
+            path = Path(p).resolve()
+            if path.is_file() and path.suffix.lower() == ".fits":
+                out.append(str(path))
+            elif path.is_dir():
+                for f in sorted(path.rglob("*.fits")):
+                    if f.is_file():
+                        out.append(str(f.resolve()))
+        return sorted(set(out))
+    path = Path(source).resolve()
+    if path.is_file():
+        return [str(path)] if path.suffix.lower() == ".fits" else []
+    if path.is_dir():
+        return sorted(str(f.resolve()) for f in path.rglob("*.fits") if f.is_file())
+    if "*" in path.name or "?" in path.name:
+        parent = path.parent
+        if not parent.exists():
+            return []
+        return sorted(str(f.resolve()) for f in parent.glob(path.name) if f.is_file() and f.suffix.lower() == ".fits")
+    return []
+
+
+def _scan_schema(header_items: list[str]) -> dict[str, Any]:
+    schema: dict[str, Any] = {
+        "file_path": pl.String,
+        "data_offset": pl.Int64,
+        "naxis1": pl.Int64,
+        "naxis2": pl.Int64,
+        "bitpix": pl.Int64,
+        "bzero": pl.Int64,
+        "file_name": pl.String,
+        "sample_name": pl.String,
+        "tag": pl.String,
+        "experiment_number": pl.Int64,
+        "frame_number": pl.Int64,
+    }
+    for key in header_items:
+        if key not in schema:
+            schema[key] = pl.Float64
+    return schema
+
+
+def scan_experiment(
+    source: FilePath | FilePathList,
+    header_items: list[str] | None = None,
+) -> pl.LazyFrame:
+    from pyref.pyref import py_read_multiple_fits_headers_only
+
+    keys = header_items if header_items is not None else []
+    paths = resolve_fits_paths(source)
+    if not paths:
+        return pl.DataFrame(schema=pl.Schema(_scan_schema(keys))).lazy()
+    schema = _scan_schema(keys)
+
+    def io_source(
+        with_columns: list[str] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        batch_size: int | None,
+    ):
+        batch_size = batch_size or 50
+        total = 0
+        for i in range(0, len(paths), batch_size):
+            batch = paths[i : i + batch_size]
+            df = py_read_multiple_fits_headers_only(batch, keys)
+            if with_columns:
+                df = df.select(with_columns)
+            if predicate is not None:
+                df = df.filter(predicate)
+            yield df
+            total += len(df)
+            if n_rows is not None and total >= n_rows:
+                break
+
+    return pl.io.plugins.register_io_source(
+        io_source,
+        schema=pl.Schema(schema),
+        validate_schema=False,
+    )
+
+
+def get_image(meta_df: pl.DataFrame, row_index: int) -> object:
+    from pyref.pyref import py_get_image
+
+    return py_get_image(meta_df, row_index)
+
+
+def get_image_filtered(meta_df: pl.DataFrame, row_index: int, sigma: float) -> object:
+    from pyref.pyref import py_materialize_image_filtered
+
+    return py_materialize_image_filtered(meta_df, row_index, sigma)
+
+
+def get_image_corrected(
+    meta_df: pl.DataFrame,
+    row_index: int,
+    bg_rows: int = 10,
+    bg_cols: int = 10,
+) -> object:
+    from pyref.pyref import py_get_image_corrected
+
+    return py_get_image_corrected(meta_df, row_index, bg_rows, bg_cols)
+
+
+def get_image_filtered_edges(
+    meta_df: pl.DataFrame,
+    row_index: int,
+    sigma: float,
+    bg_rows: int = 10,
+    bg_cols: int = 10,
+) -> object:
+    from pyref.pyref import py_materialize_image_filtered_edges
+
+    return py_materialize_image_filtered_edges(
+        meta_df, row_index, sigma, bg_rows, bg_cols
+    )
+
+
 def read_fits(
-    file_path: FilePath,
+    file_path: FilePath | FilePathList,
     headers: list[str] | None = None,
     *,
     pattern: RegexPattern | None = None,
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
-    Read data from a FITS file into a DataFrame.
-
-    Parameters
-    ----------
-    file_path : str | Path | list[str] | list[Path] | FilePath | FilePathList
-        Path to the FITS file, or a list of paths to FITS files to read.
-    headers : list[str] | None, optional
-        List of header values to parse from the header; use `None` to read all header
-        values, by default None
-    pattern : str | re.Pattern[str] | None, optional
-        Regex applied to file stem (filename without .fits). Only paths whose stem
-        matches are read. E.g. ``r"^znpc"`` or ``r"^ZnPc"`` to match stems starting
-        with znpc. Ignored when None.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame containing the FITS file content.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the file_path does not point to a valid file.
-    ValueError
-        If the file is not a FITS file (does not end with .fits), or if pattern
-        is set and no paths match.
-
-    Notes
-    -----
-    The constructed DataFrame will always have the following columns:
-    - `DATE`: (pl.String) Date time string of when the file was created.
-    - `raw`: (pl.Array(pl.Uint64, N, M)) Raw CCD camera image data as a 2D array.
-
-    Example
-    -------
-    This example shows how to read the FITS files from a directory with a specific
-    series of headers:
-    >>> from pyref.io import read_fits
-    >>> df = read_fits(
-    ...     "path/to/file.fits",
-    ...     headers=["DATE", "Beamline Energy", "EXPOSURE"],
-    ... )
-    >>> print(df)
-    Alternatively, you can read all the header values by setting `headers` to `None`:
-    >>> df = read_fits("path/to/file.fits", headers=None)
-    >>> print(df)
-    And alternatively, you can read a list of FITS files:
-    >>> df = read_fits(
-    ...     ["path/to/file1.fits", "path/to/file2.fits"],
-    ...     headers=["DATE", "Beamline Energy", "EXPOSURE"],
-    ... )
-    >>> print(df)
-    Filter by regex on file stem (e.g. only stems starting with znpc):
-    >>> df = read_fits(path_list, headers=[...], pattern=r"^znpc")
+    Anti-pattern: Equivalent to scan_experiment(...).collect(). Loads the full
+    scan result into memory and bypasses lazy optimizations (predicate pushdown,
+    projection pushdown, streaming). Prefer scan_experiment(source) with
+    .filter(), .select(), then .collect() only when needed; use this only when
+    you explicitly need the entire result in memory (e.g. small dirs or legacy scripts).
     """
     if isinstance(file_path, list):
         file_paths_str = []
@@ -108,7 +193,7 @@ def read_fits(
         if pattern is not None and not file_paths_str:
             msg = "No paths match the given pattern."
             raise ValueError(msg)
-        polars_data = py_read_multiple_fits(file_paths_str, headers)
+        source = file_paths_str
     else:
         file_path_obj = Path(file_path)
         if not file_path_obj.is_file():
@@ -120,12 +205,12 @@ def read_fits(
         if pattern is not None and not _stem_matches(file_path_obj, pattern):
             msg = "File stem does not match the given pattern."
             raise ValueError(msg)
-        polars_data = py_read_fits(str(file_path_obj), headers)
-
+        source = file_path_obj
+    header_list = headers if headers is not None else []
+    polars_data = scan_experiment(source, header_items=header_list).collect()
     if engine == "pandas":
         return polars_data.to_pandas()
-    elif engine == "polars":
-        return polars_data
+    return polars_data
 
 
 def read_experiment(
@@ -138,72 +223,16 @@ def read_experiment(
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
-    Read data from a FITS file or pattern into a DataFrame.
-
-    Parameters
-    ----------
-    file_path : str | Path | FileDirectory
-        Path to the directory containing FITS files.
-    headers : list[str] | None, optional
-        List of header values to parse from the header use `None` to read all header
-        values, by default None
-    pattern : str | None, optional
-        Glob pattern to match filenames (e.g. ``"*85684*"``). Passed to the backend
-        when regex is not set. By default None (all *.fits in directory).
-    regex : str | re.Pattern[str] | None, optional
-        Regex applied to file stem. Only files whose stem matches are read.
-        E.g. ``r"^znpc"`` or ``r"^ZnPc"``. When set, discovery uses recursive
-        if recursive is True. By default None.
-    recursive : bool, optional
-        When regex is set, if True search recursively under file_path (rglob);
-        otherwise only direct children (glob). Ignored when regex is None.
-        By default False.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame containing the FITS file content.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the file_path does not point to a valid directory.
-    ValueError
-        If the file is not a FITS file (does not end with .fits), or if regex
-        is set and no files match.
-
-    Notes
-    -----
-    The constructed DataFrame will always have the following columns:
-    - `DATE`: (pl.String) Date time string of when the file was created.
-    - `raw`: (pl.Array(pl.Uint64, N, M)) Raw CCD camera image data as a 2D array.
-
-    Example
-    -------
-    This example shows how to read the FITS files from a directory with a specific
-    series of headers:
-    >>> from pyref.io import read_experiment
-    >>> df = read_experiment(
-    ...     "path/to/directory",
-    ...     headers=["DATE", "Beamline Energy", "EXPOSURE"],
-    ... )
-    >>> print(df)
-    Alternatively, you can read all the header values by setting `headers` to `None`:
-    >>> df = read_experiment("path/to/directory", headers=None)
-    >>> print(df)
-    And alternatively, you can read a specific glob pattern of files in the directory:
-    >>> df = read_experiment("path/to/directory", pattern="*85684*")
-    >>> print(df)
-    Filter by regex on file stem (e.g. stems starting with znpc), optionally recursive:
-    >>> df = read_experiment("path/to/directory", headers=[...], regex=r"^znpc", recursive=True)
+    Anti-pattern: Equivalent to scan_experiment(...).collect(). Loads the full
+    scan result into memory and bypasses lazy optimizations. Prefer
+    scan_experiment(source) with .filter(), .select(), and .collect() only when
+    needed; use this only when the full result is explicitly required.
     """
     file_path_obj = Path(file_path)
     if not file_path_obj.is_dir():
         msg = f"{file_path_obj} is not a valid directory."
         raise FileNotFoundError(msg)
-    if headers is None:
-        headers = []
-
+    header_list = headers if headers is not None else []
     if regex is not None:
         if recursive:
             paths = sorted(file_path_obj.rglob("*.fits"))
@@ -213,16 +242,20 @@ def read_experiment(
         if not paths:
             msg = "No FITS files match the given regex."
             raise ValueError(msg)
-        polars_data = py_read_multiple_fits([str(p) for p in paths], headers)
+        source = [str(p) for p in paths]
     elif pattern:
-        polars_data = py_read_experiment_pattern(str(file_path_obj), pattern, headers)
+        paths = sorted(file_path_obj.glob(pattern))
+        paths = [p for p in paths if p.is_file() and p.suffix.lower() == ".fits"]
+        if not paths:
+            msg = "No FITS files match the given pattern."
+            raise ValueError(msg)
+        source = [str(p) for p in paths]
     else:
         if not any(file_path_obj.glob("*.fits")):
             msg = f"{file_path_obj} does not contain any FITS files."
             raise FileNotFoundError(msg)
-        polars_data = py_read_experiment(str(file_path_obj), headers)
-
+        source = file_path_obj
+    polars_data = scan_experiment(source, header_items=header_list).collect()
     if engine == "pandas":
         return polars_data.to_pandas()
-    elif engine == "polars":
-        return polars_data
+    return polars_data

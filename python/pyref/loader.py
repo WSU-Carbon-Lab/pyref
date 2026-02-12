@@ -15,10 +15,13 @@ import polars as pl
 from IPython.display import display
 from ipywidgets import VBox, interactive
 
+from pyref.image import apply_mask, locate_beam, reduction
 from pyref.io.experiment_names import parse_fits_stem
-from pyref.io.readers import read_experiment, read_fits
+from pyref.io.readers import get_image_corrected, read_experiment, read_fits
 from pyref.masking import InteractiveImageMasker
 from pyref.types import HeaderValue
+
+DEFAULT_ROI = 10
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -180,6 +183,20 @@ class ImageSeries:
         plt.show()
 
 
+def _mask_from_image(image: np.ndarray) -> np.ndarray:
+    row_sums = np.sum(image, axis=1)
+    total = np.sum(row_sums)
+    if total == 0:
+        return np.ones_like(image, dtype=bool)
+    row_sums = row_sums / total
+    cumsum = np.cumsum(row_sums[::-1])[::-1]
+    lower_bound_index = int(np.argmax(cumsum <= 0.25))
+    upper_bound_index = int(np.argmax(cumsum <= 0.95))
+    mask = np.zeros_like(image, dtype=bool)
+    mask[upper_bound_index:lower_bound_index, :] = True
+    return mask
+
+
 class UnknownPolarizationError(Exception):
     """Exception raised for unknown polarization values."""
 
@@ -281,17 +298,29 @@ class PrsoxrLoader:
                 pl.Series("frame_number", frame_nums),
             )
 
-        self.refl = self.meta.select(
-            "file_name",
-            "EPU Polarization",
-            "Beamline Energy",
-            "Q",
-            pl.col("Simple Reflectivity").alias("r"),
-            pl.col("Simple Reflectivity").sqrt().alias("dr"),
-        )
+        first_img = get_image_corrected(self.meta, 0)
+        self.mask = _mask_from_image(np.asarray(first_img))
+        refl_rows: list[dict[str, object]] = []
+        for i in range(len(self.meta)):
+            img = get_image_corrected(self.meta, i)
+            img_arr = np.asarray(img)
+            masked = apply_mask(img_arr, mask=self.mask)
+            beam_spot = locate_beam(masked, DEFAULT_ROI)
+            db_sum, bg_sum = reduction(masked, beam_spot, DEFAULT_ROI)
+            r = float(db_sum / bg_sum) if bg_sum else 0.0
+            dr = float(np.sqrt(r))
+            row = self.meta.row(i, named=True)
+            refl_rows.append({
+                "file_name": row["file_name"],
+                "EPU Polarization": row.get("EPU Polarization"),
+                "Beamline Energy": row.get("Beamline Energy"),
+                "Q": row.get("Q"),
+                "r": r,
+                "dr": dr,
+            })
+        self.refl = pl.DataFrame(refl_rows)
         self.shape = len(self.meta)
         self._polarization: Literal["s", "p"] | None = None
-        self.mask: np.ndarray = self.meta["RAW"].image.mask()  # type: ignore
         self.masker: InteractiveImageMasker | None = None
 
     @property
@@ -379,13 +408,14 @@ class PrsoxrLoader:
 
         def plot_frame(frame):
             """Inner function to process and plot a single frame with given settings."""
+            img = get_image_corrected(self.meta, frame)
+            image = np.asarray(img)
+            masked = apply_mask(image, mask=self.mask)
+            beam_spot = locate_beam(masked, DEFAULT_ROI)
+            bs = (beam_spot[0], beam_spot[1])
+            refl_row = self.refl.row(frame, named=True)
             meta = self.meta.row(frame, named=True)
-
-            image = self.meta["RAW"].image[frame]  # type: ignore
-            bs = (meta["Simple Spot Y"], meta["Simple Spot X"])
-            # cast the beamspot into a corrected tuple indicting the (x,y) coordinates
-            # after the image is reshaped
-            refl = meta["Simple Reflectivity"]
+            refl = refl_row["r"]
 
             # Clear and set up the plot
             ax.clear()
@@ -401,10 +431,12 @@ class PrsoxrLoader:
                 "arrowstyle": "->",
                 "connectionstyle": "angle,angleA=0,angleB=90,rad=20",
             }
+            q_val = meta.get("Q", refl_row.get("Q", 0.0)) or 0.0
+            e_val = meta.get("Beamline Energy", refl_row.get("Beamline Energy", 0.0)) or 0.0
             props = (
                 f"Reflectivity = {refl:.3e}\n"
-                f"Q = {meta['Q']:.3f}\n"
-                f"E = {meta['Beamline Energy']:.1f}"
+                f"Q = {q_val:.3f}\n"
+                f"E = {e_val:.1f}"
             )
             ax.annotate(
                 props,
@@ -436,13 +468,13 @@ class PrsoxrLoader:
         """
         # set backend to use the widget backend
         matplotlib.use("module://ipympl.backend_nbagg")
-        min_frame = self.meta.select(
-            pl.col("SUBTRACTED").is_not_null(),
-            pl.col("SUBTRACTED")
-            .map_elements(lambda img: np.sum(img), return_dtype=pl.Int64)
-            .alias("sum"),
-        ).sort("sum")[0]
-        image = min_frame["SUBTRACTED"].to_numpy()
+        frame_sums: list[float] = []
+        for i in range(len(self.meta)):
+            img = get_image_corrected(self.meta, i)
+            frame_sums.append(float(np.sum(np.asarray(img))))
+        min_idx = int(np.argmin(frame_sums))
+        image = get_image_corrected(self.meta, min_idx)
+        image = np.asarray(image)
         self.masker = InteractiveImageMasker(image, mask=self.mask)
         self.mask = self.masker.get_mask()
 

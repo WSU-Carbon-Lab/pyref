@@ -14,7 +14,8 @@ from pathlib import Path
 __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
 
-from pyref.io import read_experiment, read_fits
+from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
+from pyref.io import scan_experiment
 from pyref.loader import PrsoxrLoader
 from pyref.masking import InteractiveImageMasker
 from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std

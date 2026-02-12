@@ -1,11 +1,11 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 
 const FITS_BLOCK_SIZE: usize = 2880;
 
 use crate::fits::error::FitsReadError;
 use crate::fits::header::Header;
-use crate::fits::image::ImageHdu;
+use crate::fits::image::{ImageHdu, ImageHduHeader};
 use crate::fits::primary::PrimaryHdu;
 
 fn has_more_data<R: Read + Seek>(reader: &mut R) -> Result<bool, FitsReadError> {
@@ -57,17 +57,18 @@ pub struct HduList {
 
 impl HduList {
     pub fn from_file(path: &str) -> Result<Self, FitsReadError> {
-        let mut f = File::open(path)?;
+        let f = File::open(path)?;
+        let mut reader = BufReader::new(f);
         let mut hdus = Vec::new();
         let mut is_primary = true;
         loop {
             if is_primary {
-                let primary = PrimaryHdu::read_from_file(&mut f)?;
+                let primary = PrimaryHdu::read_from_file(&mut reader)?;
                 hdus.push(Hdu::Primary(primary));
                 is_primary = false;
             } else {
-                let pos = f.stream_position()?;
-                let header = Header::read_from_file(&mut f)?;
+                let pos = reader.stream_position()?;
+                let header = Header::read_from_file(&mut reader)?;
                 let xtension = header
                     .get_card("XTENSION")
                     .map(|c| c.value.to_string())
@@ -75,22 +76,64 @@ impl HduList {
                 let xtension = xtension.trim().to_uppercase();
                 let xtension = xtension.trim_matches(|c: char| c.is_whitespace());
                 if xtension == "IMAGE" {
-                    f.seek(SeekFrom::Start(pos))?;
-                    let image = ImageHdu::read_from_file(&mut f)?;
+                    reader.seek(SeekFrom::Start(pos))?;
+                    let image = ImageHdu::read_from_file(&mut reader)?;
                     hdus.push(Hdu::Image(image));
                 } else {
                     let nbytes = extension_data_size(&header)?;
-                    f.seek(SeekFrom::Current(nbytes as i64))?;
+                    reader.seek(SeekFrom::Current(nbytes as i64))?;
                     let rem = nbytes % FITS_BLOCK_SIZE;
                     if rem != 0 {
-                        f.seek(SeekFrom::Current((FITS_BLOCK_SIZE - rem) as i64))?;
+                        reader.seek(SeekFrom::Current((FITS_BLOCK_SIZE - rem) as i64))?;
                     }
                 }
             }
-            if !has_more_data(&mut f)? {
+            if !has_more_data(&mut reader)? {
                 break;
             }
         }
         Ok(HduList { hdus })
     }
+
+    pub fn from_file_headers_only(path: &str) -> Result<HduListHeadersOnly, FitsReadError> {
+        let f = File::open(path)?;
+        let mut reader = BufReader::new(f);
+        let primary = PrimaryHdu::read_from_file(&mut reader)?;
+        let mut image_header = None;
+        loop {
+            if !has_more_data(&mut reader)? {
+                break;
+            }
+            let pos = reader.stream_position()?;
+            let header = Header::read_from_file(&mut reader)?;
+            let xtension = header
+                .get_card("XTENSION")
+                .map(|c| c.value.to_string())
+                .unwrap_or_default();
+            let xtension = xtension.trim().to_uppercase();
+            let xtension = xtension.trim_matches(|c: char| c.is_whitespace());
+            if xtension == "IMAGE" {
+                reader.seek(SeekFrom::Start(pos))?;
+                let img_header = ImageHduHeader::read_header_only(&mut reader)?;
+                image_header = Some(img_header);
+                break;
+            }
+            let nbytes = extension_data_size(&header)?;
+            reader.seek(SeekFrom::Current(nbytes as i64))?;
+            let rem = nbytes % FITS_BLOCK_SIZE;
+            if rem != 0 {
+                reader.seek(SeekFrom::Current((FITS_BLOCK_SIZE - rem) as i64))?;
+            }
+        }
+        Ok(HduListHeadersOnly {
+            primary,
+            image_header,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct HduListHeadersOnly {
+    pub primary: PrimaryHdu,
+    pub image_header: Option<ImageHduHeader>,
 }

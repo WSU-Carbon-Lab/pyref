@@ -142,13 +142,13 @@ def test_filter_catalog_paths() -> None:
 
 
 def test_read_fits_meta_has_parsed_columns() -> None:
-    from pyref.io import read_fits
+    from pyref.pyref import py_read_fits_headers_only
 
     data_dir = get_data_path()
     paths = discover_fits(data_dir, recursive=False)
     if not paths:
         pytest.skip("No FITS files")
-    meta = read_fits(str(paths[0]), headers=[], engine="polars")
+    meta = py_read_fits_headers_only(str(paths[0]), [])
     assert isinstance(meta, pl.DataFrame)
     assert "file_name" in meta.columns
     if "sample_name" in meta.columns:

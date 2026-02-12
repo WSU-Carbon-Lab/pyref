@@ -58,11 +58,11 @@ impl ImageHdu {
         let (naxis1, naxis2) = image_shape(&header)?;
         let nelem = naxis1 * naxis2;
         let nbytes = nelem * nbytes_from_bitpix(bitpix);
-        let mut buf = vec![0u8; nbytes];
-        reader.read_exact(&mut buf)?;
-        let mut vec_i16 = vec![0i16; nelem];
-        for (i, chunk) in buf.chunks_exact(2).enumerate() {
-            vec_i16[i] = i16::from_be_bytes([chunk[0], chunk[1]]);
+        let mut vec_i16 = Vec::with_capacity(nelem);
+        let mut two = [0u8; 2];
+        for _ in 0..nelem {
+            reader.read_exact(&mut two)?;
+            vec_i16.push(i16::from_be_bytes(two));
         }
         let data = Array2::from_shape_vec((naxis2, naxis1), vec_i16)
             .map_err(|e| FitsReadError::Parse(e.to_string()))?;
@@ -72,5 +72,46 @@ impl ImageHdu {
             reader.seek(SeekFrom::Current(pad as i64))?;
         }
         Ok(ImageHdu { header, data })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageHduHeader {
+    pub header: Header,
+    pub data_offset: u64,
+    pub naxis1: usize,
+    pub naxis2: usize,
+    pub bitpix: i32,
+}
+
+impl ImageHduHeader {
+    pub fn read_header_only<R: Read + Seek>(reader: &mut R) -> Result<Self, FitsReadError> {
+        let header = Header::read_from_file(reader)?;
+        let bitpix = header
+            .get_card("BITPIX")
+            .and_then(|c| c.value.as_int())
+            .unwrap_or(16) as i32;
+        if bitpix != 16 {
+            return Err(FitsReadError::Unsupported(
+                "Only BITPIX=16 image HDUs supported".into(),
+            ));
+        }
+        let (naxis1, naxis2) = image_shape(&header)?;
+        let nelem = naxis1 * naxis2;
+        let nbytes = nelem * nbytes_from_bitpix(bitpix);
+        let data_offset = reader.stream_position()?;
+        reader.seek(SeekFrom::Current(nbytes as i64))?;
+        let remainder = nbytes % FITS_BLOCK_SIZE;
+        if remainder != 0 {
+            let pad = FITS_BLOCK_SIZE - remainder;
+            reader.seek(SeekFrom::Current(pad as i64))?;
+        }
+        Ok(ImageHduHeader {
+            header,
+            data_offset,
+            naxis1,
+            naxis2,
+            bitpix,
+        })
     }
 }

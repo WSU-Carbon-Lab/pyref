@@ -39,7 +39,17 @@ from pyref.io.experiment_names import (
     parse_fits_stem,
     scan_view,
 )
-from pyref.io.readers import read_experiment, read_fits
+from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
+from pyref.io.readers import (
+    get_image,
+    get_image_corrected,
+    get_image_filtered,
+    get_image_filtered_edges,
+    read_experiment,
+    read_fits,
+    resolve_fits_paths,
+    scan_experiment,
+)
 
 __all__ = [
     "ParsedFitsName",
@@ -47,8 +57,14 @@ __all__ = [
     "discover_fits",
     "experiment_summary",
     "filter_catalog_paths",
+    "get_image",
+    "get_image_corrected",
+    "get_image_filtered",
+    "get_image_filtered_edges",
     "parse_fits_stem",
     "read_experiment",
     "read_fits",
+    "resolve_fits_paths",
+    "scan_experiment",
     "scan_view",
 ]

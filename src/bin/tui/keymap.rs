@@ -44,6 +44,10 @@ pub enum Action {
     Rename,
     Retag,
     Open,
+    IndexDirectory,
+    NavUp,
+    NavBack,
+    NavFwd,
     None,
 }
 
@@ -93,6 +97,10 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('e') => return Action::FocusExperiment,
                 KeyCode::Char('b') => return Action::FocusBrowser,
                 KeyCode::Char('r') => return Action::Rename,
+                KeyCode::Char('i') => return Action::IndexDirectory,
+                KeyCode::Char('u') => return Action::NavUp,
+                KeyCode::Char('h') => return Action::NavBack,
+                KeyCode::Char('l') => return Action::NavFwd,
                 _ => {}
             }
         }
@@ -138,6 +146,10 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('e') => return Action::FocusExperiment,
                 KeyCode::Char('b') => return Action::FocusBrowser,
                 KeyCode::Char('r') => return Action::Rename,
+                KeyCode::Char('i') => return Action::IndexDirectory,
+                KeyCode::Char('u') => return Action::NavUp,
+                KeyCode::Char('h') => return Action::NavBack,
+                KeyCode::Char('l') => return Action::NavFwd,
                 _ => {}
             }
         }

@@ -4,9 +4,12 @@ use ratatui::widgets::{ListState, TableState};
 use std::cmp;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Instant;
 
 #[cfg(feature = "catalog")]
-use pyref::catalog::{list_beamtime_entries, query_files, CATALOG_DB_NAME};
+use pyref::catalog::{list_beamtime_entries, query_files, set_override, CATALOG_DB_NAME};
 #[cfg(feature = "watch")]
 use pyref::catalog::{run_catalog_watcher, DEFAULT_DEBOUNCE_MS};
 
@@ -20,107 +23,7 @@ pub struct ProfileRow {
     pub data_points: u32,
     pub quality_placeholder: String,
     pub experiment_number: u32,
-}
-
-fn mock_profile_rows() -> Vec<ProfileRow> {
-    vec![
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-60 deg".to_string(),
-            data_points: 120,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "283.7 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-40 deg".to_string(),
-            data_points: 80,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "284.2 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-45 deg".to_string(),
-            data_points: 90,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV - 320 eV".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "1 deg".to_string(),
-            data_points: 140,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV - 320 eV".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "2 deg".to_string(),
-            data_points: 140,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "znpc".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "250 eV - 320 eV".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "5 deg".to_string(),
-            data_points: 140,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 11111,
-        },
-        ProfileRow {
-            sample: "ps_pmma".to_string(),
-            tag: "rt".to_string(),
-            energy_str: "285 eV fixed".to_string(),
-            pol: "p".to_string(),
-            q_range_str: "0-30 deg".to_string(),
-            data_points: 60,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 81041,
-        },
-        ProfileRow {
-            sample: "ps_pmma".to_string(),
-            tag: "vacuum".to_string(),
-            energy_str: "300 eV fixed".to_string(),
-            pol: "s".to_string(),
-            q_range_str: "0-25 deg".to_string(),
-            data_points: 50,
-            quality_placeholder: "-".to_string(),
-            experiment_number: 81042,
-        },
-    ]
-}
-
-fn mock_samples() -> Vec<String> {
-    vec!["znpc".to_string(), "ps_pmma".to_string()]
-}
-
-fn mock_tags() -> Vec<String> {
-    vec!["rt".to_string(), "vacuum".to_string()]
-}
-
-fn mock_experiments() -> Vec<(u32, String)> {
-    vec![
-        (11111, "CCD Scan 11111".to_string()),
-        (81041, "CCD Scan 81041".to_string()),
-        (81042, "CCD Scan 81042".to_string()),
-    ]
+    pub file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +53,13 @@ pub enum AppMode {
     Search,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadingState {
+    Idle,
+    IndexingDirectory,
+    CatalogUpdating,
+}
+
 pub struct App {
     pub all_profiles: Vec<ProfileRow>,
     pub filtered_profiles: Vec<ProfileRow>,
@@ -172,6 +82,15 @@ pub struct App {
     pub keymap: String,
     pub keybind_bar_lines: u8,
     pub theme: String,
+    pub has_catalog: bool,
+    pub loading_state: LoadingState,
+    pub spinner_frame: u64,
+    pub ingest_rx: Option<mpsc::Receiver<Result<(), String>>>,
+    pub back_stack: Vec<String>,
+    pub forward_stack: Vec<String>,
+    pub rename_retag_buffer: String,
+    pub status_message: Option<(String, bool)>,
+    pub status_message_set_at: Option<Instant>,
     #[cfg(feature = "watch")]
     pub catalog_watcher: Option<pyref::catalog::WatchHandle>,
 }
@@ -188,8 +107,8 @@ fn catalog_to_profiles(current_root: &str) -> Option<(Vec<ProfileRow>, Vec<Strin
         let profiles: Vec<ProfileRow> = rows
             .into_iter()
             .map(|r| ProfileRow {
-                sample: r.sample_name,
-                tag: r.tag.unwrap_or_default(),
+                sample: r.sample_name.clone(),
+                tag: r.tag.clone().unwrap_or_default(),
                 energy_str: r
                     .beamline_energy
                     .map(|e| format!("{:.1} eV", e))
@@ -202,6 +121,7 @@ fn catalog_to_profiles(current_root: &str) -> Option<(Vec<ProfileRow>, Vec<Strin
                 data_points: 1,
                 quality_placeholder: "-".to_string(),
                 experiment_number: r.experiment_number as u32,
+                file_path: Some(r.file_path),
             })
             .collect();
         let experiments: Vec<(u32, String)> = entries
@@ -217,13 +137,14 @@ fn catalog_to_profiles(current_root: &str) -> Option<(Vec<ProfileRow>, Vec<Strin
 
 impl App {
     pub fn new(current_root: String, layout: String, keymap: String, keybind_bar_lines: u8, theme: String) -> Self {
-        let (all_profiles, samples, tags, experiments) =
-            catalog_to_profiles(&current_root).unwrap_or_else(|| {
+        let (all_profiles, samples, tags, experiments, has_catalog) =
+            catalog_to_profiles(&current_root).map(|(a, s, t, e)| (a, s, t, e, true)).unwrap_or_else(|| {
                 (
-                    mock_profile_rows(),
-                    mock_samples(),
-                    mock_tags(),
-                    mock_experiments(),
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                    false,
                 )
             });
         let mut sample_state = ListState::default();
@@ -281,8 +202,121 @@ impl App {
             keymap,
             keybind_bar_lines,
             theme,
+            has_catalog,
+            loading_state: LoadingState::Idle,
+            spinner_frame: 0,
+            ingest_rx: None,
+            back_stack: vec![],
+            forward_stack: vec![],
+            rename_retag_buffer: String::new(),
+            status_message: None,
+            status_message_set_at: None,
             #[cfg(feature = "watch")]
             catalog_watcher: catalog_watcher,
+        }
+    }
+
+    pub fn set_status(&mut self, msg: String, is_error: bool) {
+        self.status_message = Some((msg, is_error));
+        self.status_message_set_at = Some(Instant::now());
+    }
+
+    pub fn clear_status_if_stale(&mut self) {
+        const STATUS_TTL_SECS: u64 = 3;
+        if let (Some(_), Some(at)) = (self.status_message.as_ref(), self.status_message_set_at) {
+            if at.elapsed().as_secs() >= STATUS_TTL_SECS {
+                self.status_message = None;
+                self.status_message_set_at = None;
+                self.needs_redraw = true;
+            }
+        }
+    }
+
+    pub fn set_root(&mut self, new_root: String) -> bool {
+        let path = Path::new(&new_root);
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+        let canonical = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        let new_root_str = canonical.to_string_lossy().into_owned();
+        #[cfg(feature = "watch")]
+        {
+            self.catalog_watcher = None;
+        }
+        self.current_root = new_root_str.clone();
+        if let Some((all_profiles, samples, tags, experiments)) = catalog_to_profiles(&self.current_root) {
+            self.all_profiles = all_profiles.clone();
+            self.samples = samples.clone();
+            self.tags = tags.clone();
+            self.experiments = experiments.clone();
+            self.has_catalog = true;
+            self.sample_state = ListState::default();
+            self.tag_state = ListState::default();
+            self.experiment_state = ListState::default();
+            self.table_state = TableState::default();
+            if !self.samples.is_empty() {
+                self.sample_state.select(Some(0));
+            }
+            if !self.tags.is_empty() {
+                self.tag_state.select(Some(0));
+            }
+            if !self.experiments.is_empty() {
+                self.experiment_state.select(Some(0));
+            }
+            self.refresh_filtered();
+            #[cfg(feature = "watch")]
+            if Path::new(&self.current_root).join(CATALOG_DB_NAME).exists() {
+                self.catalog_watcher =
+                    run_catalog_watcher(Path::new(&self.current_root), &[], DEFAULT_DEBOUNCE_MS).ok();
+            }
+        } else {
+            self.all_profiles = vec![];
+            self.filtered_profiles = vec![];
+            self.samples = vec![];
+            self.tags = vec![];
+            self.experiments = vec![];
+            self.has_catalog = false;
+            self.sample_state = ListState::default();
+            self.tag_state = ListState::default();
+            self.experiment_state = ListState::default();
+            self.table_state = TableState::default();
+        }
+        self.needs_redraw = true;
+        true
+    }
+
+    pub fn nav_up(&mut self) {
+        let path = Path::new(&self.current_root);
+        if let Some(parent) = path.parent() {
+            let parent_str = parent.to_string_lossy().into_owned();
+            if parent_str != self.current_root {
+                self.back_stack.push(self.current_root.clone());
+                self.forward_stack.clear();
+                if !self.set_root(parent_str) {
+                    self.set_status("Path not found or not a directory.".to_string(), true);
+                }
+            }
+        }
+    }
+
+    pub fn nav_back(&mut self) {
+        if let Some(prev) = self.back_stack.pop() {
+            self.forward_stack.push(self.current_root.clone());
+            if !self.set_root(prev) {
+                self.set_status("Path not found or not a directory.".to_string(), true);
+            }
+        }
+    }
+
+    pub fn nav_fwd(&mut self) {
+        if let Some(next) = self.forward_stack.pop() {
+            self.back_stack.push(self.current_root.clone());
+            if !self.set_root(next) {
+                self.set_status("Path not found or not a directory.".to_string(), true);
+            }
         }
     }
 
@@ -354,6 +388,85 @@ impl App {
         }
         self.needs_redraw = true;
     }
+
+    pub fn reload_from_catalog(&mut self) {
+        if let Some((all_profiles, samples, tags, experiments)) =
+            catalog_to_profiles(&self.current_root)
+        {
+            self.all_profiles = all_profiles.clone();
+            self.samples = samples.clone();
+            self.tags = tags.clone();
+            self.experiments = experiments.clone();
+            self.has_catalog = true;
+            self.sample_state = ListState::default();
+            self.tag_state = ListState::default();
+            self.experiment_state = ListState::default();
+            self.table_state = TableState::default();
+            if !self.samples.is_empty() {
+                self.sample_state.select(Some(0));
+            }
+            if !self.tags.is_empty() {
+                self.tag_state.select(Some(0));
+            }
+            if !self.experiments.is_empty() {
+                self.experiment_state.select(Some(0));
+            }
+            self.refresh_filtered();
+            #[cfg(feature = "watch")]
+            {
+                self.catalog_watcher = None;
+                if Path::new(&self.current_root).join(CATALOG_DB_NAME).exists() {
+                    self.catalog_watcher =
+                        run_catalog_watcher(Path::new(&self.current_root), &[], DEFAULT_DEBOUNCE_MS).ok();
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn start_indexing(&mut self) {
+        if self.loading_state != LoadingState::Idle {
+            return;
+        }
+        let root = Path::new(&self.current_root);
+        if !root.exists() || !root.is_dir() {
+            return;
+        }
+        let root_str = self.current_root.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = pyref::catalog::ingest_beamtime(Path::new(&root_str), &[], false)
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+        self.loading_state = LoadingState::IndexingDirectory;
+        self.ingest_rx = Some(rx);
+    }
+
+    #[cfg(not(feature = "catalog"))]
+    pub fn start_indexing(&mut self) {}
+
+    #[cfg(feature = "catalog")]
+    pub fn try_recv_ingest(&mut self) {
+        if let Some(ref rx) = self.ingest_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.ingest_rx = None;
+                self.loading_state = LoadingState::Idle;
+                match result {
+                    Ok(()) => {
+                        self.reload_from_catalog();
+                        self.set_status("Catalog indexed.".to_string(), false);
+                    }
+                    Err(e) => self.set_status(e, true),
+                }
+                self.needs_redraw = true;
+            }
+        }
+    }
+
+    #[cfg(not(feature = "catalog"))]
+    pub fn try_recv_ingest(&mut self) {}
 
     fn clamp_selections(&mut self) {
         let n = self.samples.len();
@@ -527,15 +640,73 @@ impl App {
     }
 
     pub fn set_mode_rename(&mut self) {
+        self.rename_retag_buffer = self
+            .table_state
+            .selected()
+            .and_then(|i| self.filtered_profiles.get(i))
+            .map(|r| r.sample.clone())
+            .unwrap_or_default();
         self.mode = AppMode::RenameSample;
     }
 
     pub fn set_mode_retag(&mut self) {
+        self.rename_retag_buffer = self
+            .table_state
+            .selected()
+            .and_then(|i| self.filtered_profiles.get(i))
+            .map(|r| r.tag.clone())
+            .unwrap_or_default();
         self.mode = AppMode::EditTag;
     }
 
     pub fn set_mode_normal(&mut self) {
         self.mode = AppMode::Normal;
+        self.rename_retag_buffer.clear();
+    }
+
+    pub fn rename_retag_push_char(&mut self, c: char) {
+        if c.is_ascii() && !c.is_control() {
+            self.rename_retag_buffer.push(c);
+        }
+    }
+
+    pub fn rename_retag_pop_char(&mut self) {
+        self.rename_retag_buffer.pop();
+    }
+
+    pub fn apply_rename_retag(&mut self) {
+        let path = match self.table_state.selected() {
+            Some(i) => self.filtered_profiles.get(i).and_then(|r| r.file_path.as_deref()),
+            None => None,
+        };
+        let Some(path) = path else { return };
+        if !self.has_catalog {
+            return;
+        }
+        let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
+        if !db_path.exists() {
+            return;
+        }
+        let sample = self.rename_retag_buffer.trim();
+        let (sample_name, tag) = match self.mode {
+            AppMode::RenameSample => (Some(sample), None),
+            AppMode::EditTag => (None, Some(sample)),
+            _ => return,
+        };
+        let row = self
+            .table_state
+            .selected()
+            .and_then(|i| self.filtered_profiles.get(i));
+        let (fallback_sample, fallback_tag) = row
+            .map(|r| (r.sample.as_str(), r.tag.as_str()))
+            .unwrap_or(("", ""));
+        let sample_name = sample_name.or(Some(fallback_sample));
+        let tag = tag.or(Some(fallback_tag));
+        if set_override(&db_path, path, sample_name, tag, None).is_ok() {
+            self.reload_from_catalog();
+            self.set_status("Override saved.".to_string(), false);
+        }
+        self.set_mode_normal();
     }
 
     pub fn set_mode_search(&mut self) {

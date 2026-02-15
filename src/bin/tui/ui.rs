@@ -1,10 +1,10 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, List, ListItem, Padding, Paragraph, Row, Table};
 use ratatui::Frame;
 use ratatui::layout::Alignment;
 
-use super::app::{App, AppMode, Focus, ProfileRow};
+use super::app::{App, AppMode, Focus, LoadingState, ProfileRow};
 use super::keymap::{bottom_bar_line, search_prompt_display, BROWSE_SHORTCUTS, BROWSE_TITLE};
 use super::theme::ThemeMode;
 
@@ -66,21 +66,65 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_bottom_bar(frame, app, bottom_area, theme);
 }
 
-fn render_nav(frame: &mut Frame, app: &App, area: Rect, _theme: ThemeMode) {
+const SPINNER_FRAMES: &str = "\u{2801}\u{2801}\u{2809}\u{2819}\u{281a}\u{2812}\u{2802}\u{2802}\u{2812}\u{2832}\u{2834}\u{2824}\u{2804}\u{2804}\u{2824}\u{2820}\u{2820}\u{2824}\u{2826}\u{2816}\u{2812}\u{2810}\u{2810}\u{2812}\u{2813}\u{280b}\u{2809}\u{2808}\u{2808}";
+
+fn render_nav(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
     let path_display = truncate_path(&app.current_root, NAV_PATH_TRUNCATE);
     let filter_hint = if !app.search_query.is_empty() && app.mode != AppMode::Search {
         format!("  filter: {}", app.search_query)
     } else {
         String::new()
     };
-    let line = Line::from(format!("  {}  [up] [back] [fwd]{}", path_display, filter_hint));
+    let (loading_spinner, loading_msg) = if app.loading_state != LoadingState::Idle {
+        let idx = (app.spinner_frame as usize) % SPINNER_FRAMES.chars().count();
+        let c = SPINNER_FRAMES.chars().nth(idx).unwrap_or(' ');
+        let msg = match app.loading_state {
+            LoadingState::Idle => "",
+            LoadingState::IndexingDirectory => " Indexing...",
+            LoadingState::CatalogUpdating => " Updating catalog...",
+        };
+        (Some(c), msg)
+    } else {
+        (None, "")
+    };
+    let rename_retag_hint = match app.mode {
+        AppMode::RenameSample => format!("  New sample name: {}", app.rename_retag_buffer),
+        AppMode::EditTag => format!("  New tag: {}", app.rename_retag_buffer),
+        _ => String::new(),
+    };
+    let mut spans: Vec<Span> = vec![
+        Span::raw("  "),
+        Span::raw(path_display),
+        Span::raw("  [up] [back] [fwd]"),
+        Span::raw(&filter_hint),
+    ];
+    if let Some(c) = loading_spinner {
+        spans.push(Span::styled(
+            c.to_string(),
+            super::theme::spinner_style(theme),
+        ));
+        spans.push(Span::raw(loading_msg));
+    }
+    spans.push(Span::raw(&rename_retag_hint));
+    let line = Line::from(spans);
     let para = Paragraph::new(line);
     frame.render_widget(para, area);
 }
 
-fn render_bottom_bar(frame: &mut Frame, _app: &App, area: Rect, theme: ThemeMode) {
-    let style = super::theme::keybind_bar_style(theme);
-    let content = bottom_bar_line();
+fn render_bottom_bar(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
+    let (content, style) = if let Some((ref msg, is_error)) = app.status_message {
+        let style = if is_error {
+            super::theme::status_error_style(theme)
+        } else {
+            super::theme::status_ok_style(theme)
+        };
+        (msg.clone(), style)
+    } else {
+        (
+            bottom_bar_line(),
+            super::theme::keybind_bar_style(theme),
+        )
+    };
     let line = Line::from(ratatui::text::Span::styled(content, style));
     let para = Paragraph::new(line).alignment(Alignment::Center);
     frame.render_widget(para, area);
@@ -120,6 +164,25 @@ fn render_search_box(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode)
 }
 
 fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+    if !app.has_catalog {
+        let empty_style = super::theme::empty_message_style(theme);
+        let line1 = ratatui::text::Line::from(ratatui::text::Span::styled(
+            "No catalog in this directory.",
+            empty_style,
+        ));
+        let line2 = ratatui::text::Line::from(ratatui::text::Span::styled(
+            "Press [i] to index directory, or from Python: pyref.io.ingest_beamtime(path)",
+            empty_style,
+        ));
+        let path_line = ratatui::text::Line::from(ratatui::text::Span::styled(
+            format!("Path: {}", app.current_root),
+            empty_style,
+        ));
+        let para = Paragraph::new(vec![line1, line2, path_line])
+            .alignment(Alignment::Center);
+        frame.render_widget(para, area);
+        return;
+    }
     let [left_pct, _right_pct] = layout_constraints(app);
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)

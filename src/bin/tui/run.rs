@@ -12,12 +12,23 @@ pub fn run<B: Backend>(
     poll_duration: Duration,
 ) -> io::Result<()> {
     loop {
+        app.try_recv_ingest();
+        app.clear_status_if_stale();
+        if app.loading_state != super::app::LoadingState::Idle {
+            app.needs_redraw = true;
+            app.spinner_frame = app.spinner_frame.saturating_add(1);
+        }
         if app.needs_redraw {
             terminal.draw(|f| super::ui::render(f, app))?;
             app.needs_redraw = false;
         }
 
-        if crossterm::event::poll(poll_duration)? {
+        let timeout = if app.loading_state != super::app::LoadingState::Idle {
+            Duration::from_millis(100)
+        } else {
+            poll_duration
+        };
+        if crossterm::event::poll(timeout)? {
             let ev = crossterm::event::read()?;
             match ev {
                 Event::Key(key) => {
@@ -64,6 +75,30 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         return false;
     }
 
+    if matches!(
+        app.mode,
+        super::app::AppMode::RenameSample | super::app::AppMode::EditTag
+    ) {
+        let action = keymap::from_key_event(key, &app.keymap);
+        match action {
+            Action::Cancel => {
+                app.set_mode_normal();
+            }
+            Action::Open => {
+                app.apply_rename_retag();
+            }
+            Action::None => {
+                if key.code == crossterm::event::KeyCode::Backspace {
+                    app.rename_retag_pop_char();
+                } else if let crossterm::event::KeyCode::Char(c) = key.code {
+                    app.rename_retag_push_char(c);
+                }
+            }
+            _ => {}
+        }
+        return false;
+    }
+
     if app.mode != super::app::AppMode::Normal {
         let action = keymap::from_key_event(key, &app.keymap);
         if action == Action::Cancel {
@@ -89,6 +124,10 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         Action::Cancel => {}
         Action::Rename => app.set_mode_rename(),
         Action::Retag => app.set_mode_retag(),
+        Action::IndexDirectory => app.start_indexing(),
+        Action::NavUp => app.nav_up(),
+        Action::NavBack => app.nav_back(),
+        Action::NavFwd => app.nav_fwd(),
         Action::Open => {
             if matches!(
                 app.focus,

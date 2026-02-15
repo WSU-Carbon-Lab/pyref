@@ -116,6 +116,8 @@ Catalog is built by default (feature `catalog`); the TUI feature includes catalo
 
 **Catalog watch**: When the TUI has a beamtime selected and `.pyref_catalog.db` exists, a catalog watcher runs in the background (Rust `run_catalog_watcher` in `src/catalog/watch.rs`). It uses the `notify-debouncer-mini` crate to watch the beamtime directory for FITS create/modify events, debounces them (about 1.5 s), and runs incremental ingest so new or changed files are added to the catalog without a full rescan. The watcher is stopped when the TUI exits (or when the user navigates away from that beamtime). The TUI feature enables the `watch` feature; the Python wheel does not depend on the watcher.
 
+**TUI (pyref-tui)**: Run with optional first argument as beamtime root (e.g. `pyref-tui /path/to/beamtime`); otherwise uses `last_root` from config or a default. The root is validated at startup (must exist and be a directory). If there is no catalog in the directory, the TUI shows an empty state and the message to run "Index directory" (key [i]) or `pyref.io.ingest_beamtime(path)` from Python. Rename/Retag in the TUI write catalog overrides via `set_override` and the table reloads from the catalog. On exit, the TUI saves config to `PYREF_TUI_CONFIG` or `~/.config/pyref/tui.toml`, including `last_root`, `selected_samples`, `selected_tags`, and `selected_experiment_numbers`. Scripts can read that config and use `scan_experiment(last_root).filter(...)` with the same sample/tag/experiment filters to match the TUI view.
+
 ### 7. Data Stitching (Conceptual)
 
 While explicit stitching code is not fully implemented, the infrastructure supports it:

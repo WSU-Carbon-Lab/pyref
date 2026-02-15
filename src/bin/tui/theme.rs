@@ -75,3 +75,24 @@ pub fn empty_message_style(mode: ThemeMode) -> Style {
         ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::DarkGray),
     }
 }
+
+pub fn status_error_style(mode: ThemeMode) -> Style {
+    match mode {
+        ThemeMode::Bw => Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::Red),
+    }
+}
+
+pub fn status_ok_style(mode: ThemeMode) -> Style {
+    match mode {
+        ThemeMode::Bw => Style::new().add_modifier(Modifier::BOLD),
+        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::Green),
+    }
+}
+
+pub fn spinner_style(mode: ThemeMode) -> Style {
+    match mode {
+        ThemeMode::Bw => Style::new().add_modifier(Modifier::BOLD),
+        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::Cyan),
+    }
+}

@@ -4,17 +4,46 @@ mod tui;
 
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::Terminal;
+use std::env;
 use std::io;
+use std::path::Path;
 use std::time::Duration;
+
+fn resolve_root(config: &tui::TuiConfig) -> Result<String, String> {
+    let raw = env::args()
+        .nth(1)
+        .or_else(|| config.last_root.clone())
+        .unwrap_or_else(|| "/path/to/experiments".to_string());
+    let path = Path::new(&raw);
+    if !path.exists() {
+        return Err(format!(
+            "Path does not exist: {}. Check the path or create the directory.",
+            path.display()
+        ));
+    }
+    if !path.is_dir() {
+        return Err(format!(
+            "Path is not a directory: {}. Point pyref-tui at a beamtime directory.",
+            path.display()
+        ));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path {}: {}", path.display(), e))?;
+    Ok(canonical.to_string_lossy().into_owned())
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tui::terminal_guard::install_panic_hook();
 
     let config = tui::TuiConfig::load_or_default();
-    let current_root = config
-        .last_root
-        .clone()
-        .unwrap_or_else(|| "/path/to/experiments".to_string());
+    let current_root = match resolve_root(&config) {
+        Ok(s) => s,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            std::process::exit(1);
+        }
+    };
 
     let poll_duration = config
         .poll_interval_ms
@@ -72,6 +101,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         app.focused_tag().as_deref(),
         exp_str.as_deref(),
     );
+    let mut sel_samples: Vec<String> = app.selected_samples.iter().cloned().collect();
+    sel_samples.sort();
+    let mut sel_tags: Vec<String> = app.selected_tags.iter().cloned().collect();
+    sel_tags.sort();
+    let mut sel_experiments: Vec<u32> = app.selected_experiments.iter().cloned().collect();
+    sel_experiments.sort();
+    config_save.set_selection_export(&sel_samples, &sel_tags, &sel_experiments);
     if let Err(e) = config_save.save() {
         eprintln!("{}", e.report());
     }

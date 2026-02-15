@@ -29,6 +29,12 @@ pub struct TuiConfig {
     pub last_tag: Option<String>,
     #[serde(default)]
     pub last_experiment: Option<String>,
+    #[serde(default)]
+    pub selected_samples: Vec<String>,
+    #[serde(default)]
+    pub selected_tags: Vec<String>,
+    #[serde(default)]
+    pub selected_experiment_numbers: Vec<u32>,
     #[serde(default = "default_keymap")]
     pub keymap: String,
     #[serde(default)]
@@ -64,6 +70,9 @@ impl Default for TuiConfig {
             last_sample: None,
             last_tag: None,
             last_experiment: None,
+            selected_samples: Vec::new(),
+            selected_tags: Vec::new(),
+            selected_experiment_numbers: Vec::new(),
             keymap: default_keymap(),
             poll_interval_ms: None,
             theme: default_theme(),
@@ -117,5 +126,16 @@ impl TuiConfig {
         self.last_sample = sample.map(String::from);
         self.last_tag = tag.map(String::from);
         self.last_experiment = experiment.map(String::from);
+    }
+
+    pub fn set_selection_export(
+        &mut self,
+        selected_samples: &[String],
+        selected_tags: &[String],
+        selected_experiment_numbers: &[u32],
+    ) {
+        self.selected_samples = selected_samples.to_vec();
+        self.selected_tags = selected_tags.to_vec();
+        self.selected_experiment_numbers = selected_experiment_numbers.to_vec();
     }
 }

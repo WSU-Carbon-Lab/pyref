@@ -182,13 +182,14 @@ pub fn add_calculated_domains(mut lzf: LazyFrame) -> DataFrame {
         );
     }
 
-    lz = lz.with_column(
-        when(
-            col("Sample Theta")
-                .is_not_null()
-                .and(col("Lambda").is_not_null()),
-        )
-        .then(as_struct(vec![col("Sample Theta"), col("Lambda")]).map(
+    if has_column("Sample Theta") && has_column("Beamline Energy") {
+        lz = lz.with_column(
+            when(
+                col("Sample Theta")
+                    .is_not_null()
+                    .and(col("Lambda").is_not_null()),
+            )
+            .then(as_struct(vec![col("Sample Theta"), col("Lambda")]).map(
             move |s| {
                 let struc = s.struct_()?;
                 let th_series = struc.field_by_name("Sample Theta")?;
@@ -209,9 +210,10 @@ pub fn add_calculated_domains(mut lzf: LazyFrame) -> DataFrame {
             },
             GetOutput::from_type(DataType::Float64),
         ))
-        .otherwise(lit(NULL))
-        .alias("Q"),
-    );
+            .otherwise(lit(NULL))
+            .alias("Q"),
+        );
+    }
 
     lz.collect().unwrap_or_else(|_| DataFrame::empty())
 }
@@ -308,18 +310,9 @@ pub fn process_metadata(
     keys: &[String],
 ) -> Result<Vec<Column>, FitsError> {
     if keys.is_empty() {
-        Ok(hdu
-            .header
-            .iter()
-            .filter(|card| !card.keyword.as_str().to_lowercase().contains("comment"))
-            .map(|card| {
-                let name = card.keyword.as_str();
-                let value = card.value.as_float().unwrap_or(0.0);
-                Column::new(name.into(), &[value])
-            })
-            .collect())
-    } else {
-        let mut columns = Vec::new();
+        return Ok(Vec::new());
+    }
+    let mut columns = Vec::new();
 
         for key in keys {
             if key == "Beamline Energy" {
@@ -359,8 +352,7 @@ pub fn process_metadata(
             columns.push(Column::new(key.into(), &[val]));
         }
 
-        Ok(columns)
-    }
+    Ok(columns)
 }
 
 pub fn build_headers_only_columns(

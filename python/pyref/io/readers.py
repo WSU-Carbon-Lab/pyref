@@ -43,28 +43,45 @@ def _stem_matches(path: Path, pattern: RegexPattern) -> bool:
     return compiled.search(path.stem) is not None
 
 
+def _is_skippable_stem(stem: str) -> bool:
+    return stem.startswith("_") or stem == ""
+
+
 def resolve_fits_paths(source: FilePath | FilePathList) -> list[str]:
     if isinstance(source, (list, tuple)):
         out: list[str] = []
         for p in source:
             path = Path(p).resolve()
             if path.is_file() and path.suffix.lower() == ".fits":
-                out.append(str(path))
+                if not _is_skippable_stem(path.stem):
+                    out.append(str(path))
             elif path.is_dir():
                 for f in sorted(path.rglob("*.fits")):
-                    if f.is_file():
+                    if f.is_file() and not _is_skippable_stem(f.stem):
                         out.append(str(f.resolve()))
         return sorted(set(out))
     path = Path(source).resolve()
     if path.is_file():
-        return [str(path)] if path.suffix.lower() == ".fits" else []
+        if path.suffix.lower() != ".fits" or _is_skippable_stem(path.stem):
+            return []
+        return [str(path)]
     if path.is_dir():
-        return sorted(str(f.resolve()) for f in path.rglob("*.fits") if f.is_file())
+        return sorted(
+            str(f.resolve())
+            for f in path.rglob("*.fits")
+            if f.is_file() and not _is_skippable_stem(f.stem)
+        )
     if "*" in path.name or "?" in path.name:
         parent = path.parent
         if not parent.exists():
             return []
-        return sorted(str(f.resolve()) for f in parent.glob(path.name) if f.is_file() and f.suffix.lower() == ".fits")
+        return sorted(
+            str(f.resolve())
+            for f in parent.glob(path.name)
+            if f.is_file()
+            and f.suffix.lower() == ".fits"
+            and not _is_skippable_stem(f.stem)
+        )
     return []
 
 
@@ -112,6 +129,10 @@ def scan_experiment(
         for i in range(0, len(paths), batch_size):
             batch = paths[i : i + batch_size]
             df = py_read_multiple_fits_headers_only(batch, keys)
+            df = df.filter(
+                (pl.col("sample_name") != "")
+                | (pl.col("tag").is_not_null() & (pl.col("tag") != ""))
+            )
             if with_columns:
                 df = df.select(with_columns)
             if predicate is not None:

@@ -1,12 +1,11 @@
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 
-const FITS_BLOCK_SIZE: usize = 2880;
-
 use crate::fits::error::FitsReadError;
 use crate::fits::header::Header;
 use crate::fits::image::{ImageHdu, ImageHduHeader};
 use crate::fits::primary::PrimaryHdu;
+use crate::fits::utils::{nbytes_from_bitpix, FITS_BLOCK_SIZE};
 
 fn has_more_data<R: Read + Seek>(reader: &mut R) -> Result<bool, FitsReadError> {
     let pos = reader.stream_position()?;
@@ -34,13 +33,7 @@ fn extension_data_size(header: &Header) -> Result<usize, FitsReadError> {
         .get_card("BITPIX")
         .and_then(|c| c.value.as_int())
         .unwrap_or(16) as i32;
-    let nbytes = nelem
-        * match bitpix {
-            8 => 1,
-            16 => 2,
-            32 | -32 => 4,
-            _ => 8,
-        };
+    let nbytes = nelem * nbytes_from_bitpix(bitpix);
     Ok(nbytes)
 }
 

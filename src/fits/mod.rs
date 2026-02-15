@@ -3,6 +3,7 @@ pub mod header;
 pub mod hdulist;
 pub mod image;
 pub mod primary;
+pub mod utils;
 
 pub use error::FitsReadError;
 pub use header::{Card, CardValue, Header};

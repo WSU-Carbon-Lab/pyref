@@ -1,8 +1,7 @@
 use std::io::{Read, Seek};
 
 use crate::fits::error::FitsReadError;
-
-const FITS_BLOCK_SIZE: usize = 2880;
+use crate::fits::utils::FITS_BLOCK_SIZE;
 const CARD_SIZE: usize = 80;
 
 #[derive(Debug, Clone, PartialEq)]

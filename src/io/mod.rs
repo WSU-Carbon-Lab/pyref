@@ -37,6 +37,60 @@ impl ImageInfo {
             bzero,
         }
     }
+
+    pub fn from_dataframe_row(df: &DataFrame, row_index: usize) -> Result<Self, FitsError> {
+        let path_str: &str = df
+            .column("file_path")
+            .map_err(FitsError::from)?
+            .str()
+            .map_err(FitsError::from)?
+            .get(row_index)
+            .ok_or_else(|| FitsError::validation("file_path row missing or null"))?;
+        let path = PathBuf::from(path_str);
+        let data_offset: u64 = df
+            .column("data_offset")
+            .map_err(FitsError::from)?
+            .i64()
+            .map_err(FitsError::from)?
+            .get(row_index)
+            .ok_or_else(|| FitsError::validation("data_offset row missing or null"))? as u64;
+        let naxis1: usize = df
+            .column("naxis1")
+            .map_err(FitsError::from)?
+            .i64()
+            .map_err(FitsError::from)?
+            .get(row_index)
+            .ok_or_else(|| FitsError::validation("naxis1 row missing or null"))? as usize;
+        let naxis2: usize = df
+            .column("naxis2")
+            .map_err(FitsError::from)?
+            .i64()
+            .map_err(FitsError::from)?
+            .get(row_index)
+            .ok_or_else(|| FitsError::validation("naxis2 row missing or null"))? as usize;
+        let bitpix: i32 = df
+            .column("bitpix")
+            .map_err(FitsError::from)?
+            .i64()
+            .map_err(FitsError::from)?
+            .get(row_index)
+            .ok_or_else(|| FitsError::validation("bitpix row missing or null"))? as i32;
+        let bzero: i64 = df
+            .column("bzero")
+            .map_err(FitsError::from)?
+            .i64()
+            .map_err(FitsError::from)?
+            .get(row_index)
+            .ok_or_else(|| FitsError::validation("bzero row missing or null"))?;
+        Ok(ImageInfo {
+            path,
+            data_offset,
+            naxis1,
+            naxis2,
+            bitpix,
+            bzero,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +128,6 @@ pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
 }
 
 pub fn q(lam: f64, theta: f64) -> f64 {
-    let theta = theta;
     match 4.0 * std::f64::consts::PI * theta.to_radians().sin() / lam {
         q if q < 0.0 => 0.0,
         q => q,
@@ -252,7 +305,7 @@ pub fn subtract_background_edges(
 
 pub fn process_metadata(
     hdu: &PrimaryHdu,
-    keys: &Vec<String>,
+    keys: &[String],
 ) -> Result<Vec<Column>, FitsError> {
     if keys.is_empty() {
         Ok(hdu
@@ -316,7 +369,7 @@ pub fn build_headers_only_columns(
     path: PathBuf,
     header_items: &[String],
 ) -> Result<Vec<Column>, FitsError> {
-    let mut columns = process_metadata(primary, &header_items.to_vec())?;
+    let mut columns = process_metadata(primary, header_items)?;
     columns.extend(process_file_name(path.clone()));
     let path_str = path
         .to_str()

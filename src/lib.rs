@@ -120,75 +120,8 @@ mod extension {
         row_index: usize,
         sigma: f64,
     ) -> PyResult<Bound<'_, PyArray2<f32>>> {
-        let path_str: &str = df
-            .0
-            .column("file_path")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .str()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("file_path row missing or null")
-            })?;
-        let path = std::path::PathBuf::from(path_str);
-        let data_offset: u64 = df
-            .0
-            .column("data_offset")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("data_offset row missing or null")
-            })? as u64;
-        let naxis1: usize = df
-            .0
-            .column("naxis1")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("naxis1 row missing or null")
-            })? as usize;
-        let naxis2: usize = df
-            .0
-            .column("naxis2")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("naxis2 row missing or null")
-            })? as usize;
-        let bitpix: i32 = df
-            .0
-            .column("bitpix")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("bitpix row missing or null")
-            })? as i32;
-        let bzero: i64 = df
-            .0
-            .column("bzero")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("bzero row missing or null")
-            })?;
-        let info = crate::io::ImageInfo {
-            path,
-            data_offset,
-            naxis1,
-            naxis2,
-            bitpix,
-            bzero,
-        };
+        let info = crate::io::ImageInfo::from_dataframe_row(&df.0, row_index)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         match materialize_image_filtered(info.path.as_path(), &info, sigma) {
             Ok(arr) => Ok(PyArray2::from_owned_array_bound(py, arr)),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -207,75 +140,8 @@ mod extension {
         bg_rows: usize,
         bg_cols: usize,
     ) -> PyResult<Bound<'_, PyArray2<i64>>> {
-        let path_str: &str = df
-            .0
-            .column("file_path")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .str()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("file_path row missing or null")
-            })?;
-        let path = std::path::PathBuf::from(path_str);
-        let data_offset: u64 = df
-            .0
-            .column("data_offset")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("data_offset row missing or null")
-            })? as u64;
-        let naxis1: usize = df
-            .0
-            .column("naxis1")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("naxis1 row missing or null")
-            })? as usize;
-        let naxis2: usize = df
-            .0
-            .column("naxis2")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("naxis2 row missing or null")
-            })? as usize;
-        let bitpix: i32 = df
-            .0
-            .column("bitpix")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("bitpix row missing or null")
-            })? as i32;
-        let bzero: i64 = df
-            .0
-            .column("bzero")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("bzero row missing or null")
-            })?;
-        let info = crate::io::ImageInfo {
-            path,
-            data_offset,
-            naxis1,
-            naxis2,
-            bitpix,
-            bzero,
-        };
+        let info = crate::io::ImageInfo::from_dataframe_row(&df.0, row_index)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         match materialize_image_corrected(info.path.as_path(), &info, bg_rows, bg_cols) {
             Ok(arr) => Ok(PyArray2::from_owned_array_bound(py, arr)),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -295,75 +161,8 @@ mod extension {
         bg_rows: usize,
         bg_cols: usize,
     ) -> PyResult<Bound<'_, PyArray2<f32>>> {
-        let path_str: &str = df
-            .0
-            .column("file_path")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .str()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("file_path row missing or null")
-            })?;
-        let path = std::path::PathBuf::from(path_str);
-        let data_offset: u64 = df
-            .0
-            .column("data_offset")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("data_offset row missing or null")
-            })? as u64;
-        let naxis1: usize = df
-            .0
-            .column("naxis1")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("naxis1 row missing or null")
-            })? as usize;
-        let naxis2: usize = df
-            .0
-            .column("naxis2")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("naxis2 row missing or null")
-            })? as usize;
-        let bitpix: i32 = df
-            .0
-            .column("bitpix")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("bitpix row missing or null")
-            })? as i32;
-        let bzero: i64 = df
-            .0
-            .column("bzero")
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .i64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-            .get(row_index)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("bzero row missing or null")
-            })?;
-        let info = crate::io::ImageInfo {
-            path,
-            data_offset,
-            naxis1,
-            naxis2,
-            bitpix,
-            bzero,
-        };
+        let info = crate::io::ImageInfo::from_dataframe_row(&df.0, row_index)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         match materialize_image_filtered_edges(
             info.path.as_path(),
             &info,

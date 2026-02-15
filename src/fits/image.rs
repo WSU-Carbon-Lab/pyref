@@ -4,19 +4,7 @@ use ndarray::{Array2, ArrayBase, Dim, OwnedRepr};
 
 use crate::fits::error::FitsReadError;
 use crate::fits::header::Header;
-
-const FITS_BLOCK_SIZE: usize = 2880;
-
-fn nbytes_from_bitpix(bitpix: i32) -> usize {
-    match bitpix {
-        8 => 1,
-        16 => 2,
-        32 => 4,
-        -32 => 4,
-        -64 => 8,
-        _ => 2,
-    }
-}
+use crate::fits::utils::{nbytes_from_bitpix, FITS_BLOCK_SIZE};
 
 fn image_shape(header: &Header) -> Result<(usize, usize), FitsReadError> {
     let naxis = header

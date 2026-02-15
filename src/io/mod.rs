@@ -4,6 +4,7 @@ pub mod image_mmap;
 use ndarray::{Array2, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use polars::prelude::*;
 use regex::Regex;
+use std::fs;
 use std::ops::Mul;
 use std::path::PathBuf;
 
@@ -342,6 +343,13 @@ pub fn build_headers_only_columns(
     columns.push(Column::new(
         "bitpix".into(),
         vec![image_header.bitpix as i64],
+    ));
+    let data_size = fs::metadata(&path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0) as i64;
+    columns.push(Column::new(
+        "data_size".into(),
+        vec![data_size],
     ));
     columns.push(Column::new("bzero".into(), vec![bzero]));
     Ok(columns)

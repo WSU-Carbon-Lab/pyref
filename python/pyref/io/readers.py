@@ -75,6 +75,7 @@ def _scan_schema(header_items: list[str]) -> dict[str, Any]:
         "naxis1": pl.Int64,
         "naxis2": pl.Int64,
         "bitpix": pl.Int64,
+        "data_size": pl.Int64,
         "bzero": pl.Int64,
         "file_name": pl.String,
         "sample_name": pl.String,

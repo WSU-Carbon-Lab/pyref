@@ -95,7 +95,28 @@ Uncertainty propagation implemented as Polars plugins:
 - Exposes Rust functions as Polars expressions
 - Used throughout the data processing pipeline
 
-### 6. Data Stitching (Conceptual)
+### 6. Catalog (beamtime index)
+
+One SQLite database per beamtime directory (`.pyref_catalog.db`) caches FITS metadata and supports overrides so scans avoid repeated header I/O.
+
+**Source resolution in `scan_experiment(source)`** (Python `python/pyref/io/readers.py`):
+- If `source` is a directory and `path / ".pyref_catalog.db"` exists, the scan is served from the catalog (Rust `scan_from_catalog`); no FITS I/O.
+- If `source` is a file path to `.pyref_catalog.db`, the scan is from that catalog.
+- Otherwise, discovery and header reads use the existing directory/list path (resolve_fits_paths + batched `read_multiple_fits_headers_only`). The LazyFrame schema is the same in both cases so `df.fits` and the loader work unchanged.
+
+**Rust** (`src/catalog/`): Schema (files + overrides), discovery (walkdir, skippable stems), ingest (batch header read, Q/Lambda, upsert, prune), `scan_from_catalog`, `get_overrides`, `set_override`, `list_beamtime_entries`, `query_files`. The TUI (Rust binary) uses these when a beamtime has a catalog; no Python in the TUI process.
+
+**Programmatic APIs** (Python `pyref.io`):
+- `ingest_beamtime(beamtime_path, header_items=None, incremental=True)` -> Path to DB
+- `get_overrides(catalog_path, path=None)` -> DataFrame
+- `set_override(catalog_path, path, sample_name=..., tag=..., notes=...)`
+- `query_catalog(catalog_path, sample_name=..., tag=..., experiment_numbers=..., energy_min=..., energy_max=...)` -> DataFrame
+
+Catalog is built by default (feature `catalog`); the TUI feature includes catalog so the binary can read/write the same DB.
+
+**Catalog watch**: When the TUI has a beamtime selected and `.pyref_catalog.db` exists, a catalog watcher runs in the background (Rust `run_catalog_watcher` in `src/catalog/watch.rs`). It uses the `notify-debouncer-mini` crate to watch the beamtime directory for FITS create/modify events, debounces them (about 1.5 s), and runs incremental ingest so new or changed files are added to the catalog without a full rescan. The watcher is stopped when the TUI exits (or when the user navigates away from that beamtime). The TUI feature enables the `watch` feature; the Python wheel does not depend on the watcher.
+
+### 7. Data Stitching (Conceptual)
 
 While explicit stitching code is not fully implemented, the infrastructure supports it:
 
@@ -119,7 +140,7 @@ While explicit stitching code is not fully implemented, the infrastructure suppo
 - Weighted combination preserves statistical information
 - Must handle cases where overlap is insufficient
 
-### 7. Reflectivity Fitting (`python/pyref/fitting/`)
+### 8. Reflectivity Fitting (`python/pyref/fitting/`)
 
 The fitting module provides:
 - `XrayReflectDataset`: Dataset class for reflectivity data with polarization handling
@@ -134,7 +155,11 @@ FITS Files
     ↓
 [Rust IO Layer] - Parallel reading, image processing, initial reflectivity
     ↓
-Polars DataFrame (meta) - All images, metadata, calculated Q
+(optional) [Catalog] - ingest_beamtime writes .pyref_catalog.db per beamtime; scan_from_catalog reads it
+    ↓
+scan_experiment(source) - directory/list -> FITS I/O; directory with .pyref_catalog.db or path to .db -> catalog only
+    ↓
+Polars DataFrame (meta) - All images, metadata, calculated Q (same schema either path)
     ↓
 [Python Loader] - Masking, grouping by file_name
     ↓
@@ -167,6 +192,11 @@ Combined Reflectivity Dataset - Complete R vs Q curve
 - Use `pyref.utils.err_prop_mult()` and `err_prop_div()` for calculations
 - Use `weighted_mean()` and `weighted_std()` for combining overlapping points
 - Uncertainty propagates automatically through Polars expressions
+
+### Catalog usage
+- Ingest once (or incrementally): `pyref.io.ingest_beamtime(beamtime_path)`; then `scan_experiment(beamtime_path)` uses the DB.
+- Overrides: `set_override(catalog_path, path, sample_name=..., tag=..., notes=...)`; resolved values (e.g. for scan) use COALESCE(override, file).
+- Query with filters: `query_catalog(catalog_path, sample_name=..., tag=..., experiment_numbers=...)`.
 
 ### Stitching (Future Implementation)
 - Identify overlapping Q ranges between consecutive file_name groups

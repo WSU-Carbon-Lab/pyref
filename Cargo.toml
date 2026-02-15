@@ -19,9 +19,11 @@ path = "src/bin/pyref_tui.rs"
 required-features = ["tui"]
 
 [features]
-default = ["extension-module"]
+default = ["extension-module", "catalog"]
 extension-module = ["dep:pyo3", "dep:pyo3-polars", "dep:numpy"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:toml", "dep:fuzzy-matcher"]
+catalog = ["dep:rusqlite", "dep:walkdir"]
+tui = ["catalog", "watch", "dep:ratatui", "dep:crossterm", "dep:toml", "dep:fuzzy-matcher"]
+watch = ["dep:notify-debouncer-mini"]
 
 [dependencies]
 libblur = "0.22"
@@ -42,6 +44,9 @@ ratatui = {version = "0.29", optional = true, features = ["crossterm"]}
 crossterm = {version = "0.28", optional = true}
 toml = {version = "0.8", optional = true}
 fuzzy-matcher = {version = "0.3", optional = true}
+rusqlite = {version = "0.32", optional = true, features = ["bundled"]}
+walkdir = {version = "2", optional = true}
+notify-debouncer-mini = {version = "0.4", optional = true}
 
 [dev-dependencies]
 tempfile = "3.14"

@@ -6,6 +6,9 @@ pub mod fits;
 pub mod io;
 pub mod loader;
 
+#[cfg(feature = "catalog")]
+pub mod catalog;
+
 pub use errors::FitsError;
 pub use loader::{
     read_experiment_headers_only, read_fits_headers_only, read_multiple_fits_headers_only,
@@ -28,6 +31,9 @@ mod extension {
     use crate::{
         read_experiment_headers_only, read_fits_headers_only, read_multiple_fits_headers_only,
     };
+
+    #[cfg(feature = "catalog")]
+    use crate::catalog::{get_overrides, ingest_beamtime, scan_from_catalog, set_override, CatalogFilter};
 
     #[global_allocator]
     static ALLOC: PolarsAllocator = PolarsAllocator::new();
@@ -313,6 +319,104 @@ mod extension {
         Ok(out.into_series())
     }
 
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_ingest_beamtime")]
+    #[pyo3(signature = (beamtime_path, header_items, incremental=true), text_signature = "(beamtime_path, header_items, incremental=True)")]
+    pub fn py_ingest_beamtime(
+        beamtime_path: &str,
+        header_items: Vec<String>,
+        incremental: bool,
+    ) -> PyResult<String> {
+        let path = std::path::Path::new(beamtime_path);
+        match ingest_beamtime(path, &header_items, incremental) {
+            Ok(p) => Ok(p.to_string_lossy().to_string()),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_scan_from_catalog")]
+    #[pyo3(signature = (db_path, filter=None), text_signature = "(db_path, filter=None)")]
+    pub fn py_scan_from_catalog(
+        db_path: &str,
+        filter: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyDataFrame> {
+        let path = std::path::Path::new(db_path);
+        let cat_filter = filter.and_then(|f| dict_to_catalog_filter(f).ok());
+        match scan_from_catalog(path, cat_filter.as_ref()) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    fn dict_to_catalog_filter(d: &Bound<'_, PyAny>) -> PyResult<CatalogFilter> {
+        let dict = d.downcast::<pyo3::types::PyDict>()?;
+        let mut f = CatalogFilter::default();
+        if let Some(v) = dict.get_item("sample_name")? {
+            if !v.is_none() {
+                f.sample_name = Some(v.extract::<String>()?);
+            }
+        }
+        if let Some(v) = dict.get_item("tag")? {
+            if !v.is_none() {
+                f.tag = Some(v.extract::<String>()?);
+            }
+        }
+        if let Some(v) = dict.get_item("experiment_numbers")? {
+            if !v.is_none() {
+                f.experiment_numbers = Some(v.extract::<Vec<i64>>()?);
+            }
+        }
+        if let Some(v) = dict.get_item("energy_min")? {
+            if !v.is_none() {
+                f.energy_min = Some(v.extract::<f64>()?);
+            }
+        }
+        if let Some(v) = dict.get_item("energy_max")? {
+            if !v.is_none() {
+                f.energy_max = Some(v.extract::<f64>()?);
+            }
+        }
+        Ok(f)
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_get_overrides")]
+    #[pyo3(signature = (db_path, path=None), text_signature = "(db_path, path=None)")]
+    pub fn py_get_overrides(
+        db_path: &str,
+        path: Option<String>,
+    ) -> PyResult<PyDataFrame> {
+        let db = std::path::Path::new(db_path);
+        let path_ref = path.as_deref();
+        match get_overrides(db, path_ref) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_set_override")]
+    #[pyo3(signature = (db_path, path, sample_name=None, tag=None, notes=None), text_signature = "(db_path, path, sample_name=None, tag=None, notes=None)")]
+    pub fn py_set_override(
+        db_path: &str,
+        path: &str,
+        sample_name: Option<&str>,
+        tag: Option<&str>,
+        notes: Option<&str>,
+    ) -> PyResult<()> {
+        let db = std::path::Path::new(db_path);
+        match set_override(db, path, sample_name, tag, notes) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        }
+    }
+
     #[pymodule]
     #[pyo3(name = "pyref")]
     pub fn pyref(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -324,6 +428,13 @@ mod extension {
         m.add_function(pyo3::wrap_pyfunction!(py_materialize_image_filtered, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_get_image_corrected, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_materialize_image_filtered_edges, m)?)?;
+        #[cfg(feature = "catalog")]
+        {
+            m.add_function(pyo3::wrap_pyfunction!(py_ingest_beamtime, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_scan_from_catalog, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_get_overrides, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_set_override, m)?)?;
+        }
         Ok(())
     }
 }

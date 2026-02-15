@@ -45,10 +45,14 @@ from pyref.io.readers import (
     get_image_corrected,
     get_image_filtered,
     get_image_filtered_edges,
+    get_overrides,
+    ingest_beamtime,
+    query_catalog,
     read_experiment,
     read_fits,
     resolve_fits_paths,
     scan_experiment,
+    set_override,
 )
 
 __all__ = [
@@ -61,10 +65,14 @@ __all__ = [
     "get_image_corrected",
     "get_image_filtered",
     "get_image_filtered_edges",
+    "get_overrides",
+    "ingest_beamtime",
     "parse_fits_stem",
+    "query_catalog",
     "read_experiment",
     "read_fits",
     "resolve_fits_paths",
     "scan_experiment",
     "scan_view",
+    "set_override",
 ]

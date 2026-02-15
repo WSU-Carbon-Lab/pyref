@@ -3,6 +3,12 @@ use fuzzy_matcher::FuzzyMatcher;
 use ratatui::widgets::{ListState, TableState};
 use std::cmp;
 use std::collections::HashSet;
+use std::path::Path;
+
+#[cfg(feature = "catalog")]
+use pyref::catalog::{list_beamtime_entries, query_files, CATALOG_DB_NAME};
+#[cfg(feature = "watch")]
+use pyref::catalog::{run_catalog_watcher, DEFAULT_DEBOUNCE_MS};
 
 #[derive(Debug, Clone)]
 pub struct ProfileRow {
@@ -166,14 +172,60 @@ pub struct App {
     pub keymap: String,
     pub keybind_bar_lines: u8,
     pub theme: String,
+    #[cfg(feature = "watch")]
+    pub catalog_watcher: Option<pyref::catalog::WatchHandle>,
+}
+
+fn catalog_to_profiles(current_root: &str) -> Option<(Vec<ProfileRow>, Vec<String>, Vec<String>, Vec<(u32, String)>)> {
+    #[cfg(feature = "catalog")]
+    {
+        let db_path = Path::new(current_root).join(CATALOG_DB_NAME);
+        if !db_path.exists() {
+            return None;
+        }
+        let entries = list_beamtime_entries(&db_path).ok()?;
+        let rows = query_files(&db_path, None).ok()?;
+        let profiles: Vec<ProfileRow> = rows
+            .into_iter()
+            .map(|r| ProfileRow {
+                sample: r.sample_name,
+                tag: r.tag.unwrap_or_default(),
+                energy_str: r
+                    .beamline_energy
+                    .map(|e| format!("{:.1} eV", e))
+                    .unwrap_or_else(|| "-".to_string()),
+                pol: "-".to_string(),
+                q_range_str: r
+                    .q
+                    .map(|q| format!("{:.3}", q))
+                    .unwrap_or_else(|| "-".to_string()),
+                data_points: 1,
+                quality_placeholder: "-".to_string(),
+                experiment_number: r.experiment_number as u32,
+            })
+            .collect();
+        let experiments: Vec<(u32, String)> = entries
+            .experiments
+            .into_iter()
+            .map(|(n, s)| (n as u32, s))
+            .collect();
+        return Some((profiles, entries.samples, entries.tags, experiments));
+    }
+    #[cfg(not(feature = "catalog"))]
+    None
 }
 
 impl App {
     pub fn new(current_root: String, layout: String, keymap: String, keybind_bar_lines: u8, theme: String) -> Self {
-        let all_profiles = mock_profile_rows();
-        let samples = mock_samples();
-        let tags = mock_tags();
-        let experiments = mock_experiments();
+        let (all_profiles, samples, tags, experiments) =
+            catalog_to_profiles(&current_root).unwrap_or_else(|| {
+                (
+                    mock_profile_rows(),
+                    mock_samples(),
+                    mock_tags(),
+                    mock_experiments(),
+                )
+            });
         let mut sample_state = ListState::default();
         let mut tag_state = ListState::default();
         let mut experiment_state = ListState::default();
@@ -190,6 +242,7 @@ impl App {
         let selected_samples = HashSet::new();
         let selected_tags = HashSet::new();
         let selected_experiments = HashSet::new();
+        let all_profiles_clone = all_profiles.clone();
         let filtered = Self::filter_profiles(
             &all_profiles,
             &selected_samples,
@@ -200,8 +253,14 @@ impl App {
         if !filtered.is_empty() {
             table_state.select(Some(0));
         }
+        #[cfg(feature = "watch")]
+        let catalog_watcher = Path::new(&current_root)
+            .join(CATALOG_DB_NAME)
+            .exists()
+            .then(|| run_catalog_watcher(Path::new(&current_root), &[], DEFAULT_DEBOUNCE_MS))
+            .and_then(Result::ok);
         App {
-            all_profiles: all_profiles.clone(),
+            all_profiles: all_profiles_clone,
             filtered_profiles: filtered,
             samples,
             tags,
@@ -222,6 +281,8 @@ impl App {
             keymap,
             keybind_bar_lines,
             theme,
+            #[cfg(feature = "watch")]
+            catalog_watcher: catalog_watcher,
         }
     }
 

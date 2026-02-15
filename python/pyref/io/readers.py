@@ -106,6 +106,9 @@ def _scan_schema(header_items: list[str]) -> dict[str, Any]:
     return schema
 
 
+CATALOG_DB_NAME = ".pyref_catalog.db"
+
+
 def scan_experiment(
     source: FilePath | FilePathList,
     header_items: list[str] | None = None,
@@ -113,6 +116,22 @@ def scan_experiment(
     from pyref.pyref import py_read_multiple_fits_headers_only
 
     keys = header_items if header_items is not None else []
+    if not isinstance(source, (list, tuple)):
+        path = Path(source).resolve()
+        if path.is_file() and path.name == CATALOG_DB_NAME:
+            try:
+                from pyref.pyref import py_scan_from_catalog
+                df = py_scan_from_catalog(str(path), None)
+                return df.lazy()
+            except (ImportError, AttributeError):
+                pass
+        if path.is_dir() and (path / CATALOG_DB_NAME).exists():
+            try:
+                from pyref.pyref import py_scan_from_catalog
+                df = py_scan_from_catalog(str(path / CATALOG_DB_NAME), None)
+                return df.lazy()
+            except (ImportError, AttributeError):
+                pass
     paths = resolve_fits_paths(source)
     if not paths:
         return pl.DataFrame(schema=pl.Schema(_scan_schema(keys))).lazy()
@@ -147,6 +166,74 @@ def scan_experiment(
         schema=pl.Schema(schema),
         validate_schema=False,
     )
+
+
+def ingest_beamtime(
+    beamtime_path: FilePath,
+    header_items: list[str] | None = None,
+    incremental: bool = True,
+) -> Path:
+    from pyref.pyref import py_ingest_beamtime
+
+    keys = header_items if header_items is not None else list(DEFAULT_HEADER_KEYS)
+    out = py_ingest_beamtime(str(Path(beamtime_path).resolve()), keys, incremental)
+    return Path(out)
+
+
+def get_overrides(
+    catalog_path: FilePath,
+    path: str | None = None,
+) -> pl.DataFrame:
+    from pyref.pyref import py_get_overrides
+
+    return py_get_overrides(str(Path(catalog_path).resolve()), path)
+
+
+def set_override(
+    catalog_path: FilePath,
+    path: str,
+    sample_name: str | None = None,
+    tag: str | None = None,
+    notes: str | None = None,
+) -> None:
+    from pyref.pyref import py_set_override
+
+    py_set_override(
+        str(Path(catalog_path).resolve()),
+        path,
+        sample_name,
+        tag,
+        notes,
+    )
+
+
+def query_catalog(
+    catalog_path: FilePath,
+    *,
+    sample_name: str | None = None,
+    tag: str | None = None,
+    experiment_numbers: list[int] | None = None,
+    energy_min: float | None = None,
+    energy_max: float | None = None,
+) -> pl.DataFrame:
+    from pyref.pyref import py_scan_from_catalog
+
+    filt = {}
+    if sample_name is not None:
+        filt["sample_name"] = sample_name
+    if tag is not None:
+        filt["tag"] = tag
+    if experiment_numbers is not None:
+        filt["experiment_numbers"] = experiment_numbers
+    if energy_min is not None:
+        filt["energy_min"] = energy_min
+    if energy_max is not None:
+        filt["energy_max"] = energy_max
+    df = py_scan_from_catalog(
+        str(Path(catalog_path).resolve()),
+        filt if filt else None,
+    )
+    return df
 
 
 def get_image(meta_df: pl.DataFrame, row_index: int) -> object:

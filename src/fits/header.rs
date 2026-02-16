@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io::{Read, Seek};
 
 use crate::fits::error::FitsReadError;
@@ -35,13 +36,16 @@ impl CardValue {
         }
     }
 
-    pub fn to_string(&self) -> String {
+}
+
+impl fmt::Display for CardValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CardValue::INT(v) => v.to_string(),
-            CardValue::FLOAT(v) => v.to_string(),
-            CardValue::STRING(s) => s.clone(),
-            CardValue::LOGICAL(b) => b.to_string(),
-            CardValue::EMPTY => String::new(),
+            CardValue::INT(v) => write!(f, "{}", v),
+            CardValue::FLOAT(v) => write!(f, "{}", v),
+            CardValue::STRING(s) => write!(f, "{}", s),
+            CardValue::LOGICAL(b) => write!(f, "{}", b),
+            CardValue::EMPTY => Ok(()),
         }
     }
 }
@@ -80,20 +84,17 @@ impl Card {
                 comment: None,
             };
         }
-        let keyword = if card_str.starts_with("HIERARCH ") {
-            card_str
-                .splitn(2, '=')
-                .next()
-                .map(|s| s.replace("HIERARCH ", "").trim_end().to_string())
-                .unwrap_or_default()
-        } else {
-            card_str
-                .splitn(2, '=')
-                .next()
-                .map(|s| s.trim_end().to_string())
-                .unwrap_or_default()
+        let (keyword, rest) = match card_str.split_once('=') {
+            Some((k, v)) => (
+                if card_str.starts_with("HIERARCH ") {
+                    k.replace("HIERARCH ", "").trim_end().to_string()
+                } else {
+                    k.trim_end().to_string()
+                },
+                v.trim(),
+            ),
+            None => (String::new(), ""),
         };
-        let rest = card_str.splitn(2, '=').nth(1).unwrap_or("").trim();
         let (value_str, comment) = if let Some(idx) = rest.find(" /") {
             let v = rest[..idx].trim().replace('\'', "");
             let c = rest[idx + 2..].trim().to_string();

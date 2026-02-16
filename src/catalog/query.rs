@@ -1,8 +1,7 @@
 #![cfg(feature = "catalog")]
 
-use crate::catalog::{CatalogError, Result};
+use crate::catalog::{open_catalog_db, CatalogError, Result};
 use polars::prelude::*;
-use rusqlite::Connection;
 use std::path::Path;
 
 #[derive(Default, Debug, Clone)]
@@ -35,13 +34,13 @@ pub struct FileRow {
 }
 
 pub fn catalog_file_count(db_path: &Path) -> Result<u32> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_catalog_db(db_path)?;
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
     Ok(count as u32)
 }
 
 pub fn list_beamtime_entries(db_path: &Path) -> Result<BeamtimeEntries> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_catalog_db(db_path)?;
     let mut samples: Vec<String> = conn
         .prepare(
             r#"SELECT DISTINCT COALESCE(o.sample_name, f.sample_name) FROM files f
@@ -85,7 +84,7 @@ pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec
     let (where_clause, params) = filter
         .map(build_where_and_params)
         .unwrap_or_else(|| (String::new(), Vec::new()));
-    let conn = Connection::open(db_path)?;
+    let conn = open_catalog_db(db_path)?;
     let sql = format!(
         r#"SELECT f.file_path,
             COALESCE(o.sample_name, f.sample_name),
@@ -177,9 +176,9 @@ fn build_where_and_params(filter: &CatalogFilter) -> (String, Vec<Box<dyn rusqli
 }
 
 pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<DataFrame> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_catalog_db(db_path)?;
     let (where_clause, params) = filter
-        .map(|f| build_where_and_params(f))
+        .map(build_where_and_params)
         .unwrap_or_else(|| (String::new(), Vec::new()));
     let order_clause = " ORDER BY f.scan_number, f.frame_number";
     let sql = format!("{}{}{}", RESOLVED_QUERY, where_clause, order_clause);
@@ -301,7 +300,7 @@ pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Resu
 }
 
 pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_catalog_db(db_path)?;
     let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql + '_>>) = match path {
         Some(p) => (
             "SELECT path, sample_name, tag, notes FROM overrides WHERE path = ?1".to_string(),
@@ -422,7 +421,7 @@ pub fn set_override(
     tag: Option<&str>,
     notes: Option<&str>,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_catalog_db(db_path)?;
     let exists: i64 =
         conn.query_row("SELECT COUNT(1) FROM files WHERE path = ?1", [path], |r| {
             r.get(0)
@@ -448,7 +447,7 @@ pub fn rename_file_in_catalog(
     new_sample_name: &str,
     new_tag: Option<&str>,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_catalog_db(db_path)?;
     let exists: i64 = conn.query_row(
         "SELECT COUNT(1) FROM files WHERE path = ?1",
         [old_path],

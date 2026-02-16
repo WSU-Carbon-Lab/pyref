@@ -2,12 +2,14 @@ use std::fs::File;
 use std::path::Path;
 
 use memmap2::MmapOptions;
-use ndarray::{Array2, ArrayBase, Dim, OwnedRepr};
+use ndarray::Array2;
 use polars::prelude::*;
 
 use super::blur::{gaussian_blur_f32_copy, i64_to_f32_array};
 use super::{subtract_background, subtract_background_edges, ImageInfo};
 use crate::errors::FitsError;
+
+type ImagePair = (Array2<i64>, Array2<i64>);
 
 fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsError> {
     if info.bitpix != 16 {
@@ -36,16 +38,7 @@ fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsE
         .map_err(|e| FitsError::validation(e.to_string()))
 }
 
-pub fn materialize_image(
-    path: &Path,
-    info: &ImageInfo,
-) -> Result<
-    (
-        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
-        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
-    ),
-    FitsError,
-> {
+pub fn materialize_image(path: &Path, info: &ImageInfo) -> Result<ImagePair, FitsError> {
     let data = load_image_pixels(path, info)?;
     let subtracted = subtract_background(&data.clone().into_dyn());
     let subtracted_2d = subtracted
@@ -54,16 +47,7 @@ pub fn materialize_image(
     Ok((data, subtracted_2d))
 }
 
-pub fn get_image_for_row(
-    df: &DataFrame,
-    row_index: usize,
-) -> Result<
-    (
-        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
-        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
-    ),
-    FitsError,
-> {
+pub fn get_image_for_row(df: &DataFrame, row_index: usize) -> Result<ImagePair, FitsError> {
     let info = ImageInfo::from_dataframe_row(df, row_index)?;
     materialize_image(info.path.as_path(), &info)
 }

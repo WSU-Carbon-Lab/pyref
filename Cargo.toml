@@ -14,13 +14,8 @@ name = "pyref"
 path = "src/lib.rs"
 
 [[bin]]
-name = "pyref-tui"
-path = "src/bin/pyref_tui.rs"
-required-features = ["tui"]
-
-[[bin]]
 name = "browser"
-path = "src/bin/pyref_tui.rs"
+path = "src/bin/browser.rs"
 required-features = ["tui"]
 
 [features]

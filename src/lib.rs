@@ -20,6 +20,7 @@ pub use loader::{
 };
 
 #[cfg(feature = "extension-module")]
+#[allow(clippy::useless_conversion)]
 mod extension {
     use numpy::PyArray2;
     use polars::prelude::*;
@@ -83,7 +84,7 @@ mod extension {
     ) -> PyResult<PyDataFrame> {
         let paths: Vec<_> = file_paths
             .iter()
-            .map(|p| std::path::PathBuf::from(p))
+            .map(std::path::PathBuf::from)
             .collect();
         match read_multiple_fits_headers_only(paths, &header_items) {
             Ok(df) => Ok(PyDataFrame(df)),
@@ -112,6 +113,7 @@ mod extension {
     #[pyfunction]
     #[pyo3(name = "py_get_image_for_row")]
     #[pyo3(signature = (df, row_index, /), text_signature = "(df, row_index, /)")]
+    #[allow(clippy::type_complexity)]
     pub fn py_get_image_for_row(
         py: Python<'_>,
         df: PyDataFrame,
@@ -224,7 +226,7 @@ mod extension {
             |values_inner: &AmortSeries, weights_inner: &AmortSeries| -> Option<f64> {
                 let values_inner = values_inner.as_ref().f64().ok()?;
                 let weights_inner = weights_inner.as_ref().f64().ok()?;
-                if values_inner.len() == 0 {
+                if values_inner.is_empty() {
                     return None;
                 }
                 let mut numerator: f64 = 0.;
@@ -235,7 +237,7 @@ mod extension {
                     .for_each(|(v, w)| {
                         if let (Some(v), Some(w)) = (v, w) {
                             let w = 1. / w.pow(2.);
-                            numerator += v as f64 * w;
+                            numerator += v * w;
                             denominator += w;
                         }
                     });
@@ -259,7 +261,7 @@ mod extension {
             |values_inner: &AmortSeries, weights_inner: &AmortSeries| -> Option<f64> {
                 let values_inner = values_inner.as_ref().f64().ok()?;
                 let weights_inner = weights_inner.as_ref().f64().ok()?;
-                if values_inner.len() == 0 {
+                if values_inner.is_empty() {
                     return None;
                 }
                 let mut denominator: f64 = 0.;
@@ -464,14 +466,12 @@ pub use extension::*;
 pub fn err_prop_div(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
     ((lhs.clone() / rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2)))
         .sqrt()
-        .into()
 }
 
 #[cfg(feature = "extension-module")]
 pub fn err_prop_mult(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
     ((lhs.clone() * rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2)))
         .sqrt()
-        .into()
 }
 
 #[cfg(feature = "extension-module")]

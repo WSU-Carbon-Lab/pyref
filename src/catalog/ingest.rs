@@ -48,7 +48,7 @@ pub fn ingest_beamtime(
             .filter(|p| {
                 let key = p.to_string_lossy().to_string();
                 let mtime = path_to_mtime.get(&key).copied().unwrap_or(0);
-                existing.get(&key).map_or(true, |&stored| mtime > stored)
+                existing.get(&key).is_none_or(|&stored| mtime > stored)
             })
             .collect()
     } else {
@@ -100,7 +100,7 @@ fn upsert_files_batch(
                 .iter()
                 .map(|s| s.map(|v| v.to_string()))
                 .collect()),
-            _ => Ok(std::iter::repeat(None).take(n).collect()),
+            _ => Ok(std::iter::repeat_n(None, n).collect()),
         }
     };
     let get_i64 = |name: &str| -> Result<Vec<Option<i64>>> {
@@ -110,7 +110,7 @@ fn upsert_files_batch(
                 .map_err(|e| CatalogError::Validation(e.to_string()))?
                 .iter()
                 .collect()),
-            _ => Ok(std::iter::repeat(None).take(n).collect()),
+            _ => Ok(std::iter::repeat_n(None, n).collect()),
         }
     };
     let get_f64 = |name: &str| -> Result<Vec<Option<f64>>> {
@@ -120,7 +120,7 @@ fn upsert_files_batch(
                 .map_err(|e| CatalogError::Validation(e.to_string()))?
                 .iter()
                 .collect()),
-            _ => Ok(std::iter::repeat(None).take(n).collect()),
+            _ => Ok(std::iter::repeat_n(None, n).collect()),
         }
     };
 

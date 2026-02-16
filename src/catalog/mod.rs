@@ -1,5 +1,3 @@
-#![cfg(feature = "catalog")]
-
 mod beamtime_index;
 mod ingest;
 mod query;
@@ -153,23 +151,26 @@ pub fn discover_fits_paths(beamtime_dir: &Path) -> Result<Vec<(PathBuf, i64)>> {
     Ok(out)
 }
 
+pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch(FILES_TABLE)?;
+    conn.execute_batch(OVERRIDES_TABLE)?;
+    migrate_experiment_number_to_scan_number(&conn)?;
+    conn.execute_batch(FILES_INDEX_MTIME)?;
+    conn.execute_batch(FILES_INDEX_SAMPLE)?;
+    conn.execute_batch(FILES_INDEX_TAG)?;
+    conn.execute_batch(FILES_INDEX_SCAN)?;
+    Ok(conn)
+}
+
 pub fn open_or_create_db(beamtime_dir: &Path) -> Result<Connection> {
-    let db_path = catalog_path(beamtime_dir);
     if !beamtime_dir.is_dir() {
         return Err(CatalogError::Validation(format!(
             "beamtime_dir is not a directory: {}",
             beamtime_dir.display()
         )));
     }
-    let conn = Connection::open(&db_path)?;
-    conn.execute_batch(FILES_TABLE)?;
-    conn.execute_batch(FILES_INDEX_MTIME)?;
-    conn.execute_batch(FILES_INDEX_SAMPLE)?;
-    conn.execute_batch(FILES_INDEX_TAG)?;
-    conn.execute_batch(FILES_INDEX_SCAN)?;
-    conn.execute_batch(OVERRIDES_TABLE)?;
-    migrate_experiment_number_to_scan_number(&conn)?;
-    Ok(conn)
+    open_catalog_db(&catalog_path(beamtime_dir))
 }
 
 fn migrate_experiment_number_to_scan_number(conn: &Connection) -> Result<()> {

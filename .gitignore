@@ -16,6 +16,9 @@ test/
 **/*.fits
 **/*.png
 **/*.npz
+**/*.db
+**/*.pyref_catalog.db
+**/*.sqlite*
 
 # Distribution / packaging
 .Python
@@ -186,3 +189,4 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
+python/pyref/data/.pyref_catalog.db

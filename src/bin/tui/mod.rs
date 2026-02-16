@@ -8,7 +8,6 @@ mod scan_type;
 pub mod terminal_guard;
 mod theme;
 mod ui;
-mod watcher;
 
 #[cfg(feature = "catalog")]
 pub use app::LauncherState;

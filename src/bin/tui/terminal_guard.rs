@@ -3,6 +3,7 @@ use std::io::{self, Write};
 fn restore_terminal_impl() -> io::Result<()> {
     let mut out = io::stdout();
     crossterm::terminal::disable_raw_mode()?;
+    let _ = crossterm::execute!(out, crossterm::event::DisableMouseCapture);
     crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen)?;
     crossterm::execute!(out, crossterm::cursor::Show)?;
     if let Ok((_, h)) = crossterm::terminal::size() {
@@ -16,6 +17,7 @@ fn restore_terminal_impl() -> io::Result<()> {
 pub fn setup_terminal() -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+    crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
     Ok(())
 }
 

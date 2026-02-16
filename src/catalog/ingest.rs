@@ -1,11 +1,24 @@
 #![cfg(feature = "catalog")]
 
 use crate::catalog::{open_or_create_db, CatalogError, Result};
+
+pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
+    "DATE",
+    "Beamline Energy",
+    "Sample Theta",
+    "CCD Theta",
+    "Higher Order Suppressor",
+    "EPU Polarization",
+    "EXPOSURE",
+    "Sample Name",
+    "Scan ID",
+];
 use crate::io::add_calculated_domains;
 use crate::loader::read_multiple_fits_headers_only;
 use polars::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 const BATCH_SIZE: usize = 500;
 
@@ -13,6 +26,7 @@ pub fn ingest_beamtime(
     beamtime_dir: &Path,
     header_items: &[String],
     incremental: bool,
+    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
 ) -> Result<PathBuf> {
     let db_path = beamtime_dir.join(super::CATALOG_DB_NAME);
     let conn = open_or_create_db(beamtime_dir)?;
@@ -41,12 +55,18 @@ pub fn ingest_beamtime(
         paths
     };
 
+    let total = to_ingest.len() as u32;
+    let mut processed: u32 = 0;
     for chunk in to_ingest.chunks(BATCH_SIZE) {
         let chunk_vec: Vec<PathBuf> = chunk.to_vec();
         let df = read_multiple_fits_headers_only(chunk_vec, header_items)
             .map_err(|e| CatalogError::Validation(e.to_string()))?;
         let with_domains = add_calculated_domains(df.lazy());
         upsert_files_batch(&conn, &with_domains, &path_to_mtime)?;
+        processed = (processed as usize + chunk.len()).min(to_ingest.len()) as u32;
+        if let Some(ref tx) = progress_tx {
+            let _ = tx.send((processed, total));
+        }
     }
 
     let path_list: Vec<&str> = path_to_mtime.keys().map(|s| s.as_str()).collect();

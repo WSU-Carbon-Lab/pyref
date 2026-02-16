@@ -20,6 +20,7 @@ pub struct BeamtimeEntries {
     pub experiments: Vec<(i64, String)>,
 }
 
+#[derive(Debug, Clone)]
 pub struct FileRow {
     pub file_path: String,
     pub sample_name: String,
@@ -28,7 +29,15 @@ pub struct FileRow {
     pub frame_number: i64,
     pub beamline_energy: Option<f64>,
     pub sample_theta: Option<f64>,
+    pub epu_polarization: Option<f64>,
     pub q: Option<f64>,
+    pub date_iso: Option<String>,
+}
+
+pub fn catalog_file_count(db_path: &Path) -> Result<u32> {
+    let conn = Connection::open(db_path)?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+    Ok(count as u32)
 }
 
 pub fn list_beamtime_entries(db_path: &Path) -> Result<BeamtimeEntries> {
@@ -85,7 +94,8 @@ pub fn query_files(
             COALESCE(o.sample_name, f.sample_name),
             COALESCE(o.tag, f.tag),
             f.experiment_number, f.frame_number,
-            f."Beamline Energy", f."Sample Theta", f.Q
+            f."Beamline Energy", f."Sample Theta", f."EPU Polarization", f.Q,
+            f."DATE"
             FROM files f LEFT JOIN overrides o ON f.path = o.path{}
             ORDER BY f.experiment_number, f.frame_number"#,
         where_clause
@@ -100,7 +110,9 @@ pub fn query_files(
             frame_number: row.get(4)?,
             beamline_energy: row.get(5)?,
             sample_theta: row.get(6)?,
-            q: row.get(7)?,
+            epu_polarization: row.get(7)?,
+            q: row.get(8)?,
+            date_iso: row.get(9)?,
         })
     };
     let rows = if params.is_empty() {
@@ -411,5 +423,33 @@ pub fn set_override(
         "INSERT OR REPLACE INTO overrides (path, sample_name, tag, notes) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![path, sample_name, tag, notes],
     )?;
+    Ok(())
+}
+
+pub fn rename_file_in_catalog(
+    db_path: &Path,
+    old_path: &str,
+    new_path: &str,
+    new_file_name: &str,
+    new_sample_name: &str,
+    new_tag: Option<&str>,
+) -> Result<()> {
+    let conn = Connection::open(db_path)?;
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM files WHERE path = ?1",
+        [old_path],
+        |r| r.get(0),
+    )?;
+    if exists == 0 {
+        return Err(CatalogError::Validation(format!(
+            "path not in files table: {}",
+            old_path
+        )));
+    }
+    conn.execute(
+        "UPDATE files SET path = ?1, file_path = ?1, file_name = ?2, sample_name = ?3, tag = ?4 WHERE path = ?5",
+        rusqlite::params![new_path, new_file_name, new_sample_name, new_tag, old_path],
+    )?;
+    conn.execute("DELETE FROM overrides WHERE path = ?1", [old_path])?;
     Ok(())
 }

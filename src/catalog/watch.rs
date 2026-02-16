@@ -37,6 +37,8 @@ pub fn run_catalog_watcher(
     beamtime_dir: &Path,
     header_items: &[String],
     debounce_ms: u64,
+    on_ingest_start: Option<Box<dyn Fn() + Send>>,
+    on_ingest_end: Option<Box<dyn Fn() + Send>>,
 ) -> Result<WatchHandle, crate::catalog::CatalogError> {
     let beamtime_dir = beamtime_dir.to_path_buf();
     let header_items = header_items.to_vec();
@@ -46,6 +48,8 @@ pub fn run_catalog_watcher(
     } else {
         debounce_ms.max(100)
     };
+    let on_start = on_ingest_start;
+    let on_end = on_ingest_end;
     thread::spawn(move || {
         let (event_tx, event_rx) = mpsc::channel();
         let mut debouncer = match new_debouncer(
@@ -82,7 +86,13 @@ pub fn run_catalog_watcher(
         while stop_rx.try_recv().is_err() {
             match event_rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(()) => {
-                    let _ = ingest_beamtime(&beamtime_dir, &keys, true);
+                    if let Some(ref f) = on_start {
+                        f();
+                    }
+                    let _ = ingest_beamtime(&beamtime_dir, &keys, true, None);
+                    if let Some(ref f) = on_end {
+                        f();
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,

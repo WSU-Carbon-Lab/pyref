@@ -90,9 +90,39 @@ pub fn status_ok_style(mode: ThemeMode) -> Style {
     }
 }
 
+pub fn status_warning_style(mode: ThemeMode) -> Style {
+    match mode {
+        ThemeMode::Bw => Style::new().add_modifier(Modifier::BOLD),
+        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::Yellow),
+    }
+}
+
 pub fn spinner_style(mode: ThemeMode) -> Style {
     match mode {
         ThemeMode::Bw => Style::new().add_modifier(Modifier::BOLD),
         ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::Cyan),
+    }
+}
+
+pub fn rename_retag_label_style(mode: ThemeMode) -> Style {
+    match mode {
+        ThemeMode::Bw => Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => {
+            Style::new().fg(Color::Black).bg(Color::Magenta)
+        }
+    }
+}
+
+pub fn rename_retag_input_style(mode: ThemeMode) -> Style {
+    match mode {
+        ThemeMode::Bw => Style::new().add_modifier(Modifier::UNDERLINED),
+        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::Cyan),
+    }
+}
+
+pub fn rename_retag_hint_style(mode: ThemeMode) -> Style {
+    match mode {
+        ThemeMode::Bw => Style::new().add_modifier(Modifier::DIM),
+        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::DarkGray),
     }
 }

@@ -127,6 +127,24 @@ pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
     })
 }
 
+pub fn build_fits_stem(
+    sample_name: &str,
+    tag: Option<&str>,
+    experiment_number: i64,
+    frame_number: i64,
+) -> String {
+    match tag {
+        Some(t) => format!(
+            "{}_{}_{:05}-{:05}",
+            sample_name,
+            t,
+            experiment_number,
+            frame_number
+        ),
+        None => format!("{}_{:05}-{:05}", sample_name, experiment_number, frame_number),
+    }
+}
+
 pub fn q(lam: f64, theta: f64) -> f64 {
     match 4.0 * std::f64::consts::PI * theta.to_radians().sin() / lam {
         q if q < 0.0 => 0.0,
@@ -334,7 +352,7 @@ pub fn process_metadata(
                 continue;
             }
 
-            if key == "DATE" {
+            if key == "DATE" || key == "Sample Name" {
                 if let Some(card) = hdu.header.get_card(key) {
                     let val = card.value.to_string();
                     columns.push(Column::new(key.into(), &[val]));

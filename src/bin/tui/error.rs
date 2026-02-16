@@ -8,6 +8,9 @@ pub enum TuiErrorKind {
     TerminalSetup,
     TerminalRestore,
     Io,
+    IndexFailed,
+    CatalogUnavailable,
+    WatcherFailed,
 }
 
 impl fmt::Display for TuiErrorKind {
@@ -18,6 +21,9 @@ impl fmt::Display for TuiErrorKind {
             TuiErrorKind::TerminalSetup => write!(f, "terminal setup failed"),
             TuiErrorKind::TerminalRestore => write!(f, "terminal restore failed"),
             TuiErrorKind::Io => write!(f, "io error"),
+            TuiErrorKind::IndexFailed => write!(f, "index failed"),
+            TuiErrorKind::CatalogUnavailable => write!(f, "catalog unavailable"),
+            TuiErrorKind::WatcherFailed => write!(f, "watcher failed"),
         }
     }
 }
@@ -29,6 +35,7 @@ pub struct TuiError {
     pub message: String,
     pub context: Vec<(String, String)>,
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    pub suggestion: Option<String>,
 }
 
 impl TuiError {
@@ -39,6 +46,7 @@ impl TuiError {
             message: source.to_string(),
             context: vec![("operation".into(), "load_config".into()), ("path".into(), path.as_ref().display().to_string())],
             source: Some(Box::new(source)),
+            suggestion: None,
         }
     }
 
@@ -49,6 +57,7 @@ impl TuiError {
             message,
             context: vec![("operation".into(), "parse_config".into()), ("path".into(), path.as_ref().display().to_string())],
             source: None,
+            suggestion: None,
         }
     }
 
@@ -61,6 +70,7 @@ impl TuiError {
             message: source.to_string(),
             context: vec![("operation".into(), "save_config".into()), ("path".into(), path.as_ref().display().to_string())],
             source: Some(Box::new(source)),
+            suggestion: None,
         }
     }
 
@@ -71,6 +81,7 @@ impl TuiError {
             message,
             context: vec![("operation".into(), "serialize_config".into()), ("path".into(), path.as_ref().display().to_string())],
             source: None,
+            suggestion: None,
         }
     }
 
@@ -81,6 +92,7 @@ impl TuiError {
             message: source.to_string(),
             context: vec![("operation".into(), "setup_terminal".into())],
             source: Some(Box::new(source)),
+            suggestion: None,
         }
     }
 
@@ -91,6 +103,7 @@ impl TuiError {
             message: source.to_string(),
             context: vec![("operation".into(), "restore_terminal".into())],
             source: Some(Box::new(source)),
+            suggestion: None,
         }
     }
 
@@ -101,6 +114,57 @@ impl TuiError {
             message,
             context: vec![("operation".into(), operation.to_string())],
             source: Some(Box::new(source)),
+            suggestion: None,
+        }
+    }
+
+    pub fn index_failed(
+        path: impl AsRef<Path>,
+        message: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            kind: TuiErrorKind::IndexFailed,
+            retryable: true,
+            message,
+            context: vec![
+                ("operation".into(), "ingest".into()),
+                ("path".into(), path.as_ref().display().to_string()),
+            ],
+            source,
+            suggestion: Some("Press i to reindex".into()),
+        }
+    }
+
+    pub fn catalog_unavailable(path: impl AsRef<Path>, operation: &'static str, message: String) -> Self {
+        Self {
+            kind: TuiErrorKind::CatalogUnavailable,
+            retryable: true,
+            message,
+            context: vec![
+                ("operation".into(), operation.into()),
+                ("path".into(), path.as_ref().display().to_string()),
+            ],
+            source: None,
+            suggestion: Some("Open a directory with catalog or reindex".into()),
+        }
+    }
+
+    pub fn watcher_failed(
+        path: impl AsRef<Path>,
+        message: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            kind: TuiErrorKind::WatcherFailed,
+            retryable: true,
+            message,
+            context: vec![
+                ("operation".into(), "watcher".into()),
+                ("path".into(), path.as_ref().display().to_string()),
+            ],
+            source,
+            suggestion: Some("Reindex (i) or continue without watch".into()),
         }
     }
 

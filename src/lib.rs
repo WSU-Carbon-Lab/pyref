@@ -13,7 +13,7 @@ pub use errors::FitsError;
 pub use loader::{
     read_experiment_headers_only, read_fits_headers_only, read_multiple_fits_headers_only,
 };
-pub use io::{image_mmap, ImageInfo};
+pub use io::{build_fits_stem, image_mmap, ImageInfo};
 
 #[cfg(feature = "extension-module")]
 mod extension {
@@ -329,7 +329,7 @@ mod extension {
         incremental: bool,
     ) -> PyResult<String> {
         let path = std::path::Path::new(beamtime_path);
-        match ingest_beamtime(path, &header_items, incremental) {
+        match ingest_beamtime(path, &header_items, incremental, None) {
             Ok(p) => Ok(p.to_string_lossy().to_string()),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
         }

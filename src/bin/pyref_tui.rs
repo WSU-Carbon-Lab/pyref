@@ -2,12 +2,23 @@
 
 mod tui;
 
+use log::{LevelFilter, Log, Metadata, Record};
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::Terminal;
 use std::env;
 use std::io;
 use std::path::Path;
 use std::time::Duration;
+
+struct NoopLogger;
+
+impl Log for NoopLogger {
+    fn enabled(&self, _: &Metadata) -> bool {
+        false
+    }
+    fn log(&self, _: &Record) {}
+    fn flush(&self) {}
+}
 
 fn resolve_root(config: &tui::TuiConfig) -> Result<String, String> {
     let raw = env::args()
@@ -34,16 +45,35 @@ fn resolve_root(config: &tui::TuiConfig) -> Result<String, String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    env::set_var("POLARS_VERBOSE", "0");
+    static NOOP: NoopLogger = NoopLogger;
+    let _ = log::set_logger(&NOOP).map(|()| log::set_max_level(LevelFilter::Off));
+
     tui::terminal_guard::install_panic_hook();
 
     let config = tui::TuiConfig::load_or_default();
-    let current_root = match resolve_root(&config) {
+
+    #[cfg(feature = "catalog")]
+    let initial_root = if env::args().nth(1).is_some() {
+        Some(match resolve_root(&config) {
+            Ok(s) => s,
+            Err(msg) => {
+                eprintln!("{}", msg);
+                std::process::exit(1);
+            }
+        })
+    } else {
+        None
+    };
+
+    #[cfg(not(feature = "catalog"))]
+    let initial_root = Some(match resolve_root(&config) {
         Ok(s) => s,
         Err(msg) => {
             eprintln!("{}", msg);
             std::process::exit(1);
         }
-    };
+    });
 
     let poll_duration = config
         .poll_interval_ms
@@ -55,31 +85,49 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map_err(tui::TuiError::terminal_setup)?;
     tui::terminal_guard::setup_terminal().map_err(tui::TuiError::terminal_setup)?;
 
-    let mut app = tui::App::new(
-        current_root.clone(),
-        config.layout.clone(),
-        config.keymap.clone(),
-        config.keybind_bar_lines,
-        config.theme.clone(),
-    );
-    if let Some(s) = config.last_sample.as_ref() {
-        if let Some(i) = app.samples.iter().position(|x| x == s) {
-            app.sample_state.select(Some(i));
-        }
-    }
-    if let Some(t) = config.last_tag.as_ref() {
-        if let Some(i) = app.tags.iter().position(|x| x == t) {
-            app.tag_state.select(Some(i));
-        }
-    }
-    if let Some(e) = config.last_experiment.as_ref() {
-        if let Ok(n) = e.parse::<u32>() {
-            if let Some(i) = app.experiments.iter().position(|(x, _)| *x == n) {
-                app.experiment_state.select(Some(i));
+    let mut app = match initial_root {
+        Some(ref current_root) => {
+            let mut app = tui::App::new(
+                current_root.clone(),
+                config.layout.clone(),
+                config.keymap.clone(),
+                config.keybind_bar_lines,
+                config.theme.clone(),
+            );
+            if let Some(s) = config.last_sample.as_ref() {
+                if let Some(i) = app.samples.iter().position(|x| x == s) {
+                    app.sample_state.select(Some(i));
+                }
             }
+            if let Some(t) = config.last_tag.as_ref() {
+                if let Some(i) = app.tags.iter().position(|x| x == t) {
+                    app.tag_state.select(Some(i));
+                }
+            }
+            if let Some(e) = config.last_experiment.as_ref() {
+                if let Ok(n) = e.parse::<u32>() {
+                    if let Some(i) = app.experiments.iter().position(|(x, _)| *x == n) {
+                        app.experiment_state.select(Some(i));
+                    }
+                }
+            }
+            app.refresh_filtered();
+            app
         }
-    }
-    app.refresh_filtered();
+        None => {
+            #[cfg(feature = "catalog")]
+            {
+                tui::App::new_for_launcher(
+                    config.layout.clone(),
+                    config.keymap.clone(),
+                    config.keybind_bar_lines,
+                    config.theme.clone(),
+                )
+            }
+            #[cfg(not(feature = "catalog"))]
+            unreachable!()
+        }
+    };
 
     let mut config_save = config;
 
@@ -94,20 +142,22 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         eprintln!("{}", err.report());
     }
 
-    config_save.set_last_root(&app.current_root);
-    let exp_str = app.focused_experiment().map(|n| n.to_string());
-    config_save.set_last_selection(
-        app.focused_sample().as_deref(),
-        app.focused_tag().as_deref(),
-        exp_str.as_deref(),
-    );
-    let mut sel_samples: Vec<String> = app.selected_samples.iter().cloned().collect();
-    sel_samples.sort();
-    let mut sel_tags: Vec<String> = app.selected_tags.iter().cloned().collect();
-    sel_tags.sort();
-    let mut sel_experiments: Vec<u32> = app.selected_experiments.iter().cloned().collect();
-    sel_experiments.sort();
-    config_save.set_selection_export(&sel_samples, &sel_tags, &sel_experiments);
+    if app.screen == tui::Screen::Beamtime && !app.current_root.is_empty() {
+        config_save.set_last_root(&app.current_root);
+        let exp_str = app.focused_experiment().map(|n| n.to_string());
+        config_save.set_last_selection(
+            app.focused_sample().as_deref(),
+            app.focused_tag().as_deref(),
+            exp_str.as_deref(),
+        );
+        let mut sel_samples: Vec<String> = app.selected_samples.iter().cloned().collect();
+        sel_samples.sort();
+        let mut sel_tags: Vec<String> = app.selected_tags.iter().cloned().collect();
+        sel_tags.sort();
+        let mut sel_experiments: Vec<u32> = app.selected_experiments.iter().cloned().collect();
+        sel_experiments.sort();
+        config_save.set_selection_export(&sel_samples, &sel_tags, &sel_experiments);
+    }
     if let Err(e) = config_save.save() {
         eprintln!("{}", e.report());
     }

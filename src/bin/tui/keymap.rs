@@ -9,8 +9,8 @@ pub const ARROW_DOWN: &str = "\u{2193}";
 pub const DOUBLE_UP: &str = "\u{21C8}";
 pub const DOUBLE_DOWN: &str = "\u{21CA}";
 
-pub const BROWSE_TITLE: &str = " Browse [b] ";
-pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag ";
+pub const BROWSE_TITLE: &str = " Reflectivity profiles [b] ";
+pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag  i Reindex ";
 
 pub fn bottom_bar_line() -> String {
     format!(
@@ -175,7 +175,7 @@ pub fn keybind_bar_lines_vi() -> [(String, String); 12] {
         ("s".to_string(), "Sample".to_string()),
         ("t".to_string(), "Tag".to_string()),
         ("e".to_string(), "Experiment".to_string()),
-        ("b".to_string(), "Browser".to_string()),
+        ("b".to_string(), "Profiles".to_string()),
         ("j/k".to_string(), "Down/Up".to_string()),
         ("gg/G".to_string(), "Top/End".to_string()),
         ("Tab".to_string(), "Focus".to_string()),
@@ -193,7 +193,7 @@ pub fn keybind_bar_lines_emacs() -> [(String, String); 12] {
         ("s".to_string(), "Sample".to_string()),
         ("t".to_string(), "Tag".to_string()),
         ("e".to_string(), "Experiment".to_string()),
-        ("b".to_string(), "Browser".to_string()),
+        ("b".to_string(), "Profiles".to_string()),
         ("^N/^P".to_string(), "Down/Up".to_string()),
         ("Tab".to_string(), "Focus".to_string()),
         (format!("{}K", CMD_SYMBOL), "Search".to_string()),
@@ -211,14 +211,14 @@ pub fn search_line_hotkeys(keymap: &str) -> String {
             ("s", "Sample"),
             ("t", "Tag"),
             ("e", "Experiment"),
-            ("b", "Browser"),
+            ("b", "Profiles"),
         ]
     } else {
         [
             ("s", "Sample"),
             ("t", "Tag"),
             ("e", "Experiment"),
-            ("b", "Browser"),
+            ("b", "Profiles"),
         ]
     };
     pairs

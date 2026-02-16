@@ -2062,6 +2062,7 @@ dependencies = [
  "fuzzy-matcher",
  "glob-match",
  "libblur",
+ "log",
  "memmap2",
  "ndarray",
  "notify-debouncer-mini",

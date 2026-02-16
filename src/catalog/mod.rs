@@ -1,10 +1,13 @@
 #![cfg(feature = "catalog")]
 
+mod beamtime_index;
 mod ingest;
 mod query;
 
 #[cfg(feature = "watch")]
 mod watch;
+
+pub use beamtime_index::{ensure_beamtime_index_dir, list_beamtimes, open_beamtime_index_db, register_beamtime};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -13,10 +16,10 @@ use walkdir::WalkDir;
 
 pub const CATALOG_DB_NAME: &str = ".pyref_catalog.db";
 
-pub use ingest::ingest_beamtime;
+pub use ingest::{ingest_beamtime, DEFAULT_INGEST_HEADER_ITEMS};
 pub use query::{
-    get_overrides, list_beamtime_entries, query_files, scan_from_catalog, set_override,
-    BeamtimeEntries, CatalogFilter, FileRow,
+    catalog_file_count, get_overrides, list_beamtime_entries, query_files, rename_file_in_catalog,
+    scan_from_catalog, set_override, BeamtimeEntries, CatalogFilter, FileRow,
 };
 
 #[cfg(feature = "watch")]

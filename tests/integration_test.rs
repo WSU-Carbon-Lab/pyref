@@ -142,7 +142,7 @@ fn test_read_fits_headers_only_includes_parsed_filename_columns() {
     let result = read_fits_headers_only(first_file.clone(), &header_keys);
     assert!(result.is_ok(), "read_fits_headers_only failed: {:?}", result.err());
     let df = result.unwrap();
-    for &col in &["file_name", "sample_name", "tag", "experiment_number", "frame_number"] {
+    for &col in &["file_name", "sample_name", "tag", "scan_number", "frame_number"] {
         if df.column(col).is_err() {
             continue;
         }

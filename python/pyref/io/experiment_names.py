@@ -24,14 +24,14 @@ class ParsedFitsName:
 
     sample_name: str
     tag: str | None
-    experiment_number: int
+    scan_number: int
     frame_number: int
     file_stem: str
 
 
 def parse_fits_stem(stem: str) -> ParsedFitsName | None:
     """
-    Parse a FITS file stem into sample_name, tag, experiment_number, frame_number.
+    Parse a FITS file stem into sample_name, tag, scan_number, frame_number.
 
     Parameters
     ----------
@@ -46,9 +46,9 @@ def parse_fits_stem(stem: str) -> ParsedFitsName | None:
     Examples
     --------
     >>> parse_fits_stem("ZnPc_rt81041-00001")
-    ParsedFitsName(sample_name='ZnPc', tag='rt', experiment_number=81041, frame_number=1, ...)
+    ParsedFitsName(sample_name='ZnPc', tag='rt', scan_number=81041, frame_number=1, ...)
     >>> parse_fits_stem("monlayerjune 81041-00007")
-    ParsedFitsName(sample_name='monlayerjune', tag=None, experiment_number=81041, frame_number=7, ...)
+    ParsedFitsName(sample_name='monlayerjune', tag=None, scan_number=81041, frame_number=7, ...)
     """
     stem = stem.strip()
     m = STEM_PATTERN.match(stem)
@@ -56,7 +56,7 @@ def parse_fits_stem(stem: str) -> ParsedFitsName | None:
         return None
     base, exp_str, frame_str = m.group(1), m.group(2), m.group(3)
     base = base.strip()
-    experiment_number = int(exp_str)
+    scan_number = int(exp_str)
     frame_number = int(frame_str)
     if "_" in base:
         parts = base.split("_")
@@ -68,7 +68,7 @@ def parse_fits_stem(stem: str) -> ParsedFitsName | None:
     return ParsedFitsName(
         sample_name=sample_name,
         tag=tag,
-        experiment_number=experiment_number,
+        scan_number=scan_number,
         frame_number=frame_number,
         file_stem=stem,
     )
@@ -122,14 +122,14 @@ def _catalog_from_paths(paths: list[Path]) -> pl.DataFrame:
             file_stems.append(parsed.file_stem)
             sample_names.append(parsed.sample_name)
             tags.append(parsed.tag)
-            exp_nums.append(parsed.experiment_number)
+            exp_nums.append(parsed.scan_number)
             frame_nums.append(parsed.frame_number)
     return pl.DataFrame({
         "path": path_strs,
         "file_stem": file_stems,
         "sample_name": sample_names,
         "tag": tags,
-        "experiment_number": exp_nums,
+        "scan_number": exp_nums,
         "frame_number": frame_nums,
     })
 
@@ -156,7 +156,7 @@ def build_catalog(
     Returns
     -------
     pl.DataFrame
-        Catalog with columns path, file_stem, sample_name, tag, experiment_number,
+        Catalog with columns path, file_stem, sample_name, tag, scan_number,
         frame_number. If headers were requested, also includes those columns and Q
         when applicable.
     """
@@ -189,12 +189,12 @@ def build_catalog(
     catalog = catalog.join(meta, left_on="file_stem", right_on="file_name", how="left")
     if "file_name" in catalog.columns:
         catalog = catalog.drop("file_name")
-    return catalog.sort(["experiment_number", "frame_number"])
+    return catalog.sort(["scan_number", "frame_number"])
 
 
 def scan_view(catalog: pl.DataFrame) -> pl.DataFrame:
     """
-    Aggregate catalog into a per-scan view: sample_name, tag, experiment_number,
+    Aggregate catalog into a per-scan view: sample_name, tag, scan_number,
     file_count, and optionally energy_min/max, Q_min/max.
 
     Parameters
@@ -205,10 +205,10 @@ def scan_view(catalog: pl.DataFrame) -> pl.DataFrame:
     Returns
     -------
     pl.DataFrame
-        One row per (sample_name, tag, experiment_number) with file_count and
+        One row per (sample_name, tag, scan_number) with file_count and
         optional energy/Q aggregates.
     """
-    group_cols = ["sample_name", "tag", "experiment_number"]
+    group_cols = ["sample_name", "tag", "scan_number"]
     aggs = [pl.len().alias("file_count")]
     if "Beamline Energy" in catalog.columns:
         aggs.extend([
@@ -248,7 +248,7 @@ def experiment_summary(
     Returns
     -------
     pl.DataFrame
-        scan_view of the catalog (sample_name, tag, experiment_number, file_count,
+        scan_view of the catalog (sample_name, tag, scan_number, file_count,
         energy_min/max, Q_min/max when with_headers).
     """
     if with_headers and headers is None:
@@ -264,11 +264,11 @@ def filter_catalog_paths(
     *,
     sample_name: str | None = None,
     tag: str | None = None,
-    experiment_number: int | None = None,
-    experiment_numbers: list[int] | None = None,
+    scan_number: int | None = None,
+    scan_numbers: list[int] | None = None,
 ) -> list[Path]:
     """
-    Filter catalog by sample_name, tag, or experiment number(s); return list of paths.
+    Filter catalog by sample_name, tag, or scan number(s); return list of paths.
 
     Parameters
     ----------
@@ -278,10 +278,10 @@ def filter_catalog_paths(
         Filter to this sample_name.
     tag : str | None, optional
         Filter to this tag.
-    experiment_number : int | None, optional
-        Filter to this single experiment number.
-    experiment_numbers : list[int] | None, optional
-        Filter to any of these experiment numbers.
+    scan_number : int | None, optional
+        Filter to this single scan number.
+    scan_numbers : list[int] | None, optional
+        Filter to any of these scan numbers.
 
     Returns
     -------
@@ -293,8 +293,8 @@ def filter_catalog_paths(
         df = df.filter(pl.col("sample_name") == sample_name)
     if tag is not None:
         df = df.filter(pl.col("tag") == tag)
-    if experiment_number is not None:
-        df = df.filter(pl.col("experiment_number") == experiment_number)
-    if experiment_numbers is not None:
-        df = df.filter(pl.col("experiment_number").is_in(experiment_numbers))
+    if scan_number is not None:
+        df = df.filter(pl.col("scan_number") == scan_number)
+    if scan_numbers is not None:
+        df = df.filter(pl.col("scan_number").is_in(scan_numbers))
     return [Path(p) for p in df.get_column("path").to_list()]

@@ -8,7 +8,7 @@ pub enum TuiErrorKind {
     TerminalSetup,
     TerminalRestore,
     Io,
-    IndexFailed,
+    IngestFailed,
     CatalogUnavailable,
     WatcherFailed,
 }
@@ -21,7 +21,7 @@ impl fmt::Display for TuiErrorKind {
             TuiErrorKind::TerminalSetup => write!(f, "terminal setup failed"),
             TuiErrorKind::TerminalRestore => write!(f, "terminal restore failed"),
             TuiErrorKind::Io => write!(f, "io error"),
-            TuiErrorKind::IndexFailed => write!(f, "index failed"),
+            TuiErrorKind::IngestFailed => write!(f, "ingest failed"),
             TuiErrorKind::CatalogUnavailable => write!(f, "catalog unavailable"),
             TuiErrorKind::WatcherFailed => write!(f, "watcher failed"),
         }
@@ -118,13 +118,13 @@ impl TuiError {
         }
     }
 
-    pub fn index_failed(
+    pub fn ingest_failed(
         path: impl AsRef<Path>,
         message: String,
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     ) -> Self {
         Self {
-            kind: TuiErrorKind::IndexFailed,
+            kind: TuiErrorKind::IngestFailed,
             retryable: true,
             message,
             context: vec![
@@ -132,7 +132,7 @@ impl TuiError {
                 ("path".into(), path.as_ref().display().to_string()),
             ],
             source,
-            suggestion: Some("Press i to reindex".into()),
+            suggestion: Some("Press i to re-ingest".into()),
         }
     }
 
@@ -146,7 +146,7 @@ impl TuiError {
                 ("path".into(), path.as_ref().display().to_string()),
             ],
             source: None,
-            suggestion: Some("Open a directory with catalog or reindex".into()),
+            suggestion: Some("Open a directory with catalog or re-ingest".into()),
         }
     }
 
@@ -164,7 +164,7 @@ impl TuiError {
                 ("path".into(), path.as_ref().display().to_string()),
             ],
             source,
-            suggestion: Some("Reindex (i) or continue without watch".into()),
+            suggestion: Some("Re-ingest (i) or continue without watch".into()),
         }
     }
 

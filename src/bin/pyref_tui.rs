@@ -104,10 +104,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     app.tag_state.select(Some(i));
                 }
             }
-            if let Some(e) = config.last_experiment.as_ref() {
+            if let Some(e) = config.last_scan.as_ref() {
                 if let Ok(n) = e.parse::<u32>() {
-                    if let Some(i) = app.experiments.iter().position(|(x, _)| *x == n) {
-                        app.experiment_state.select(Some(i));
+                    if let Some(i) = app.scans.iter().position(|(x, _)| *x == n) {
+                        app.scan_list_state.select(Some(i));
                     }
                 }
             }
@@ -144,19 +144,19 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if app.screen == tui::Screen::Beamtime && !app.current_root.is_empty() {
         config_save.set_last_root(&app.current_root);
-        let exp_str = app.focused_experiment().map(|n| n.to_string());
+        let scan_str = app.focused_scan().map(|n| n.to_string());
         config_save.set_last_selection(
             app.focused_sample().as_deref(),
             app.focused_tag().as_deref(),
-            exp_str.as_deref(),
+            scan_str.as_deref(),
         );
         let mut sel_samples: Vec<String> = app.selected_samples.iter().cloned().collect();
         sel_samples.sort();
         let mut sel_tags: Vec<String> = app.selected_tags.iter().cloned().collect();
         sel_tags.sort();
-        let mut sel_experiments: Vec<u32> = app.selected_experiments.iter().cloned().collect();
-        sel_experiments.sort();
-        config_save.set_selection_export(&sel_samples, &sel_tags, &sel_experiments);
+        let mut sel_scans: Vec<u32> = app.selected_scans.iter().cloned().collect();
+        sel_scans.sort();
+        config_save.set_selection_export(&sel_samples, &sel_tags, &sel_scans);
     }
     if let Err(e) = config_save.save() {
         eprintln!("{}", e.report());

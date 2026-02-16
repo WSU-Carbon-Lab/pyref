@@ -98,7 +98,7 @@ pub struct ParsedFitsStem {
     pub file_stem: String,
     pub sample_name: String,
     pub tag: Option<String>,
-    pub experiment_number: i64,
+    pub scan_number: i64,
     pub frame_number: i64,
 }
 
@@ -109,7 +109,7 @@ pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
     let base = cap.get(1)?.as_str().trim();
     let exp_str = cap.get(2)?.as_str();
     let frame_str = cap.get(3)?.as_str();
-    let experiment_number: i64 = exp_str.parse().ok()?;
+    let scan_number: i64 = exp_str.parse().ok()?;
     let frame_number: i64 = frame_str.parse().ok()?;
     let (sample_name, tag) = if base.contains('_') {
         let parts: Vec<&str> = base.split('_').collect();
@@ -122,7 +122,7 @@ pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
         file_stem: stem.to_string(),
         sample_name,
         tag,
-        experiment_number,
+        scan_number,
         frame_number,
     })
 }
@@ -130,7 +130,7 @@ pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
 pub fn build_fits_stem(
     sample_name: &str,
     tag: Option<&str>,
-    experiment_number: i64,
+    scan_number: i64,
     frame_number: i64,
 ) -> String {
     match tag {
@@ -138,10 +138,10 @@ pub fn build_fits_stem(
             "{}_{}_{:05}-{:05}",
             sample_name,
             t,
-            experiment_number,
+            scan_number,
             frame_number
         ),
-        None => format!("{}_{:05}-{:05}", sample_name, experiment_number, frame_number),
+        None => format!("{}_{:05}-{:05}", sample_name, scan_number, frame_number),
     }
 }
 
@@ -428,7 +428,7 @@ pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
                 .with_name("tag".into())
                 .into_column();
             columns.push(tag_series);
-            columns.push(Column::new("experiment_number".into(), vec![p.experiment_number]));
+            columns.push(Column::new("scan_number".into(), vec![p.scan_number]));
             columns.push(Column::new("frame_number".into(), vec![p.frame_number]));
         }
         None => {
@@ -438,7 +438,7 @@ pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
                     .with_name("tag".into())
                     .into_column(),
             );
-            columns.push(Column::new("experiment_number".into(), vec![0i64]));
+            columns.push(Column::new("scan_number".into(), vec![0i64]));
             columns.push(Column::new("frame_number".into(), vec![0i64]));
         }
     }
@@ -461,7 +461,7 @@ mod tests {
             let p = parse_fits_stem(stem).expect(stem);
             assert_eq!(p.sample_name, sample, "stem: {}", stem);
             assert_eq!(p.tag.as_deref(), tag, "stem: {}", stem);
-            assert_eq!(p.experiment_number, exp_num, "stem: {}", stem);
+            assert_eq!(p.scan_number, exp_num, "stem: {}", stem);
             assert_eq!(p.frame_number, frame_num, "stem: {}", stem);
         }
     }
@@ -471,7 +471,7 @@ mod tests {
         let p = parse_fits_stem("ps_pmma_rt 81041-00001").expect("should parse");
         assert_eq!(p.sample_name, "ps_pmma");
         assert_eq!(p.tag.as_deref(), Some("rt"));
-        assert_eq!(p.experiment_number, 81041);
+        assert_eq!(p.scan_number, 81041);
         assert_eq!(p.frame_number, 1);
     }
 
@@ -480,7 +480,7 @@ mod tests {
         let p = parse_fits_stem("monlayerjune 81041-00007").expect("should parse");
         assert_eq!(p.sample_name, "monlayerjune");
         assert_eq!(p.tag, None);
-        assert_eq!(p.experiment_number, 81041);
+        assert_eq!(p.scan_number, 81041);
         assert_eq!(p.frame_number, 7);
         let p2 = parse_fits_stem("monlayerjune 81041-00001").expect("should parse");
         assert_eq!(p2.sample_name, "monlayerjune");

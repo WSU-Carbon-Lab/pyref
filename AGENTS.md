@@ -11,6 +11,17 @@
 
 PyRef is a library for reducing 2D X-ray reflectivity detector images into 1D reflectivity signals. The library handles experimental data collected in "stitches" - separate measurement chunks where beamline configuration parameters (higher-order suppressor, exit slits, exposure times) are adjusted to capture reflectivity across multiple orders of magnitude.
 
+## Terminology (glossary)
+
+See also `CONTRIBUTE.md` for the full glossary.
+
+- **ingest**: Populate the catalog from FITS (discover, read headers, upsert into SQLite). Rust `ingest_beamtime`; Python `pyref.io.ingest_beamtime`.
+- **discover**: Find FITS paths under a directory; no header read. Rust `discover_fits_paths`.
+- **scan (IO)**: Build a LazyFrame of metadata. `scan_experiment(source)` returns a LazyFrame from catalog or from FITS; "scan from catalog" = read from SQLite (`scan_from_catalog`). Distinct from a CCD Scan (measurement run).
+- **scan (experiment)**: A single measurement run with a scan number (e.g. CCD Scan 88169, Scan ID); one reflectivity profile. Not the same as the `scan_experiment()` IO function.
+- **read**: FITS file I/O (headers and/or images). Rust `read_fits_headers_only`, `read_multiple_fits_headers_only`, `read_experiment_headers_only`.
+- **experiment**: Beamtime directory or a logical group; "experiment number" in headers refers to one scan (run), not the whole beamtime.
+
 ## Core Components
 
 ### 1. Data Loading (`src/loader.rs`, `python/pyref/io/readers.py`)
@@ -110,7 +121,7 @@ One SQLite database per beamtime directory (`.pyref_catalog.db`) caches FITS met
 - `ingest_beamtime(beamtime_path, header_items=None, incremental=True)` -> Path to DB
 - `get_overrides(catalog_path, path=None)` -> DataFrame
 - `set_override(catalog_path, path, sample_name=..., tag=..., notes=...)`
-- `query_catalog(catalog_path, sample_name=..., tag=..., experiment_numbers=..., energy_min=..., energy_max=...)` -> DataFrame
+- `query_catalog(catalog_path, sample_name=..., tag=..., scan_numbers=..., energy_min=..., energy_max=...)` -> DataFrame
 
 Catalog is built by default (feature `catalog`); the TUI feature includes catalog so the binary can read/write the same DB.
 
@@ -118,7 +129,7 @@ Catalog is built by default (feature `catalog`); the TUI feature includes catalo
 
 **Directory layout**: `$HOME/.config/pyref/` (XDG config) holds user preferences: `tui.toml` (keymap, theme, layout, `last_root`, `recent_roots`, selection export). Override with `PYREF_TUI_CONFIG`. `$HOME/.pyref/` holds data/index: `beamtime_index.sqlite3` (central index of indexed beamtimes for the launcher). Optional `pyref.toml` and subdirs `cache/`, `logs/` are reserved for future use. If `HOME` is unset, the beamtime index uses `./.pyref/` as fallback.
 
-**TUI (pyref-tui)**: Startup: with no CLI argument, the TUI shows the launcher (list of indexed beamtimes from `~/.pyref/beamtime_index.sqlite3`, most recent first). Enter opens the selected beamtime; [o] opens the "Open directory" dialog. With a CLI argument, the TUI opens that beamtime directly. Open directory: hybrid dialog with path input (Tab autocomplete) and scrollable folder list (.. and subdirs); Enter on a valid path runs ingest, registers the beamtime in the central index, and opens that beamtime. While indexing (from launcher or from beamtime view), the nav line shows "Indexing N/M...". If there is no catalog in the opened directory, the TUI shows an empty state and the message to run "Index directory" (key [i]) or `pyref.io.ingest_beamtime(path)` from Python. The beamtime browse panel lists **reflectivity profiles**: one row per experiment (scan) for a given sample, tag, and polarization. Two scan modes are supported: **fixed-energy (theta scan)** where sample theta varies and energy is fixed, and **fixed-angle (energy scan)** where energy varies and theta is fixed or limited to a few angles. The table shows Emin (eV), Emax (eV), Type (theta-scan / E-scan), theta min/max, frame count, and duration. Scan type is inferred from the data using energy/theta range tolerances, distinct-value counts, and an Izero heuristic (many points at theta near zero indicate a theta scan). Each row is a single reflectivity profile; Enter expands it to show the underlying FITS files in a table (Scan, Frame, pol, E (eV), sample theta). When expanded, j/k scroll the file list; Enter collapses. Rename/Retag write catalog overrides via `set_override` and the table reloads. On exit, the TUI saves config to `PYREF_TUI_CONFIG` or `~/.config/pyref/tui.toml`, including `last_root`, `selected_samples`, `selected_tags`, and `selected_experiment_numbers` (when on beamtime view). Scripts can read that config and use `scan_experiment(last_root).filter(...)` with the same sample/tag/experiment filters to match the TUI view.
+**TUI (pyref-tui)**: Startup: with no CLI argument, the TUI shows the launcher (list of indexed beamtimes from `~/.pyref/beamtime_index.sqlite3`, most recent first). Enter opens the selected beamtime; [o] opens the "Open directory" dialog. With a CLI argument, the TUI opens that beamtime directly. Open directory: hybrid dialog with path input (Tab autocomplete) and scrollable folder list (.. and subdirs); Enter on a valid path runs ingest, registers the beamtime in the central index, and opens that beamtime. While ingesting (from launcher or from beamtime view), the nav line shows "Ingesting N/M...". If there is no catalog in the opened directory, the TUI shows an empty state and the message to run "Ingest directory" (key [i]) or `pyref.io.ingest_beamtime(path)` from Python. The beamtime browse panel lists **reflectivity profiles**: one row per experiment (scan) for a given sample, tag, and polarization. Two scan modes are supported: **fixed-energy (theta scan)** where sample theta varies and energy is fixed, and **fixed-angle (energy scan)** where energy varies and theta is fixed or limited to a few angles. The table shows Emin (eV), Emax (eV), Type (theta-scan / E-scan), theta min/max, frame count, and duration. Scan type is inferred from the data using energy/theta range tolerances, distinct-value counts, and an Izero heuristic (many points at theta near zero indicate a theta scan). Each row is a single reflectivity profile; Enter expands it to show the underlying FITS files in a table (Scan, Frame, pol, E (eV), sample theta). When expanded, j/k scroll the file list; Enter collapses. Rename/Retag write catalog overrides via `set_override` and the table reloads. On exit, the TUI saves config to `PYREF_TUI_CONFIG` or `~/.config/pyref/tui.toml`, including `last_root`, `selected_samples`, `selected_tags`, and `selected_scan_numbers` (when on beamtime view). Scripts can read that config and use `scan_experiment(last_root).filter(...)` with the same sample/tag/scan filters to match the TUI view.
 
 ### 7. Data Stitching (Conceptual)
 

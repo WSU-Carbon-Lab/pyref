@@ -10,7 +10,7 @@ pub const DOUBLE_UP: &str = "\u{21C8}";
 pub const DOUBLE_DOWN: &str = "\u{21CA}";
 
 pub const BROWSE_TITLE: &str = " Reflectivity profiles [b] ";
-pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag  i Reindex ";
+pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag  i Re-ingest ";
 
 pub fn bottom_bar_line() -> String {
     format!(
@@ -33,7 +33,7 @@ pub enum Action {
     FocusPrev,
     FocusSample,
     FocusTag,
-    FocusExperiment,
+    FocusScan,
     FocusBrowser,
     MoveDown,
     MoveUp,
@@ -44,7 +44,7 @@ pub enum Action {
     Rename,
     Retag,
     Open,
-    IndexDirectory,
+    IngestDirectory,
     NavUp,
     NavBack,
     NavFwd,
@@ -94,10 +94,10 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('S') => return Action::Search,
                 KeyCode::Char('s') => return Action::FocusSample,
                 KeyCode::Char('t') => return if shift { Action::Retag } else { Action::FocusTag },
-                KeyCode::Char('e') => return Action::FocusExperiment,
+                KeyCode::Char('e') => return Action::FocusScan,
                 KeyCode::Char('b') => return Action::FocusBrowser,
                 KeyCode::Char('r') => return Action::Rename,
-                KeyCode::Char('i') => return Action::IndexDirectory,
+                KeyCode::Char('i') => return Action::IngestDirectory,
                 KeyCode::Char('u') => return Action::NavUp,
                 KeyCode::Char('h') => return Action::NavBack,
                 KeyCode::Char('l') => return Action::NavFwd,
@@ -143,10 +143,10 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('S') => return Action::Search,
                 KeyCode::Char('s') => return Action::FocusSample,
                 KeyCode::Char('t') => return Action::FocusTag,
-                KeyCode::Char('e') => return Action::FocusExperiment,
+                KeyCode::Char('e') => return Action::FocusScan,
                 KeyCode::Char('b') => return Action::FocusBrowser,
                 KeyCode::Char('r') => return Action::Rename,
-                KeyCode::Char('i') => return Action::IndexDirectory,
+                KeyCode::Char('i') => return Action::IngestDirectory,
                 KeyCode::Char('u') => return Action::NavUp,
                 KeyCode::Char('h') => return Action::NavBack,
                 KeyCode::Char('l') => return Action::NavFwd,

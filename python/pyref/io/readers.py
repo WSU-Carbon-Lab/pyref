@@ -97,7 +97,7 @@ def _scan_schema(header_items: list[str]) -> dict[str, Any]:
         "file_name": pl.String,
         "sample_name": pl.String,
         "tag": pl.String,
-        "experiment_number": pl.Int64,
+        "scan_number": pl.Int64,
         "frame_number": pl.Int64,
     }
     for key in header_items:
@@ -212,7 +212,7 @@ def query_catalog(
     *,
     sample_name: str | None = None,
     tag: str | None = None,
-    experiment_numbers: list[int] | None = None,
+    scan_numbers: list[int] | None = None,
     energy_min: float | None = None,
     energy_max: float | None = None,
 ) -> pl.DataFrame:
@@ -223,8 +223,8 @@ def query_catalog(
         filt["sample_name"] = sample_name
     if tag is not None:
         filt["tag"] = tag
-    if experiment_numbers is not None:
-        filt["experiment_numbers"] = experiment_numbers
+    if scan_numbers is not None:
+        filt["scan_numbers"] = scan_numbers
     if energy_min is not None:
         filt["energy_min"] = energy_min
     if energy_max is not None:

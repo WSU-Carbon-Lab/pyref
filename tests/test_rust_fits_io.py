@@ -65,7 +65,7 @@ def test_rust_read_fits_headers_only_parsed_columns(minimal_fits_path: Path) -> 
     from pyref.pyref import py_read_fits_headers_only
 
     df = py_read_fits_headers_only(str(minimal_fits_path), HEADER_KEYS)
-    for col in ("file_name", "sample_name", "tag", "experiment_number", "frame_number"):
+    for col in ("file_name", "sample_name", "tag", "scan_number", "frame_number"):
         assert col in df.columns
 
 

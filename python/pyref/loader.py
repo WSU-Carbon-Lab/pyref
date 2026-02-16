@@ -289,12 +289,12 @@ class PrsoxrLoader:
                 else:
                     sample_names.append(parsed.sample_name)
                     tags.append(parsed.tag)
-                    exp_nums.append(parsed.experiment_number)
+                    exp_nums.append(parsed.scan_number)
                     frame_nums.append(parsed.frame_number)
             self.meta = self.meta.with_columns(
                 pl.Series("sample_name", sample_names),
                 pl.Series("tag", tags),
-                pl.Series("experiment_number", exp_nums),
+                pl.Series("scan_number", exp_nums),
                 pl.Series("frame_number", frame_nums),
             )
 

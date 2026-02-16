@@ -32,7 +32,7 @@ pub struct ProfileRow {
     pub q_range_str: String,
     pub data_points: u32,
     pub quality_placeholder: String,
-    pub experiment_number: u32,
+    pub scan_number: u32,
     pub file_path: Option<String>,
 }
 
@@ -48,7 +48,7 @@ pub struct GroupedProfileRow {
     pub theta_min: Option<f64>,
     pub theta_max: Option<f64>,
     pub file_rows: Vec<FileRow>,
-    pub experiment_numbers: Vec<u32>,
+    pub scan_numbers: Vec<u32>,
     pub scan_duration_hm: String,
 }
 
@@ -57,7 +57,7 @@ pub enum Focus {
     Nav,
     SampleList,
     TagList,
-    ExperimentList,
+    ScanList,
     Table,
     SearchBar,
 }
@@ -66,7 +66,7 @@ const FOCUS_ORDER: [Focus; 6] = [
     Focus::Nav,
     Focus::SampleList,
     Focus::TagList,
-    Focus::ExperimentList,
+    Focus::ScanList,
     Focus::Table,
     Focus::SearchBar,
 ];
@@ -82,7 +82,7 @@ pub enum AppMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadingState {
     Idle,
-    IndexingDirectory,
+    IngestingDirectory,
     CatalogUpdating,
 }
 
@@ -110,7 +110,7 @@ pub enum OpenDirFocus {
 pub struct BeamtimeBodyRects {
     pub sample_list: Rect,
     pub tag_list: Rect,
-    pub experiment_list: Rect,
+    pub scan_list: Rect,
     pub table: Rect,
 }
 
@@ -132,14 +132,16 @@ pub struct App {
     pub filtered_groups: Vec<GroupedProfileRow>,
     pub samples: Vec<String>,
     pub tags: Vec<String>,
-    pub experiments: Vec<(u32, String)>,
+    pub scans: Vec<(u32, String)>,
     pub selected_samples: HashSet<String>,
     pub selected_tags: HashSet<String>,
-    pub selected_experiments: HashSet<u32>,
+    pub selected_scans: HashSet<u32>,
     pub sample_state: ListState,
     pub tag_state: ListState,
-    pub experiment_state: ListState,
+    pub scan_list_state: ListState,
     pub table_state: TableState,
+    pub table_sort_column: Option<usize>,
+    pub table_sort_ordering: Option<std::cmp::Ordering>,
     pub expanded_table_row: Option<usize>,
     pub expanded_files_scroll_offset: usize,
     pub last_expanded_files_visible: usize,
@@ -256,19 +258,19 @@ fn build_groups_from_files(rows: Vec<FileRow>) -> Vec<GroupedProfileRow> {
                 format!("{:.2}", p)
             }
         }).unwrap_or_else(|| "-".to_string());
-        let key = (sample.clone(), tag.clone(), pol_str.clone(), r.experiment_number);
+        let key = (sample.clone(), tag.clone(), pol_str.clone(), r.scan_number);
         key_to_rows.entry(key).or_default().push(r);
     }
     let mut groups: Vec<GroupedProfileRow> = key_to_rows
         .into_iter()
-        .flat_map(|((sample, tag, pol_str, experiment_number), file_rows)| {
+        .flat_map(|((sample, tag, pol_str, scan_number), file_rows)| {
             let energy_theta_pairs: Vec<(Option<f64>, Option<f64>)> = file_rows
                 .iter()
                 .map(|r| (r.beamline_energy, r.sample_theta))
                 .collect();
             let (scan_type, energy_min, energy_max, theta_min, theta_max) =
                 classify_scan_type(&energy_theta_pairs);
-            let experiment_numbers = vec![experiment_number as u32];
+            let scan_numbers = vec![scan_number as u32];
             if scan_type == ReflectivityScanType::FixedEnergy {
                 let mut by_energy: HashMap<i64, Vec<FileRow>> = HashMap::new();
                 for r in file_rows {
@@ -305,7 +307,7 @@ fn build_groups_from_files(rows: Vec<FileRow>) -> Vec<GroupedProfileRow> {
                             theta_min,
                             theta_max,
                             file_rows: sub_rows,
-                            experiment_numbers: experiment_numbers.clone(),
+                            scan_numbers: scan_numbers.clone(),
                             scan_duration_hm,
                         }
                     })
@@ -325,7 +327,7 @@ fn build_groups_from_files(rows: Vec<FileRow>) -> Vec<GroupedProfileRow> {
                     theta_min,
                     theta_max,
                     file_rows,
-                    experiment_numbers,
+                    scan_numbers,
                     scan_duration_hm,
                 }]
             }
@@ -335,7 +337,7 @@ fn build_groups_from_files(rows: Vec<FileRow>) -> Vec<GroupedProfileRow> {
         a.sample
             .cmp(&b.sample)
             .then(a.tag.cmp(&b.tag))
-            .then(a.experiment_numbers.first().cmp(&b.experiment_numbers.first()))
+            .then(a.scan_numbers.first().cmp(&b.scan_numbers.first()))
             .then(a.energy_min.partial_cmp(&b.energy_min).unwrap_or(cmp::Ordering::Equal))
             .then(a.pol_str.cmp(&b.pol_str))
     });
@@ -352,12 +354,12 @@ fn catalog_to_profiles(current_root: &str) -> Option<(Vec<GroupedProfileRow>, Ve
         let entries = list_beamtime_entries(&db_path).ok()?;
         let rows = query_files(&db_path, None).ok()?;
         let groups = build_groups_from_files(rows);
-        let experiments: Vec<(u32, String)> = entries
-            .experiments
+        let scans: Vec<(u32, String)> = entries
+            .scans
             .into_iter()
             .map(|(n, s)| (n as u32, s))
             .collect();
-        return Some((groups, entries.samples, entries.tags, experiments));
+        return Some((groups, entries.samples, entries.tags, scans));
     }
     #[cfg(not(feature = "catalog"))]
     None
@@ -365,7 +367,7 @@ fn catalog_to_profiles(current_root: &str) -> Option<(Vec<GroupedProfileRow>, Ve
 
 impl App {
     pub fn new(current_root: String, layout: String, keymap: String, keybind_bar_lines: u8, theme: String) -> Self {
-        let (all_groups, samples, tags, experiments, has_catalog) =
+        let (all_groups, samples, tags, scans, has_catalog) =
             catalog_to_profiles(&current_root).map(|(a, s, t, e)| (a, s, t, e, true)).unwrap_or_else(|| {
                 (
                     vec![],
@@ -377,7 +379,7 @@ impl App {
             });
         let mut sample_state = ListState::default();
         let mut tag_state = ListState::default();
-        let mut experiment_state = ListState::default();
+        let mut scan_list_state = ListState::default();
         let mut table_state = TableState::default();
         if !samples.is_empty() {
             sample_state.select(Some(0));
@@ -385,18 +387,18 @@ impl App {
         if !tags.is_empty() {
             tag_state.select(Some(0));
         }
-        if !experiments.is_empty() {
-            experiment_state.select(Some(0));
+        if !scans.is_empty() {
+            scan_list_state.select(Some(0));
         }
         let selected_samples = HashSet::new();
         let selected_tags = HashSet::new();
-        let selected_experiments = HashSet::new();
+        let selected_scans = HashSet::new();
         let all_groups_clone = all_groups.clone();
         let filtered = Self::filter_groups(
             &all_groups,
             &selected_samples,
             &selected_tags,
-            &selected_experiments,
+            &selected_scans,
             "",
         );
         if !filtered.is_empty() {
@@ -426,14 +428,16 @@ impl App {
             filtered_groups: filtered,
             samples,
             tags,
-            experiments,
+            scans,
             selected_samples,
             selected_tags,
-            selected_experiments,
+            selected_scans,
             sample_state,
             tag_state,
-            experiment_state,
+            scan_list_state,
             table_state,
+            table_sort_column: None,
+            table_sort_ordering: None,
             expanded_table_row: None,
             expanded_files_scroll_offset: 0,
             last_expanded_files_visible: 5,
@@ -491,14 +495,16 @@ impl App {
             filtered_groups: vec![],
             samples: vec![],
             tags: vec![],
-            experiments: vec![],
+            scans: vec![],
             selected_samples: HashSet::new(),
             selected_tags: HashSet::new(),
-            selected_experiments: HashSet::new(),
+            selected_scans: HashSet::new(),
             sample_state: ListState::default(),
             tag_state: ListState::default(),
-            experiment_state: ListState::default(),
+            scan_list_state: ListState::default(),
             table_state: TableState::default(),
+            table_sort_column: None,
+            table_sort_ordering: None,
             expanded_table_row: None,
             expanded_files_scroll_offset: 0,
             last_expanded_files_visible: 5,
@@ -824,7 +830,7 @@ impl App {
             .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
-        self.loading_state = LoadingState::IndexingDirectory;
+        self.loading_state = LoadingState::IngestingDirectory;
         self.ingest_rx = Some(rx);
         self.ingest_progress = None;
         self.ingest_progress_rx = Some(progress_rx);
@@ -833,7 +839,7 @@ impl App {
     }
 
     #[cfg(feature = "catalog")]
-    pub fn start_indexing_at(&mut self, path: &Path) {
+    pub fn start_ingest_at(&mut self, path: &Path) {
         if self.loading_state != LoadingState::Idle {
             return;
         }
@@ -860,7 +866,7 @@ impl App {
             let _ = tx.send(result);
         });
         self.pending_ingest_path = Some(path_buf);
-        self.loading_state = LoadingState::IndexingDirectory;
+        self.loading_state = LoadingState::IngestingDirectory;
         self.ingest_rx = Some(rx);
         self.ingest_progress = None;
         self.ingest_progress_rx = Some(progress_rx);
@@ -882,15 +888,15 @@ impl App {
             self.watcher_events_rx = None;
         }
         self.current_root = new_root_str.clone();
-        if let Some((all_groups, samples, tags, experiments)) = catalog_to_profiles(&self.current_root) {
+        if let Some((all_groups, samples, tags, scans)) = catalog_to_profiles(&self.current_root) {
             self.all_groups = all_groups.clone();
             self.samples = samples.clone();
             self.tags = tags.clone();
-            self.experiments = experiments.clone();
+            self.scans = scans.clone();
             self.has_catalog = true;
             self.sample_state = ListState::default();
             self.tag_state = ListState::default();
-            self.experiment_state = ListState::default();
+            self.scan_list_state = ListState::default();
             self.table_state = TableState::default();
             if !self.samples.is_empty() {
                 self.sample_state.select(Some(0));
@@ -898,8 +904,8 @@ impl App {
             if !self.tags.is_empty() {
                 self.tag_state.select(Some(0));
             }
-            if !self.experiments.is_empty() {
-                self.experiment_state.select(Some(0));
+            if !self.scans.is_empty() {
+                self.scan_list_state.select(Some(0));
             }
             self.refresh_filtered();
             #[cfg(feature = "watch")]
@@ -927,11 +933,11 @@ impl App {
             self.filtered_groups = vec![];
             self.samples = vec![];
             self.tags = vec![];
-            self.experiments = vec![];
+            self.scans = vec![];
             self.has_catalog = false;
             self.sample_state = ListState::default();
             self.tag_state = ListState::default();
-            self.experiment_state = ListState::default();
+            self.scan_list_state = ListState::default();
             self.table_state = TableState::default();
         }
         self.needs_redraw = true;
@@ -974,7 +980,7 @@ impl App {
         groups: &[GroupedProfileRow],
         samples: &HashSet<String>,
         tags: &HashSet<String>,
-        experiments: &HashSet<u32>,
+        scans: &HashSet<u32>,
         search: &str,
     ) -> Vec<GroupedProfileRow> {
         let search_lower = search.to_lowercase();
@@ -984,8 +990,8 @@ impl App {
             .filter(|r| {
                 let sample_ok = samples.is_empty() || samples.contains(&r.sample);
                 let tag_ok = tags.is_empty() || tags.contains(&r.tag);
-                let exp_ok = experiments.is_empty()
-                    || r.experiment_numbers.iter().any(|e| experiments.contains(e));
+                let exp_ok = scans.is_empty()
+                    || r.scan_numbers.iter().any(|e| scans.contains(e));
                 let search_ok = if search_lower.is_empty() {
                     true
                 } else {
@@ -1028,10 +1034,98 @@ impl App {
             .and_then(|i| self.tags.get(i).cloned())
     }
 
-    pub fn focused_experiment(&self) -> Option<u32> {
-        self.experiment_state
+    pub fn focused_scan(&self) -> Option<u32> {
+        self.scan_list_state
             .selected()
-            .and_then(|i| self.experiments.get(i).map(|(n, _)| *n))
+            .and_then(|i| self.scans.get(i).map(|(n, _)| *n))
+    }
+
+    pub fn compute_display_order(&self) -> Vec<usize> {
+        let n = self.filtered_groups.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        if let (Some(col), Some(ord)) = (self.table_sort_column, self.table_sort_ordering) {
+            order.sort_by(|&a, &b| {
+                let ra = &self.filtered_groups[a];
+                let rb = &self.filtered_groups[b];
+                Self::compare_group_column(col, ra, rb).then_with(|| a.cmp(&b))
+            });
+            if ord == cmp::Ordering::Greater {
+                order.reverse();
+            }
+        }
+        order
+    }
+
+    fn compare_group_column(col: usize, a: &GroupedProfileRow, b: &GroupedProfileRow) -> cmp::Ordering {
+        use super::scan_type::ReflectivityScanType;
+        let cmp_opt_f64 = |x: Option<f64>, y: Option<f64>| {
+            x.partial_cmp(&y).unwrap_or(cmp::Ordering::Equal)
+        };
+        let cmp_scan_type = |s: ReflectivityScanType, t: ReflectivityScanType| {
+            let ord = |r: ReflectivityScanType| match r {
+                ReflectivityScanType::FixedEnergy => 0,
+                ReflectivityScanType::FixedAngle => 1,
+                ReflectivityScanType::SinglePoint => 2,
+            };
+            ord(s).cmp(&ord(t))
+        };
+        match col {
+            0 => a.sample.cmp(&b.sample),
+            1 => a.tag.cmp(&b.tag),
+            2 => a.pol_str.cmp(&b.pol_str),
+            3 => cmp_scan_type(a.scan_type, b.scan_type),
+            4 => cmp_opt_f64(a.energy_min, b.energy_min),
+            5 => cmp_opt_f64(a.energy_max, b.energy_max),
+            6 => cmp_opt_f64(a.theta_min, b.theta_min),
+            7 => cmp_opt_f64(a.theta_max, b.theta_max),
+            8 => a.file_rows.len().cmp(&b.file_rows.len()),
+            9 => a.scan_duration_hm.cmp(&b.scan_duration_hm),
+            _ => cmp::Ordering::Equal,
+        }
+    }
+
+    pub fn cycle_table_sort(&mut self, data_column: usize) {
+        if data_column >= 10 {
+            return;
+        }
+        let old_order = self.compute_display_order();
+        let selected_orig = self
+            .table_state
+            .selected()
+            .and_then(|d| old_order.get(d).copied());
+        let expanded_orig = self
+            .expanded_table_row
+            .and_then(|d| old_order.get(d).copied());
+        let (new_col, new_ord) = match (self.table_sort_column, self.table_sort_ordering) {
+            (Some(c), Some(o)) if c == data_column => {
+                if o == cmp::Ordering::Less {
+                    (Some(data_column), Some(cmp::Ordering::Greater))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (Some(data_column), Some(cmp::Ordering::Less)),
+        };
+        self.table_sort_column = new_col;
+        self.table_sort_ordering = new_ord;
+        let new_order = self.compute_display_order();
+        if let Some(orig) = selected_orig {
+            if let Some(pos) = new_order.iter().position(|&i| i == orig) {
+                self.table_state.select(Some(pos));
+            }
+        }
+        if let Some(orig) = expanded_orig {
+            if let Some(pos) = new_order.iter().position(|&i| i == orig) {
+                self.expanded_table_row = Some(pos);
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    pub fn group_at_display_index(&self, display_index: usize) -> Option<&GroupedProfileRow> {
+        let order = self.compute_display_order();
+        let orig = order.get(display_index).copied()?;
+        self.filtered_groups.get(orig)
     }
 
     pub fn refresh_filtered(&mut self) {
@@ -1039,7 +1133,7 @@ impl App {
             &self.all_groups,
             &self.selected_samples,
             &self.selected_tags,
-            &self.selected_experiments,
+            &self.selected_scans,
             &self.search_query,
         );
         self.clamp_selections();
@@ -1081,8 +1175,8 @@ impl App {
                 }
             };
             let all_groups = build_groups_from_files(rows);
-            let experiments: Vec<(u32, String)> = entries
-                .experiments
+            let scans: Vec<(u32, String)> = entries
+                .scans
                 .into_iter()
                 .map(|(n, s)| (n as u32, s))
                 .collect();
@@ -1090,11 +1184,11 @@ impl App {
             self.all_groups = all_groups.clone();
             self.samples = entries.samples.clone();
             self.tags = entries.tags.clone();
-            self.experiments = experiments.clone();
+            self.scans = scans.clone();
             self.has_catalog = true;
             self.sample_state = ListState::default();
             self.tag_state = ListState::default();
-            self.experiment_state = ListState::default();
+            self.scan_list_state = ListState::default();
             self.table_state = TableState::default();
             if !self.samples.is_empty() {
                 self.sample_state.select(Some(0));
@@ -1102,8 +1196,8 @@ impl App {
             if !self.tags.is_empty() {
                 self.tag_state.select(Some(0));
             }
-            if !self.experiments.is_empty() {
-                self.experiment_state.select(Some(0));
+            if !self.scans.is_empty() {
+                self.scan_list_state.select(Some(0));
             }
             self.refresh_filtered();
             #[cfg(feature = "watch")]
@@ -1144,7 +1238,7 @@ impl App {
     }
 
     #[cfg(feature = "catalog")]
-    pub fn start_indexing(&mut self) {
+    pub fn start_ingest(&mut self) {
         if self.loading_state != LoadingState::Idle {
             return;
         }
@@ -1170,14 +1264,14 @@ impl App {
             .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
-        self.loading_state = LoadingState::IndexingDirectory;
+        self.loading_state = LoadingState::IngestingDirectory;
         self.ingest_rx = Some(rx);
         self.ingest_progress = None;
         self.ingest_progress_rx = Some(progress_rx);
     }
 
     #[cfg(not(feature = "catalog"))]
-    pub fn start_indexing(&mut self) {}
+    pub fn start_ingest(&mut self) {}
 
     #[cfg(feature = "catalog")]
     pub fn try_recv_ingest(&mut self) {
@@ -1223,7 +1317,7 @@ impl App {
                     }
                     Err(e) => {
                         let path = self.pending_ingest_path.take().unwrap_or_else(|| PathBuf::from(&self.current_root));
-                        self.set_app_error(super::error::TuiError::index_failed(path, e, None));
+                        self.set_app_error(super::error::TuiError::ingest_failed(path, e, None));
                     }
                 }
                 self.needs_redraw = true;
@@ -1276,12 +1370,12 @@ impl App {
                 self.tag_state.select(None);
             }
         }
-        let n = self.experiments.len();
-        if let Some(i) = self.experiment_state.selected() {
+        let n = self.scans.len();
+        if let Some(i) = self.scan_list_state.selected() {
             if i >= n && n > 0 {
-                self.experiment_state.select(Some(n - 1));
+                self.scan_list_state.select(Some(n - 1));
             } else if n == 0 {
-                self.experiment_state.select(None);
+                self.scan_list_state.select(None);
             }
         }
         let n = self.filtered_groups.len();
@@ -1312,8 +1406,8 @@ impl App {
         self.focus = Focus::TagList;
     }
 
-    pub fn focus_experiment(&mut self) {
-        self.focus = Focus::ExperimentList;
+    pub fn focus_scan(&mut self) {
+        self.focus = Focus::ScanList;
     }
 
     pub fn focus_browser(&mut self) {
@@ -1336,17 +1430,17 @@ impl App {
                     self.tag_state.select(Some((i + 1) % len));
                 }
             }
-            Focus::ExperimentList => {
-                let len = self.experiments.len();
+            Focus::ScanList => {
+                let len = self.scans.len();
                 if len > 0 {
-                    let i = self.experiment_state.selected().unwrap_or(0);
-                    self.experiment_state.select(Some((i + 1) % len));
+                    let i = self.scan_list_state.selected().unwrap_or(0);
+                    self.scan_list_state.select(Some((i + 1) % len));
                 }
             }
             Focus::Table => {
                 if let Some(idx) = self.expanded_table_row {
-                    if idx < self.filtered_groups.len() {
-                        let file_count = self.filtered_groups[idx].file_rows.len();
+                    if let Some(g) = self.group_at_display_index(idx) {
+                        let file_count = g.file_rows.len();
                         let max_offset = file_count.saturating_sub(self.last_expanded_files_visible.max(1));
                         self.expanded_files_scroll_offset =
                             cmp::min(self.expanded_files_scroll_offset + 1, max_offset);
@@ -1380,11 +1474,11 @@ impl App {
                     self.tag_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
                 }
             }
-            Focus::ExperimentList => {
-                let len = self.experiments.len();
+            Focus::ScanList => {
+                let len = self.scans.len();
                 if len > 0 {
-                    let i = self.experiment_state.selected().unwrap_or(0);
-                    self.experiment_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                    let i = self.scan_list_state.selected().unwrap_or(0);
+                    self.scan_list_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
                 }
             }
             Focus::Table => {
@@ -1429,13 +1523,13 @@ impl App {
                     }
                 }
             }
-            Focus::ExperimentList => {
-                if let Some(i) = self.experiment_state.selected() {
-                    if let Some((n, _)) = self.experiments.get(i) {
-                        if self.selected_experiments.contains(n) {
-                            self.selected_experiments.remove(n);
+            Focus::ScanList => {
+                if let Some(i) = self.scan_list_state.selected() {
+                    if let Some((n, _)) = self.scans.get(i) {
+                        if self.selected_scans.contains(n) {
+                            self.selected_scans.remove(n);
                         } else {
-                            self.selected_experiments.insert(*n);
+                            self.selected_scans.insert(*n);
                         }
                         self.refresh_filtered();
                     }
@@ -1449,7 +1543,7 @@ impl App {
         self.rename_retag_buffer = self
             .table_state
             .selected()
-            .and_then(|i| self.filtered_groups.get(i))
+            .and_then(|i| self.group_at_display_index(i))
             .map(|r| r.sample.clone())
             .unwrap_or_default();
         self.mode = AppMode::RenameSample;
@@ -1459,7 +1553,7 @@ impl App {
         self.rename_retag_buffer = self
             .table_state
             .selected()
-            .and_then(|i| self.filtered_groups.get(i))
+            .and_then(|i| self.group_at_display_index(i))
             .map(|r| r.tag.clone())
             .unwrap_or_default();
         self.mode = AppMode::EditTag;
@@ -1484,7 +1578,7 @@ impl App {
         let row = self
             .table_state
             .selected()
-            .and_then(|i| self.filtered_groups.get(i));
+            .and_then(|i| self.group_at_display_index(i));
         let Some(row) = row else { return };
         if !self.has_catalog {
             return;
@@ -1517,7 +1611,7 @@ impl App {
             let new_stem = build_fits_stem(
                 new_sample,
                 new_tag,
-                file_row.experiment_number,
+                file_row.scan_number,
                 file_row.frame_number,
             );
             let new_path = parent.join(format!("{}.fits", new_stem));
@@ -1600,8 +1694,8 @@ impl App {
             Focus::TagList if !self.tags.is_empty() => {
                 self.tag_state.select(Some(0));
             }
-            Focus::ExperimentList if !self.experiments.is_empty() => {
-                self.experiment_state.select(Some(0));
+            Focus::ScanList if !self.scans.is_empty() => {
+                self.scan_list_state.select(Some(0));
             }
             Focus::Table if !self.filtered_groups.is_empty() => {
                 self.table_state.select(Some(0));
@@ -1621,9 +1715,9 @@ impl App {
                 let n = self.tags.len() - 1;
                 self.tag_state.select(Some(n));
             }
-            Focus::ExperimentList if !self.experiments.is_empty() => {
-                let n = self.experiments.len() - 1;
-                self.experiment_state.select(Some(n));
+            Focus::ScanList if !self.scans.is_empty() => {
+                let n = self.scans.len() - 1;
+                self.scan_list_state.select(Some(n));
             }
             Focus::Table if !self.filtered_groups.is_empty() => {
                 let n = self.filtered_groups.len() - 1;

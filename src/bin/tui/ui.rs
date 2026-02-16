@@ -76,7 +76,7 @@ pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::Bea
     Some(super::app::BeamtimeBodyRects {
         sample_list: left_chunks[0],
         tag_list: left_chunks[2],
-        experiment_list: left_chunks[4],
+        scan_list: left_chunks[4],
         table: table_area,
     })
 }
@@ -132,15 +132,15 @@ fn render_launcher_nav(frame: &mut Frame, area: Rect, app: &App, theme: ThemeMod
         let c = SPINNER_FRAMES.chars().nth(idx).unwrap_or(' ');
         let msg: String = match app.loading_state {
             LoadingState::Idle => String::new(),
-            LoadingState::IndexingDirectory => {
+            LoadingState::IngestingDirectory => {
                 if let Some((cur, tot)) = app.ingest_progress {
                     if tot > 0 {
-                        format!(" Indexing {}/{}...", cur, tot)
+                        format!(" Ingesting {}/{}...", cur, tot)
                     } else {
-                        " Indexing...".to_string()
+                        " Ingesting...".to_string()
                     }
                 } else {
-                    " Indexing...".to_string()
+                    " Ingesting...".to_string()
                 }
             }
             LoadingState::CatalogUpdating => " Updating catalog...".to_string(),
@@ -195,7 +195,7 @@ fn render_launcher_bottom(frame: &mut Frame, area: Rect, theme: ThemeMode) {
 
 #[cfg(feature = "catalog")]
 const OPEN_DIR_TITLE: &str =
-    " j/k move  Enter open  e edit path  i index  Esc cancel ";
+    " j/k move  Enter open  e edit path  i ingest  Esc cancel ";
 
 #[cfg(feature = "catalog")]
 const OPEN_DIR_TITLE_EDIT: &str =
@@ -273,15 +273,15 @@ fn render_nav(frame: &mut Frame, app: &App, area: Rect, theme: ThemeMode) {
         let c = SPINNER_FRAMES.chars().nth(idx).unwrap_or(' ');
         let msg: String = match app.loading_state {
             LoadingState::Idle => String::new(),
-            LoadingState::IndexingDirectory => {
+            LoadingState::IngestingDirectory => {
                 if let Some((cur, tot)) = app.ingest_progress {
                     if tot > 0 {
-                        format!(" Indexing {}/{}...", cur, tot)
+                        format!(" Ingesting {}/{}...", cur, tot)
                     } else {
-                        " Indexing...".to_string()
+                        " Ingesting...".to_string()
                     }
                 } else {
-                    " Indexing...".to_string()
+                    " Ingesting...".to_string()
                 }
             }
             LoadingState::CatalogUpdating => " Updating catalog...".to_string(),
@@ -456,7 +456,7 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
             empty_style,
         ));
         let line2 = ratatui::text::Line::from(ratatui::text::Span::styled(
-            "Press [i] to index directory, or from Python: pyref.io.ingest_beamtime(path)",
+            "Press [i] to ingest directory, or from Python: pyref.io.ingest_beamtime(path)",
             empty_style,
         ));
         let path_line = ratatui::text::Line::from(ratatui::text::Span::styled(
@@ -488,7 +488,7 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
         .split(left_area);
     render_sample_list(frame, app, left_chunks[0], theme);
     render_tag_list(frame, app, left_chunks[2], theme);
-    render_experiment_list(frame, app, left_chunks[4], theme);
+    render_scan_list(frame, app, left_chunks[4], theme);
 
     let right_border_style = if app.focus == Focus::Table || app.focus == Focus::SearchBar {
         super::theme::focus_border_style(theme)
@@ -512,8 +512,8 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let search_area = right_chunks[2];
 
     let (table_area, files_area) = if let Some(i) = app.expanded_table_row {
-        if i < app.filtered_groups.len() {
-            let row_count = app.filtered_groups[i].file_rows.len();
+        if let Some(g) = app.group_at_display_index(i) {
+            let row_count = g.file_rows.len();
             let list_h = (row_count as u16).min(10).saturating_add(3);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -542,7 +542,7 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let rects = super::app::BeamtimeBodyRects {
         sample_list: left_chunks[0],
         tag_list: left_chunks[2],
-        experiment_list: left_chunks[4],
+        scan_list: left_chunks[4],
         table: table_area,
     };
     app.last_body_rects = Some((area, rects));
@@ -606,12 +606,12 @@ fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
     frame.render_stateful_widget(list, area, &mut app.tag_state);
 }
 
-fn render_experiment_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+fn render_scan_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let items: Vec<ListItem> = app
-        .experiments
+        .scans
         .iter()
         .map(|(n, label)| {
-            let circle = if app.selected_experiments.contains(n) {
+            let circle = if app.selected_scans.contains(n) {
                 CIRCLE_FILLED
             } else {
                 CIRCLE_EMPTY
@@ -619,7 +619,7 @@ fn render_experiment_list(frame: &mut Frame, app: &mut App, area: Rect, theme: T
             ListItem::new(format!("{} {}", circle, label))
         })
         .collect();
-    let border_style = if app.focus == Focus::ExperimentList {
+            let border_style = if app.focus == Focus::ScanList {
         super::theme::focus_border_style(theme)
     } else {
         ratatui::style::Style::default()
@@ -628,7 +628,7 @@ fn render_experiment_list(frame: &mut Frame, app: &mut App, area: Rect, theme: T
         .block(Block::bordered().title(" Experiment [e] ").border_style(border_style))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
-    frame.render_stateful_widget(list, area, &mut app.experiment_state);
+    frame.render_stateful_widget(list, area, &mut app.scan_list_state);
 }
 
 #[cfg(feature = "catalog")]
@@ -653,10 +653,10 @@ fn render_expanded_file_list(
     app: &mut super::app::App,
 ) {
     let Some(i) = app.expanded_table_row else { return };
-    let file_rows = match app.filtered_groups.get(i) {
-        Some(g) => &g.file_rows,
-        None => return,
-    };
+    let file_count = app
+        .group_at_display_index(i)
+        .map(|g| g.file_rows.len())
+        .unwrap_or(0);
     let border_style = super::theme::header_style(theme);
     let block = Block::bordered()
         .title(" FITS files for reflectivity profile (j/k scroll, Enter collapse) ")
@@ -664,10 +664,14 @@ fn render_expanded_file_list(
     let inner = block.inner(area);
     let visible_rows = inner.height.saturating_sub(2) as usize;
     app.last_expanded_files_visible = visible_rows.max(1);
-    let max_offset = file_rows.len().saturating_sub(app.last_expanded_files_visible);
+    let max_offset = file_count.saturating_sub(app.last_expanded_files_visible);
     if app.expanded_files_scroll_offset > max_offset {
         app.expanded_files_scroll_offset = max_offset;
     }
+    let file_rows = match app.group_at_display_index(i) {
+        Some(g) => &g.file_rows,
+        None => return,
+    };
     let offset = app.expanded_files_scroll_offset;
     let start = offset.min(file_rows.len());
     let slice = file_rows.get(start..).unwrap_or(&[]);
@@ -687,7 +691,7 @@ fn render_expanded_file_list(
     let rows: Vec<Row> = visible_slice
         .iter()
         .map(|r| {
-            let scan = r.experiment_number.to_string();
+            let scan = r.scan_number.to_string();
             let frame = r.frame_number.to_string();
             let pol = pol_str_from_epu(r.epu_polarization);
             let energy = r
@@ -760,31 +764,47 @@ fn grouped_row_to_cells(r: &GroupedProfileRow) -> Vec<Cell<'_>> {
     ]
 }
 
+fn table_header_cell(label: &str, sort_col: Option<usize>, sort_ord: Option<std::cmp::Ordering>, col_index: usize) -> Cell<'static> {
+    use std::cmp::Ordering;
+    let suffix = if sort_col == Some(col_index) {
+        match sort_ord {
+            Some(Ordering::Less) => " \u{25B2}",
+            Some(Ordering::Greater) => " \u{25BC}",
+            Some(Ordering::Equal) | None => " \u{25A0}",
+        }
+    } else {
+        " \u{25A0}"
+    };
+    Cell::from(format!("{}{}", label, suffix))
+}
+
 fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let header_style = super::theme::header_style(theme);
+    let (sort_col, sort_ord) = (app.table_sort_column, app.table_sort_ordering);
     let header = Row::new(vec![
         Cell::from(" "),
-        Cell::from("Sample"),
-        Cell::from("Tag"),
-        Cell::from("Pol"),
-        Cell::from("Type"),
-        Cell::from("Emin"),
-        Cell::from("Emax"),
-        Cell::from("\u{03B8}min"),
-        Cell::from("\u{03B8}max"),
-        Cell::from("len"),
-        Cell::from("\u{0394}T"),
+        table_header_cell("Sample", sort_col, sort_ord, 0),
+        table_header_cell("Tag", sort_col, sort_ord, 1),
+        table_header_cell("Pol", sort_col, sort_ord, 2),
+        table_header_cell("Type", sort_col, sort_ord, 3),
+        table_header_cell("Emin", sort_col, sort_ord, 4),
+        table_header_cell("Emax", sort_col, sort_ord, 5),
+        table_header_cell("\u{03B8}min", sort_col, sort_ord, 6),
+        table_header_cell("\u{03B8}max", sort_col, sort_ord, 7),
+        table_header_cell("len", sort_col, sort_ord, 8),
+        table_header_cell("\u{0394}T", sort_col, sort_ord, 9),
     ])
     .style(header_style)
     .bottom_margin(1);
 
+    let order = app.compute_display_order();
     let expanded = app.expanded_table_row;
-    let rows: Vec<Row> = app
-        .filtered_groups
+    let rows: Vec<Row> = order
         .iter()
         .enumerate()
-        .map(|(i, r)| {
-            let caret = if expanded == Some(i) { "v" } else { ">" };
+        .map(|(disp_idx, &orig_idx)| {
+            let r = &app.filtered_groups[orig_idx];
+            let caret = if expanded == Some(disp_idx) { "v" } else { ">" };
             let mut cells = vec![Cell::from(caret)];
             cells.extend(grouped_row_to_cells(r));
             Row::new(cells)
@@ -808,7 +828,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
     if rows.is_empty() {
         let empty_style = super::theme::empty_message_style(theme);
         let msg = Paragraph::new(Line::from(ratatui::text::Span::styled(
-            "No reflectivity profiles match (sample/tag/experiment/search)",
+            "No reflectivity profiles match (sample/tag/scan/search)",
             empty_style,
         )));
         frame.render_widget(msg, area);

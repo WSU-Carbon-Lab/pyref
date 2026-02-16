@@ -1,5 +1,5 @@
 use crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::Backend;
 use std::io;
 use std::time::Duration;
@@ -178,21 +178,29 @@ fn handle_mouse(
             }
             return true;
         }
-        if rect_contains(rects.experiment_list, col, row) {
-            let idx = list_index_at(rects.experiment_list, row, app.experiments.len());
-            app.focus = super::app::Focus::ExperimentList;
-            app.experiment_state.select(Some(idx));
-            if let Some(&(num, _)) = app.experiments.get(idx) {
-                if app.selected_experiments.contains(&num) {
-                    app.selected_experiments.remove(&num);
+        if rect_contains(rects.scan_list, col, row) {
+            let idx = list_index_at(rects.scan_list, row, app.scans.len());
+            app.focus = super::app::Focus::ScanList;
+            app.scan_list_state.select(Some(idx));
+            if let Some(&(num, _)) = app.scans.get(idx) {
+                if app.selected_scans.contains(&num) {
+                    app.selected_scans.remove(&num);
                 } else {
-                    app.selected_experiments.insert(num);
+                    app.selected_scans.insert(num);
                 }
                 app.refresh_filtered();
             }
             return true;
         }
         if rect_contains(rects.table, col, row) {
+            if row == rects.table.y {
+                if let Some(layout_col) = table_header_column_at(rects.table, col) {
+                    if layout_col >= 1 && layout_col <= 10 {
+                        app.cycle_table_sort(layout_col - 1);
+                        return true;
+                    }
+                }
+            }
             let idx = table_row_at(rects.table, row, app.filtered_groups.len());
             app.focus = super::app::Focus::Table;
             app.table_state.select(Some(idx));
@@ -227,6 +235,36 @@ fn table_row_at(rect: Rect, row: u16, len: usize) -> usize {
     }
     let idx = (row - data_y) as usize;
     idx.min(len.saturating_sub(1))
+}
+
+const TABLE_WIDTHS: [Constraint; 11] = [
+    Constraint::Length(2),
+    Constraint::Percentage(14),
+    Constraint::Min(3),
+    Constraint::Min(3),
+    Constraint::Min(3),
+    Constraint::Percentage(8),
+    Constraint::Percentage(8),
+    Constraint::Percentage(8),
+    Constraint::Percentage(8),
+    Constraint::Length(6),
+    Constraint::Percentage(10),
+];
+
+fn table_header_column_at(rect: Rect, col: u16) -> Option<usize> {
+    if col < rect.x || col >= rect.x + rect.width {
+        return None;
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(TABLE_WIDTHS)
+        .split(rect);
+    for (i, r) in chunks.iter().enumerate() {
+        if col >= r.x && col < r.x + r.width {
+            return Some(i);
+        }
+    }
+    None
 }
 
 pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
@@ -274,11 +312,11 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         }
         if let Some(ref e) = app.app_error {
             #[cfg(feature = "catalog")]
-            if action == Action::IndexDirectory
-                && matches!(e.kind, super::error::TuiErrorKind::IndexFailed)
+            if action == Action::IngestDirectory
+                && matches!(e.kind, super::error::TuiErrorKind::IngestFailed)
             {
                 app.clear_app_error();
-                app.start_indexing();
+                app.start_ingest();
                 return false;
             }
         }
@@ -358,7 +396,7 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         Action::FocusPrev => app.focus_prev(),
         Action::FocusSample => app.focus_sample(),
         Action::FocusTag => app.focus_tag(),
-        Action::FocusExperiment => app.focus_experiment(),
+        Action::FocusScan => app.focus_scan(),
         Action::FocusBrowser => app.focus_browser(),
         Action::MoveDown => app.list_down(),
         Action::MoveUp => app.list_up(),
@@ -368,7 +406,7 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         Action::Cancel => {}
         Action::Rename => app.set_mode_rename(),
         Action::Retag => app.set_mode_retag(),
-        Action::IndexDirectory => app.start_indexing(),
+        Action::IngestDirectory => app.start_ingest(),
         Action::NavUp => app.nav_up(),
         Action::NavBack => app.nav_back(),
         Action::NavFwd => app.nav_fwd(),
@@ -377,7 +415,7 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.focus,
                 super::app::Focus::SampleList
                     | super::app::Focus::TagList
-                    | super::app::Focus::ExperimentList
+                    | super::app::Focus::ScanList
             ) {
                 app.toggle_filter();
             } else if app.focus == super::app::Focus::Table {

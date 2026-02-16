@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS files (
     file_name TEXT NOT NULL,
     sample_name TEXT NOT NULL,
     tag TEXT,
-    experiment_number INTEGER NOT NULL,
+    scan_number INTEGER NOT NULL,
     frame_number INTEGER NOT NULL,
     "DATE" TEXT,
     "Beamline Energy" REAL,
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS files (
 const FILES_INDEX_MTIME: &str = "CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime)";
 const FILES_INDEX_SAMPLE: &str = "CREATE INDEX IF NOT EXISTS idx_files_sample_name ON files(sample_name)";
 const FILES_INDEX_TAG: &str = "CREATE INDEX IF NOT EXISTS idx_files_tag ON files(tag)";
-const FILES_INDEX_EXP: &str = "CREATE INDEX IF NOT EXISTS idx_files_experiment_number ON files(experiment_number)";
+const FILES_INDEX_SCAN: &str = "CREATE INDEX IF NOT EXISTS idx_files_scan_number ON files(scan_number)";
 
 const OVERRIDES_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS overrides (
@@ -143,9 +143,22 @@ pub fn open_or_create_db(beamtime_dir: &Path) -> Result<Connection> {
     conn.execute_batch(FILES_INDEX_MTIME)?;
     conn.execute_batch(FILES_INDEX_SAMPLE)?;
     conn.execute_batch(FILES_INDEX_TAG)?;
-    conn.execute_batch(FILES_INDEX_EXP)?;
+    conn.execute_batch(FILES_INDEX_SCAN)?;
     conn.execute_batch(OVERRIDES_TABLE)?;
+    migrate_experiment_number_to_scan_number(&conn)?;
     Ok(conn)
+}
+
+fn migrate_experiment_number_to_scan_number(conn: &Connection) -> Result<()> {
+    let has_old: bool = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('files') WHERE name = 'experiment_number'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_old {
+        conn.execute("ALTER TABLE files RENAME COLUMN experiment_number TO scan_number", [])?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

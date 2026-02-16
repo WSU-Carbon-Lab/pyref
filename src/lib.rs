@@ -365,9 +365,9 @@ mod extension {
                 f.tag = Some(v.extract::<String>()?);
             }
         }
-        if let Some(v) = dict.get_item("experiment_numbers")? {
+        if let Some(v) = dict.get_item("scan_numbers")? {
             if !v.is_none() {
-                f.experiment_numbers = Some(v.extract::<Vec<i64>>()?);
+                f.scan_numbers = Some(v.extract::<Vec<i64>>()?);
             }
         }
         if let Some(v) = dict.get_item("energy_min")? {

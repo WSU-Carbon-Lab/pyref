@@ -113,7 +113,7 @@ fn upsert_files_batch(
     let file_name = get_str("file_name")?;
     let sample_name = get_str("sample_name")?;
     let tag = get_str("tag")?;
-    let experiment_number = get_i64("experiment_number")?;
+    let scan_number = get_i64("scan_number")?;
     let frame_number = get_i64("frame_number")?;
     let date = get_str("DATE")?;
     let beamline_energy = get_f64("Beamline Energy")?;
@@ -131,7 +131,7 @@ fn upsert_files_batch(
         r#"
         INSERT OR REPLACE INTO files (
             path, mtime, file_path, data_offset, naxis1, naxis2, bitpix, bzero, data_size,
-            file_name, sample_name, tag, experiment_number, frame_number,
+            file_name, sample_name, tag, scan_number, frame_number,
             "DATE", "Beamline Energy", "Sample Theta", "CCD Theta", "Higher Order Suppressor",
             "EPU Polarization", EXPOSURE, "Sample Name", "Scan ID", Lambda, Q
         ) VALUES (
@@ -156,7 +156,7 @@ fn upsert_files_batch(
             file_name.get(i).cloned().unwrap_or_default(),
             sample_name.get(i).cloned().unwrap_or_default(),
             tag.get(i).clone(),
-            experiment_number.get(i).copied().flatten().unwrap_or(0),
+            scan_number.get(i).copied().flatten().unwrap_or(0),
             frame_number.get(i).copied().flatten().unwrap_or(0),
             date.get(i).clone(),
             beamline_energy.get(i).copied().flatten(),

@@ -36,7 +36,7 @@ def test_parse_fits_stem(stem: str, expected: ParsedFitsName) -> None:
     assert got is not None
     assert got.sample_name == expected.sample_name
     assert got.tag == expected.tag
-    assert got.experiment_number == expected.experiment_number
+    assert got.scan_number == expected.scan_number
     assert got.frame_number == expected.frame_number
     assert got.file_stem == expected.file_stem
 
@@ -69,7 +69,7 @@ def test_build_catalog_names_only() -> None:
     catalog = build_catalog(data_dir, headers=None, recursive=False)
     assert isinstance(catalog, pl.DataFrame)
     assert not catalog.is_empty()
-    for col in ("path", "file_stem", "sample_name", "tag", "experiment_number", "frame_number"):
+    for col in ("path", "file_stem", "sample_name", "tag", "scan_number", "frame_number"):
         assert col in catalog.columns
     sample_names = catalog.get_column("sample_name").unique().to_list()
     assert "monlayerjune" in sample_names or len(sample_names) >= 1
@@ -96,7 +96,7 @@ def test_scan_view() -> None:
     view = scan_view(catalog)
     assert "file_count" in view.columns
     assert "sample_name" in view.columns
-    assert "experiment_number" in view.columns
+    assert "scan_number" in view.columns
     assert view.height >= 1
     assert view.get_column("file_count").sum() == catalog.height
 
@@ -127,11 +127,11 @@ def test_filter_catalog_paths() -> None:
         pytest.skip("No FITS files")
     all_paths = filter_catalog_paths(catalog)
     assert len(all_paths) == catalog.height
-    exp_unique = catalog.get_column("experiment_number").unique().to_list()
+    exp_unique = catalog.get_column("scan_number").unique().to_list()
     if exp_unique:
         one_exp = exp_unique[0]
-        filtered = filter_catalog_paths(catalog, experiment_number=one_exp)
-        expected_count = catalog.filter(pl.col("experiment_number") == one_exp).height
+        filtered = filter_catalog_paths(catalog, scan_number=one_exp)
+        expected_count = catalog.filter(pl.col("scan_number") == one_exp).height
         assert len(filtered) == expected_count
     sample_unique = catalog.get_column("sample_name").unique().to_list()
     if sample_unique:
@@ -156,5 +156,5 @@ def test_read_fits_meta_has_parsed_columns() -> None:
         parsed = parse_fits_stem(stem)
         assert parsed is not None
         assert meta["sample_name"][0] == parsed.sample_name
-        assert meta["experiment_number"][0] == parsed.experiment_number
+        assert meta["scan_number"][0] == parsed.scan_number
         assert meta["frame_number"][0] == parsed.frame_number

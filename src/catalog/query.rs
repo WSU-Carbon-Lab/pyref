@@ -9,7 +9,7 @@ use std::path::Path;
 pub struct CatalogFilter {
     pub sample_name: Option<String>,
     pub tag: Option<String>,
-    pub experiment_numbers: Option<Vec<i64>>,
+    pub scan_numbers: Option<Vec<i64>>,
     pub energy_min: Option<f64>,
     pub energy_max: Option<f64>,
 }
@@ -17,7 +17,7 @@ pub struct CatalogFilter {
 pub struct BeamtimeEntries {
     pub samples: Vec<String>,
     pub tags: Vec<String>,
-    pub experiments: Vec<(i64, String)>,
+    pub scans: Vec<(i64, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub struct FileRow {
     pub file_path: String,
     pub sample_name: String,
     pub tag: Option<String>,
-    pub experiment_number: i64,
+    pub scan_number: i64,
     pub frame_number: i64,
     pub beamline_energy: Option<f64>,
     pub sample_theta: Option<f64>,
@@ -61,10 +61,10 @@ pub fn list_beamtime_entries(db_path: &Path) -> Result<BeamtimeEntries> {
         .query_map([], |r| r.get::<_, String>(0))?
         .filter_map(|r| r.ok())
         .collect();
-    let experiments: Vec<(i64, String)> = conn
+    let scans: Vec<(i64, String)> = conn
         .prepare(
-            r#"SELECT DISTINCT f.experiment_number FROM files f
-               WHERE f.experiment_number != 0 ORDER BY f.experiment_number"#,
+            r#"SELECT DISTINCT f.scan_number FROM files f
+               WHERE f.scan_number != 0 ORDER BY f.scan_number"#,
         )?
         .query_map([], |r| {
             let n: i64 = r.get(0)?;
@@ -77,7 +77,7 @@ pub fn list_beamtime_entries(db_path: &Path) -> Result<BeamtimeEntries> {
     Ok(BeamtimeEntries {
         samples,
         tags,
-        experiments,
+        scans,
     })
 }
 
@@ -93,11 +93,11 @@ pub fn query_files(
         r#"SELECT f.file_path,
             COALESCE(o.sample_name, f.sample_name),
             COALESCE(o.tag, f.tag),
-            f.experiment_number, f.frame_number,
+            f.scan_number, f.frame_number,
             f."Beamline Energy", f."Sample Theta", f."EPU Polarization", f.Q,
             f."DATE"
             FROM files f LEFT JOIN overrides o ON f.path = o.path{}
-            ORDER BY f.experiment_number, f.frame_number"#,
+            ORDER BY f.scan_number, f.frame_number"#,
         where_clause
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -106,7 +106,7 @@ pub fn query_files(
             file_path: row.get(0)?,
             sample_name: row.get(1)?,
             tag: row.get(2)?,
-            experiment_number: row.get(3)?,
+            scan_number: row.get(3)?,
             frame_number: row.get(4)?,
             beamline_energy: row.get(5)?,
             sample_theta: row.get(6)?,
@@ -130,7 +130,7 @@ SELECT
     f.file_name,
     COALESCE(o.sample_name, f.sample_name) AS sample_name,
     COALESCE(o.tag, f.tag) AS tag,
-    f.experiment_number, f.frame_number,
+    f.scan_number, f.frame_number,
     f."DATE", f."Beamline Energy", f."Sample Theta", f."CCD Theta",
     f."Higher Order Suppressor", f."EPU Polarization", f.EXPOSURE,
     f."Sample Name", f."Scan ID", f.Lambda, f.Q
@@ -150,12 +150,12 @@ fn build_where_and_params(filter: &CatalogFilter) -> (String, Vec<Box<dyn rusqli
         conditions.push(format!("COALESCE(o.tag, f.tag) = ?{}", idx));
         params.push(Box::new(t.clone()));
     }
-    if let Some(ref exp) = filter.experiment_numbers {
-        if !exp.is_empty() {
-            let placeholders: Vec<String> = (0..exp.len()).map(|i| format!("?{}", params.len() + 1 + i)).collect();
-            conditions.push(format!("f.experiment_number IN ({})", placeholders.join(",")));
-            for e in exp {
-                params.push(Box::new(*e));
+    if let Some(ref scan_nos) = filter.scan_numbers {
+        if !scan_nos.is_empty() {
+            let placeholders: Vec<String> = (0..scan_nos.len()).map(|i| format!("?{}", params.len() + 1 + i)).collect();
+            conditions.push(format!("f.scan_number IN ({})", placeholders.join(",")));
+            for s in scan_nos {
+                params.push(Box::new(*s));
             }
         }
     }
@@ -185,7 +185,7 @@ pub fn scan_from_catalog(
     let (where_clause, params) = filter
         .map(|f| build_where_and_params(f))
         .unwrap_or_else(|| (String::new(), Vec::new()));
-    let order_clause = " ORDER BY f.experiment_number, f.frame_number";
+    let order_clause = " ORDER BY f.scan_number, f.frame_number";
     let sql = format!("{}{}{}", RESOLVED_QUERY, where_clause, order_clause);
 
     let mut stmt = conn.prepare(&sql)?;
@@ -233,7 +233,7 @@ pub fn scan_from_catalog(
     let mut file_name = Vec::new();
     let mut sample_name = Vec::new();
     let mut tag = Vec::new();
-    let mut experiment_number = Vec::new();
+    let mut scan_number = Vec::new();
     let mut frame_number = Vec::new();
     let mut date = Vec::new();
     let mut beamline_energy = Vec::new();
@@ -259,7 +259,7 @@ pub fn scan_from_catalog(
         file_name.push(r.7);
         sample_name.push(r.8);
         tag.push(r.9);
-        experiment_number.push(r.10);
+        scan_number.push(r.10);
         frame_number.push(r.11);
         date.push(r.12);
         beamline_energy.push(r.13);
@@ -285,7 +285,7 @@ pub fn scan_from_catalog(
         Series::new("file_name".into(), file_name),
         Series::new("sample_name".into(), sample_name),
         Series::new("tag".into(), tag),
-        Series::new("experiment_number".into(), experiment_number),
+        Series::new("scan_number".into(), scan_number),
         Series::new("frame_number".into(), frame_number),
         Series::new("DATE".into(), date),
         Series::new("Beamline Energy".into(), beamline_energy),
@@ -356,7 +356,7 @@ pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
 fn scan_from_catalog_columns() -> Vec<&'static str> {
     vec![
         "file_path", "data_offset", "naxis1", "naxis2", "bitpix", "bzero", "data_size",
-        "file_name", "sample_name", "tag", "experiment_number", "frame_number",
+        "file_name", "sample_name", "tag", "scan_number", "frame_number",
         "DATE", "Beamline Energy", "Sample Theta", "CCD Theta", "Higher Order Suppressor",
         "EPU Polarization", "EXPOSURE", "Sample Name", "Scan ID", "Lambda", "Q",
     ]
@@ -396,7 +396,7 @@ mod tests {
         let e = list_beamtime_entries(&db_path).unwrap();
         assert!(e.samples.is_empty());
         assert!(e.tags.is_empty());
-        assert!(e.experiments.is_empty());
+        assert!(e.scans.is_empty());
     }
 }
 

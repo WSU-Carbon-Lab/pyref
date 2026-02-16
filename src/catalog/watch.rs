@@ -73,13 +73,19 @@ pub fn run_catalog_watcher(
         };
         if debouncer
             .watcher()
-            .watch(&beamtime_dir, notify_debouncer_mini::notify::RecursiveMode::Recursive)
+            .watch(
+                &beamtime_dir,
+                notify_debouncer_mini::notify::RecursiveMode::Recursive,
+            )
             .is_err()
         {
             return;
         }
         let keys = if header_items.is_empty() {
-            DEFAULT_HEADER_KEYS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+            DEFAULT_HEADER_KEYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
         } else {
             header_items
         };

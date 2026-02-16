@@ -286,7 +286,7 @@ uv pip install -e .
 A terminal UI for browsing experiment datasets (sample/tag/experiment selectors and reflectivity profile table). Build and run with:
 
 ```bash
-cargo run --bin pyref-tui --features tui
+cargo browser
 ```
 
 Config is stored at `$PYREF_TUI_CONFIG` if set, otherwise `$HOME/.config/pyref/tui.toml`. Use `q` to quit, Tab to move focus, and j/k or arrows to move within lists and the table.

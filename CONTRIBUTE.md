@@ -19,3 +19,8 @@ Terms used for FITS I/O, catalog, and experiment data.
 
 - **experiment**  
   A beamtime directory (root containing FITS and optionally `.pyref_catalog.db`), or a logical group of runs. "Experiment number" in metadata (e.g. Scan ID) identifies a single scan (measurement run), not the whole beamtime.
+
+## Rust
+
+- Library code must not use `unwrap()` or `expect()`; use `Result` and `?`. Run `cargo clippy --lib` and `cargo fmt`.
+- Public functions, modules, and files should have docstrings (e.g. `///` and `//!`).

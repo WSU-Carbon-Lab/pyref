@@ -7,7 +7,9 @@ mod query;
 #[cfg(feature = "watch")]
 mod watch;
 
-pub use beamtime_index::{ensure_beamtime_index_dir, list_beamtimes, open_beamtime_index_db, register_beamtime};
+pub use beamtime_index::{
+    ensure_beamtime_index_dir, list_beamtimes, open_beamtime_index_db, register_beamtime,
+};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -33,6 +35,28 @@ pub enum CatalogError {
     Sqlite(#[from] rusqlite::Error),
     #[error("{0}")]
     Validation(String),
+    #[error("not found: {path_or_id} (operation: {operation})")]
+    NotFound {
+        path_or_id: String,
+        operation: String,
+    },
+    #[error("constraint violation: {message}")]
+    ConstraintViolation { message: String },
+    #[error("fits read failed: {0}")]
+    FitsReadFailed(#[from] crate::errors::FitsError),
+}
+
+impl CatalogError {
+    pub fn retryable(&self) -> bool {
+        match self {
+            CatalogError::FitsReadFailed(e) => e.retryable == crate::errors::Retryable::Temporary,
+            CatalogError::Io(_) => true,
+            CatalogError::Sqlite(_) => true,
+            CatalogError::Validation(_)
+            | CatalogError::NotFound { .. }
+            | CatalogError::ConstraintViolation { .. } => false,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
@@ -71,9 +95,11 @@ CREATE TABLE IF NOT EXISTS files (
 )"#;
 
 const FILES_INDEX_MTIME: &str = "CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime)";
-const FILES_INDEX_SAMPLE: &str = "CREATE INDEX IF NOT EXISTS idx_files_sample_name ON files(sample_name)";
+const FILES_INDEX_SAMPLE: &str =
+    "CREATE INDEX IF NOT EXISTS idx_files_sample_name ON files(sample_name)";
 const FILES_INDEX_TAG: &str = "CREATE INDEX IF NOT EXISTS idx_files_tag ON files(tag)";
-const FILES_INDEX_SCAN: &str = "CREATE INDEX IF NOT EXISTS idx_files_scan_number ON files(scan_number)";
+const FILES_INDEX_SCAN: &str =
+    "CREATE INDEX IF NOT EXISTS idx_files_scan_number ON files(scan_number)";
 
 const OVERRIDES_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS overrides (
@@ -107,14 +133,11 @@ pub fn discover_fits_paths(beamtime_dir: &Path) -> Result<Vec<(PathBuf, i64)>> {
         if path.extension().and_then(|e| e.to_str()) != Some("fits") {
             continue;
         }
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if is_skippable_stem(stem) {
             continue;
         }
-        let path_buf = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path_buf = path.canonicalize()?;
         let mtime = std::fs::metadata(path)
             .ok()
             .and_then(|m| m.modified().ok())
@@ -156,7 +179,10 @@ fn migrate_experiment_number_to_scan_number(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if has_old {
-        conn.execute("ALTER TABLE files RENAME COLUMN experiment_number TO scan_number", [])?;
+        conn.execute(
+            "ALTER TABLE files RENAME COLUMN experiment_number TO scan_number",
+            [],
+        )?;
     }
     Ok(())
 }

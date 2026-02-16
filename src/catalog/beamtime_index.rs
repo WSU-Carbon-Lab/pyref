@@ -37,7 +37,8 @@ pub fn open_beamtime_index_db() -> Result<Connection> {
 
 pub fn list_beamtimes() -> Result<Vec<(PathBuf, i64)>> {
     let conn = open_beamtime_index_db()?;
-    let mut stmt = conn.prepare("SELECT path, last_indexed_at FROM beamtimes ORDER BY last_indexed_at DESC")?;
+    let mut stmt =
+        conn.prepare("SELECT path, last_indexed_at FROM beamtimes ORDER BY last_indexed_at DESC")?;
     let rows = stmt.query_map([], |r| {
         Ok((PathBuf::from(r.get::<_, String>(0)?), r.get::<_, i64>(1)?))
     })?;
@@ -47,7 +48,11 @@ pub fn list_beamtimes() -> Result<Vec<(PathBuf, i64)>> {
 
 pub fn register_beamtime(path: &Path, file_count: Option<u32>) -> Result<()> {
     let canonical = path.canonicalize().map_err(|e| {
-        CatalogError::Validation(format!("path cannot be canonicalized: {}: {}", path.display(), e))
+        CatalogError::Validation(format!(
+            "path cannot be canonicalized: {}: {}",
+            path.display(),
+            e
+        ))
     })?;
     let path_str = canonical.to_string_lossy().into_owned();
     let now = std::time::SystemTime::now()

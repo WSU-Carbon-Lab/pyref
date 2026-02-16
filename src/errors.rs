@@ -87,7 +87,11 @@ impl FitsError {
 
 impl fmt::Display for FitsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[FitsError] kind={:?} retryable={:?}", self.kind, self.retryable)?;
+        write!(
+            f,
+            "[FitsError] kind={:?} retryable={:?}",
+            self.kind, self.retryable
+        )?;
         for (k, v) in &self.context {
             write!(f, " {}={}", k, v)?;
         }
@@ -101,7 +105,9 @@ impl fmt::Display for FitsError {
 
 impl Error for FitsError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_ref().map(|b| b.as_ref() as &(dyn Error + 'static))
+        self.source
+            .as_ref()
+            .map(|b| b.as_ref() as &(dyn Error + 'static))
     }
 }
 

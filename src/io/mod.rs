@@ -1,5 +1,8 @@
 pub mod blur;
 pub mod image_mmap;
+pub mod options;
+pub mod schema;
+pub mod source;
 
 use ndarray::{Array2, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use polars::prelude::*;
@@ -53,28 +56,32 @@ impl ImageInfo {
             .i64()
             .map_err(FitsError::from)?
             .get(row_index)
-            .ok_or_else(|| FitsError::validation("data_offset row missing or null"))? as u64;
+            .ok_or_else(|| FitsError::validation("data_offset row missing or null"))?
+            as u64;
         let naxis1: usize = df
             .column("naxis1")
             .map_err(FitsError::from)?
             .i64()
             .map_err(FitsError::from)?
             .get(row_index)
-            .ok_or_else(|| FitsError::validation("naxis1 row missing or null"))? as usize;
+            .ok_or_else(|| FitsError::validation("naxis1 row missing or null"))?
+            as usize;
         let naxis2: usize = df
             .column("naxis2")
             .map_err(FitsError::from)?
             .i64()
             .map_err(FitsError::from)?
             .get(row_index)
-            .ok_or_else(|| FitsError::validation("naxis2 row missing or null"))? as usize;
+            .ok_or_else(|| FitsError::validation("naxis2 row missing or null"))?
+            as usize;
         let bitpix: i32 = df
             .column("bitpix")
             .map_err(FitsError::from)?
             .i64()
             .map_err(FitsError::from)?
             .get(row_index)
-            .ok_or_else(|| FitsError::validation("bitpix row missing or null"))? as i32;
+            .ok_or_else(|| FitsError::validation("bitpix row missing or null"))?
+            as i32;
         let bzero: i64 = df
             .column("bzero")
             .map_err(FitsError::from)?
@@ -136,10 +143,7 @@ pub fn build_fits_stem(
     match tag {
         Some(t) => format!(
             "{}_{}_{:05}-{:05}",
-            sample_name,
-            t,
-            scan_number,
-            frame_number
+            sample_name, t, scan_number, frame_number
         ),
         None => format!("{}_{:05}-{:05}", sample_name, scan_number, frame_number),
     }
@@ -208,26 +212,26 @@ pub fn add_calculated_domains(mut lzf: LazyFrame) -> DataFrame {
                     .and(col("Lambda").is_not_null()),
             )
             .then(as_struct(vec![col("Sample Theta"), col("Lambda")]).map(
-            move |s| {
-                let struc = s.struct_()?;
-                let th_series = struc.field_by_name("Sample Theta")?;
-                let theta = th_series.f64()?;
-                let lam_series = struc.field_by_name("Lambda")?;
-                let lam = lam_series.f64()?;
+                move |s| {
+                    let struc = s.struct_()?;
+                    let th_series = struc.field_by_name("Sample Theta")?;
+                    let theta = th_series.f64()?;
+                    let lam_series = struc.field_by_name("Lambda")?;
+                    let lam = lam_series.f64()?;
 
-                let out: Float64Chunked = theta
-                    .into_iter()
-                    .zip(lam.iter())
-                    .map(|(theta, lam)| match (theta, lam) {
-                        (Some(theta), Some(lam)) => Some(q(lam, theta)),
-                        _ => None,
-                    })
-                    .collect();
+                    let out: Float64Chunked = theta
+                        .into_iter()
+                        .zip(lam.iter())
+                        .map(|(theta, lam)| match (theta, lam) {
+                            (Some(theta), Some(lam)) => Some(q(lam, theta)),
+                            _ => None,
+                        })
+                        .collect();
 
-                Ok(Some(out.into_column()))
-            },
-            GetOutput::from_type(DataType::Float64),
-        ))
+                    Ok(Some(out.into_column()))
+                },
+                GetOutput::from_type(DataType::Float64),
+            ))
             .otherwise(lit(NULL))
             .alias("Q"),
         );
@@ -244,7 +248,7 @@ pub fn subtract_background(
     if rows < 11 || cols < 41 {
         return data.to_owned();
     }
-    let view = data.slice(ndarray::s![5..-5, 5..-5]);
+    let view = data.slice(ndarray::s![5..(rows - 5), 5..(cols - 5)]);
     let rows = view.len_of(Axis(0));
     let cols = view.len_of(Axis(1));
 
@@ -289,7 +293,11 @@ pub fn subtract_background_edges(
     }
     let mut result = data.clone();
     for r in 0..rows {
-        let left_sum: i64 = result.slice(ndarray::s![r, ..bg_cols]).iter().copied().sum();
+        let left_sum: i64 = result
+            .slice(ndarray::s![r, ..bg_cols])
+            .iter()
+            .copied()
+            .sum();
         let left_mean = left_sum / bg_cols as i64;
         let right_sum: i64 = result
             .slice(ndarray::s![r, (cols - bg_cols)..])
@@ -323,52 +331,49 @@ pub fn subtract_background_edges(
     result
 }
 
-pub fn process_metadata(
-    hdu: &PrimaryHdu,
-    keys: &[String],
-) -> Result<Vec<Column>, FitsError> {
+pub fn process_metadata(hdu: &PrimaryHdu, keys: &[String]) -> Result<Vec<Column>, FitsError> {
     if keys.is_empty() {
         return Ok(Vec::new());
     }
     let mut columns = Vec::new();
 
-        for key in keys {
-            if key == "Beamline Energy" {
-                if let Some(card) = hdu.header.get_card(key) {
-                    if let Some(val) = card.value.as_float() {
-                        columns.push(Column::new(key.into(), &[val]));
-                        continue;
-                    }
-                }
-
-                if let Some(card) = hdu.header.get_card("Beamline Energy Goal") {
-                    if let Some(val) = card.value.as_float() {
-                        columns.push(Column::new(key.into(), &[val]));
-                        continue;
-                    }
-                }
-
-                columns.push(Column::new(key.into(), &[0.0]));
-                continue;
-            }
-
-            if key == "DATE" || key == "Sample Name" {
-                if let Some(card) = hdu.header.get_card(key) {
-                    let val = card.value.to_string();
+    for key in keys {
+        if key == "Beamline Energy" {
+            if let Some(card) = hdu.header.get_card(key) {
+                if let Some(val) = card.value.as_float() {
                     columns.push(Column::new(key.into(), &[val]));
                     continue;
                 }
-                columns.push(Column::new(key.into(), &["".to_string()]));
-                continue;
             }
 
-            let val = match hdu.header.get_card(key) {
-                Some(card) => card.value.as_float().unwrap_or(1.0),
-                None => 0.0,
-            };
+            if let Some(card) = hdu.header.get_card("Beamline Energy Goal") {
+                if let Some(val) = card.value.as_float() {
+                    columns.push(Column::new(key.into(), &[val]));
+                    continue;
+                }
+            }
 
-            columns.push(Column::new(key.into(), &[val]));
+            columns.push(Column::new(key.into(), &[0.0]));
+            continue;
         }
+
+        if key == "DATE" || key == "Sample Name" {
+            if let Some(card) = hdu.header.get_card(key) {
+                let val = card.value.to_string();
+                columns.push(Column::new(key.into(), &[val]));
+                continue;
+            }
+            columns.push(Column::new(key.into(), &["".to_string()]));
+            continue;
+        }
+
+        let val = match hdu.header.get_card(key) {
+            Some(card) => card.value.as_float().unwrap_or(1.0),
+            None => 0.0,
+        };
+
+        columns.push(Column::new(key.into(), &[val]));
+    }
 
     Ok(columns)
 }
@@ -410,16 +415,13 @@ pub fn build_headers_only_columns(
     let data_size = fs::metadata(&path)
         .map(|metadata| metadata.len())
         .unwrap_or(0) as i64;
-    columns.push(Column::new(
-        "data_size".into(),
-        vec![data_size],
-    ));
+    columns.push(Column::new("data_size".into(), vec![data_size]));
     columns.push(Column::new("bzero".into(), vec![bzero]));
     Ok(columns)
 }
 
 pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
-    let file_name = path.file_stem().unwrap().to_str().unwrap_or("");
+    let file_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let mut columns = vec![Column::new("file_name".into(), vec![file_name.to_string()])];
     match parse_fits_stem(file_name) {
         Some(p) => {
@@ -497,12 +499,14 @@ mod tests {
 
     #[test]
     fn test_subtract_background_edges() {
-        let data = Array2::from_shape_vec((4, 6), vec![
-            10, 10, 20, 20, 10, 10,
-            10, 10, 20, 20, 10, 10,
-            10, 10, 20, 20, 10, 10,
-            10, 10, 20, 20, 10, 10,
-        ]).unwrap();
+        let data = Array2::from_shape_vec(
+            (4, 6),
+            vec![
+                10, 10, 20, 20, 10, 10, 10, 10, 20, 20, 10, 10, 10, 10, 20, 20, 10, 10, 10, 10, 20,
+                20, 10, 10,
+            ],
+        )
+        .unwrap();
         let result = subtract_background_edges(&data, 1, 2);
         assert_eq!(result.shape(), data.shape());
         assert!(result[[0, 0]] <= 10);
@@ -511,7 +515,11 @@ mod tests {
 
     #[test]
     fn test_subtract_background_edges_small_image() {
-        let data = Array2::from_shape_vec((4, 4), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]).unwrap();
+        let data = Array2::from_shape_vec(
+            (4, 4),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        )
+        .unwrap();
         let result = subtract_background_edges(&data, 5, 5);
         assert_eq!(result.shape(), data.shape());
         for (a, b) in data.iter().zip(result.iter()) {

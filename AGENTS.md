@@ -5,7 +5,7 @@
 - **Install and run tests**: `uv sync` then `uv run pytest tests/test_rust_fits_io.py` (or `uv run pytest` for full suite). `uv sync` builds the Rust extension via the maturin build backend and installs the project.
 - **Build wheel only**: `uv run --group dev maturin build`. Output: `target/wheels/pyref-*.whl`.
 - **Rust**: Use `cargo build` only for checking compilation of non-cdylib targets (e.g. bins). The Python extension is built by maturin so that linker flags for the extension are correct. Do not rely on `cargo test` for the main crate; it links the cdylib into the test binary and fails with unresolved Python symbols. Rust unit tests live in `src/` (e.g. `src/fits/header.rs`); integration tests in `tests/integration_test.rs` are `#[ignore]` (require Python runtime; validate via pytest instead).
-- **TUI binary**: The lib is built with default feature `extension-module` (pyo3/pyo3-polars). Building the standalone TUI must not link Python. Use: `cargo run --bin pyref-tui --no-default-features --features tui`. The `--no-default-features` disables `extension-module`, so the lib is built without pyo3 and the binary links successfully. Running the TUI requires a real TTY (interactive terminal); in a headless or IDE run context you may see "Device not configured".
+- **TUI binary**: The lib is built with default feature `extension-module` (pyo3/pyo3-polars). Building the standalone TUI must not link Python. Use: `cargo browser` (alias) or `cargo run --bin browser --no-default-features --features tui` (same for `--bin pyref-tui`). The `--no-default-features` disables `extension-module`, so the lib is built without pyo3 and the binary links successfully. Running the TUI requires a real TTY (interactive terminal); in a headless or IDE run context you may see "Device not configured".
 
 ## Overview
 
@@ -34,10 +34,18 @@ The Rust backend (`src/loader.rs`) handles parallel reading of FITS files:
 - Adds calculated columns (Q-vector from energy and theta)
 
 Key functions:
-- `read_experiment()`: Reads all FITS files in a directory
-- `read_experiment_pattern()`: Reads FITS files matching a pattern
-- `read_multiple_fits()`: Reads specific FITS files
-- `combine_dataframes_with_alignment()`: Merges DataFrames with schema alignment
+- `read_fits(source, options)`: High-level eager read. Resolves `source` (file, paths, dir, catalog) with `ResolvePreference`; returns one DataFrame from catalog or from disk.
+- `scan_fits(source, options)`: High-level lazy scan. Returns a LazyFrame from catalog (fast) or from disk; use when you want to filter/select before collect.
+- `read_fits_metadata_batch(paths, options)`: Canonical batch read (headers + optional calculated domains). Used by ingest and by `read_fits` when source is disk.
+- `read_experiment_headers_only()`, `read_multiple_fits_headers_only()`: Lower-level header-only reads.
+
+**Source and options (Polars-style API):**
+- `FitsSource`: enum `File(PathBuf)`, `Paths(Vec<PathBuf>)`, `Dir(PathBuf)`, `Catalog(PathBuf)`. Impl `From<PathBuf>`, `From<Vec<PathBuf>>`, `From<&Path>`.
+- `ResolvePreference`: `PreferCatalog`, `PreferDisk`, `FromCatalog`, `FromDisk` when both catalog and disk could satisfy the source.
+- `ReadFitsOptions` / `ScanFitsOptions`: `header_items`, `header_only`, `add_calculated_domains`, `schema`, `batch_size`, `resolve_preference`, and (for catalog) `catalog_filter`.
+- `FitsMetadataSchema`: canonical column names and optional Polars `Schema` for one FITS row; used by `scan_from_catalog` and batch read output.
+
+**Catalog hook:** When source is `Dir(path)` or `Catalog(path)` and `.pyref_catalog.db` exists, `read_fits`/`scan_fits` use it when preference is `FromCatalog` or `PreferCatalog`, otherwise discover and read from disk. All library code must pass `cargo clippy` with no unwrap/expect in non-test code; every public function and module has docstrings.
 
 #### FITS DataFrame Accessor (`df.fits`)
 

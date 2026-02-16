@@ -18,6 +18,11 @@ name = "pyref-tui"
 path = "src/bin/pyref_tui.rs"
 required-features = ["tui"]
 
+[[bin]]
+name = "browser"
+path = "src/bin/pyref_tui.rs"
+required-features = ["tui"]
+
 [features]
 default = ["extension-module", "catalog"]
 extension-module = ["dep:pyo3", "dep:pyo3-polars", "dep:numpy"]

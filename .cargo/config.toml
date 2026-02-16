@@ -1,0 +1,2 @@
+[alias]
+browser = "run --bin browser --no-default-features --features tui"

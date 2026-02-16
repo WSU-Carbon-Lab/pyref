@@ -4,9 +4,7 @@ use std::f32;
 const I64_CLAMP_MAX: i64 = 16_777_216;
 const I64_CLAMP_MIN: i64 = -16_777_216;
 
-pub fn i64_to_f32_array(
-    arr: &Array2<i64>,
-) -> Array2<f32> {
+pub fn i64_to_f32_array(arr: &Array2<i64>) -> Array2<f32> {
     let (h, w) = (arr.nrows(), arr.ncols());
     let mut out = Array2::zeros((h, w));
     for (a, b) in arr.iter().zip(out.iter_mut()) {
@@ -34,7 +32,8 @@ pub fn gaussian_blur_f32_copy(
     }
     let mut dst = src.to_vec();
     let src_img = BlurImage::borrow(src, width, height, FastBlurChannels::Plane);
-    let mut dst_img = BlurImageMut::borrow(dst.as_mut_slice(), width, height, FastBlurChannels::Plane);
+    let mut dst_img =
+        BlurImageMut::borrow(dst.as_mut_slice(), width, height, FastBlurChannels::Plane);
     let params = GaussianBlurParams::new_from_sigma(sigma);
     let edge = EdgeMode2D::new(EdgeMode::Clamp);
     libblur::gaussian_blur_f32(
@@ -60,7 +59,8 @@ mod tests {
         assert_eq!(out.shape(), &[2, 3]);
         assert_eq!(out[[0, 0]], 0.0);
         assert_eq!(out[[1, 2]], 5.0);
-        let big = Array2::from_shape_vec((1, 2), vec![I64_CLAMP_MAX + 1, I64_CLAMP_MIN - 1]).unwrap();
+        let big =
+            Array2::from_shape_vec((1, 2), vec![I64_CLAMP_MAX + 1, I64_CLAMP_MIN - 1]).unwrap();
         let out_big = i64_to_f32_array(&big);
         assert_eq!(out_big[[0, 0]], I64_CLAMP_MAX as f32);
         assert_eq!(out_big[[0, 1]], I64_CLAMP_MIN as f32);

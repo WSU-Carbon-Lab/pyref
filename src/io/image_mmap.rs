@@ -5,13 +5,15 @@ use memmap2::MmapOptions;
 use ndarray::{Array2, ArrayBase, Dim, OwnedRepr};
 use polars::prelude::*;
 
-use crate::errors::FitsError;
 use super::blur::{gaussian_blur_f32_copy, i64_to_f32_array};
 use super::{subtract_background, subtract_background_edges, ImageInfo};
+use crate::errors::FitsError;
 
 fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsError> {
     if info.bitpix != 16 {
-        return Err(FitsError::unsupported("Only BITPIX=16 image HDUs supported"));
+        return Err(FitsError::unsupported(
+            "Only BITPIX=16 image HDUs supported",
+        ));
     }
     let nelem = info.naxis1 * info.naxis2;
     let nbytes = nelem * 2;
@@ -37,7 +39,13 @@ fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsE
 pub fn materialize_image(
     path: &Path,
     info: &ImageInfo,
-) -> Result<(ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>, ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>), FitsError> {
+) -> Result<
+    (
+        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
+        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
+    ),
+    FitsError,
+> {
     let data = load_image_pixels(path, info)?;
     let subtracted = subtract_background(&data.clone().into_dyn());
     let subtracted_2d = subtracted
@@ -49,7 +57,13 @@ pub fn materialize_image(
 pub fn get_image_for_row(
     df: &DataFrame,
     row_index: usize,
-) -> Result<(ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>, ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>), FitsError> {
+) -> Result<
+    (
+        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
+        ArrayBase<OwnedRepr<i64>, Dim<[usize; 2]>>,
+    ),
+    FitsError,
+> {
     let info = ImageInfo::from_dataframe_row(df, row_index)?;
     materialize_image(info.path.as_path(), &info)
 }
@@ -78,8 +92,7 @@ pub fn materialize_image_filtered(
             .with_context("operation", "gaussian_blur")
             .with_context("path", path.display().to_string())
     })?;
-    Array2::from_shape_vec((h, w), blurred)
-        .map_err(|e| FitsError::validation(e.to_string()))
+    Array2::from_shape_vec((h, w), blurred).map_err(|e| FitsError::validation(e.to_string()))
 }
 
 pub fn materialize_image_corrected(
@@ -110,6 +123,5 @@ pub fn materialize_image_filtered_edges(
             .with_context("operation", "gaussian_blur")
             .with_context("path", path.display().to_string())
     })?;
-    Array2::from_shape_vec((h, w), blurred)
-        .map_err(|e| FitsError::validation(e.to_string()))
+    Array2::from_shape_vec((h, w), blurred).map_err(|e| FitsError::validation(e.to_string()))
 }

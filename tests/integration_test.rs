@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use pyref::{
     errors::FitsErrorKind,
-    loader::{read_experiment_headers_only, read_fits_headers_only, read_multiple_fits_headers_only},
+    loader::{
+        read_experiment_headers_only, read_fits_headers_only, read_multiple_fits_headers_only,
+    },
 };
 
 const TEST_DATA_DIR: &str = "tests/fixtures";
@@ -43,7 +45,15 @@ fn header_keys_vec(num: usize) -> Vec<String> {
 }
 
 fn required_header_only_columns() -> &'static [&'static str] {
-    &["file_path", "data_offset", "naxis1", "naxis2", "bitpix", "bzero", "file_name"]
+    &[
+        "file_path",
+        "data_offset",
+        "naxis1",
+        "naxis2",
+        "bitpix",
+        "bzero",
+        "file_name",
+    ]
 }
 
 #[test]
@@ -81,7 +91,10 @@ fn test_error_handling_headers_only() {
 
     let non_existent_dir = "non_existent_directory";
     let dir_result = read_experiment_headers_only(non_existent_dir, &header_keys);
-    assert!(dir_result.is_err(), "Should fail with non-existent directory");
+    assert!(
+        dir_result.is_err(),
+        "Should fail with non-existent directory"
+    );
     if let Err(err) = dir_result {
         assert_eq!(err.kind, FitsErrorKind::NotFound);
     }
@@ -140,9 +153,19 @@ fn test_read_fits_headers_only_includes_parsed_filename_columns() {
     let first_file = &fits_files[0];
     let header_keys = header_keys_vec(0);
     let result = read_fits_headers_only(first_file.clone(), &header_keys);
-    assert!(result.is_ok(), "read_fits_headers_only failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "read_fits_headers_only failed: {:?}",
+        result.err()
+    );
     let df = result.unwrap();
-    for &col in &["file_name", "sample_name", "tag", "scan_number", "frame_number"] {
+    for &col in &[
+        "file_name",
+        "sample_name",
+        "tag",
+        "scan_number",
+        "frame_number",
+    ] {
         if df.column(col).is_err() {
             continue;
         }

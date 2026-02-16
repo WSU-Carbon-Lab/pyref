@@ -10,10 +10,14 @@ pub mod loader;
 pub mod catalog;
 
 pub use errors::FitsError;
-pub use loader::{
-    read_experiment_headers_only, read_fits_headers_only, read_multiple_fits_headers_only,
-};
+pub use io::options::{ReadFitsOptions, ScanFitsOptions};
+pub use io::schema::FitsMetadataSchema;
+pub use io::source::{FitsSource, ResolvePreference, ResolvedSource};
 pub use io::{build_fits_stem, image_mmap, ImageInfo};
+pub use loader::{
+    read_experiment_headers_only, read_fits, read_fits_headers_only, read_fits_metadata_batch,
+    read_multiple_fits_headers_only, scan_fits,
+};
 
 #[cfg(feature = "extension-module")]
 mod extension {
@@ -33,7 +37,9 @@ mod extension {
     };
 
     #[cfg(feature = "catalog")]
-    use crate::catalog::{get_overrides, ingest_beamtime, scan_from_catalog, set_override, CatalogFilter};
+    use crate::catalog::{
+        get_overrides, ingest_beamtime, scan_from_catalog, set_override, CatalogFilter,
+    };
 
     #[global_allocator]
     static ALLOC: PolarsAllocator = PolarsAllocator::new();
@@ -41,7 +47,10 @@ mod extension {
     #[pyfunction]
     #[pyo3(name = "py_read_fits_headers_only")]
     #[pyo3(signature = (path, header_items, /), text_signature = "(path, header_items, /)")]
-    pub fn py_read_fits_headers_only(path: &str, header_items: Vec<String>) -> PyResult<PyDataFrame> {
+    pub fn py_read_fits_headers_only(
+        path: &str,
+        header_items: Vec<String>,
+    ) -> PyResult<PyDataFrame> {
         match read_fits_headers_only(path.into(), &header_items) {
             Ok(df) => Ok(PyDataFrame(df)),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -72,7 +81,10 @@ mod extension {
         file_paths: Vec<String>,
         header_items: Vec<String>,
     ) -> PyResult<PyDataFrame> {
-        let paths: Vec<_> = file_paths.iter().map(|p| std::path::PathBuf::from(p)).collect();
+        let paths: Vec<_> = file_paths
+            .iter()
+            .map(|p| std::path::PathBuf::from(p))
+            .collect();
         match read_multiple_fits_headers_only(paths, &header_items) {
             Ok(df) => Ok(PyDataFrame(df)),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -169,13 +181,8 @@ mod extension {
     ) -> PyResult<Bound<'_, PyArray2<f32>>> {
         let info = crate::io::ImageInfo::from_dataframe_row(&df.0, row_index)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        match materialize_image_filtered_edges(
-            info.path.as_path(),
-            &info,
-            sigma,
-            bg_rows,
-            bg_cols,
-        ) {
+        match materialize_image_filtered_edges(info.path.as_path(), &info, sigma, bg_rows, bg_cols)
+        {
             Ok(arr) => Ok(PyArray2::from_owned_array_bound(py, arr)),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 e.to_string(),
@@ -215,8 +222,8 @@ mod extension {
             &values_ca,
             &weights_ca,
             |values_inner: &AmortSeries, weights_inner: &AmortSeries| -> Option<f64> {
-                let values_inner = values_inner.as_ref().f64().unwrap();
-                let weights_inner = weights_inner.as_ref().f64().unwrap();
+                let values_inner = values_inner.as_ref().f64().ok()?;
+                let weights_inner = weights_inner.as_ref().f64().ok()?;
                 if values_inner.len() == 0 {
                     return None;
                 }
@@ -250,8 +257,8 @@ mod extension {
             &values_ca,
             &weights_ca,
             |values_inner: &AmortSeries, weights_inner: &AmortSeries| -> Option<f64> {
-                let values_inner = values_inner.as_ref().f64().unwrap();
-                let weights_inner = weights_inner.as_ref().f64().unwrap();
+                let values_inner = values_inner.as_ref().f64().ok()?;
+                let weights_inner = weights_inner.as_ref().f64().ok()?;
                 if values_inner.len() == 0 {
                     return None;
                 }
@@ -331,7 +338,9 @@ mod extension {
         let path = std::path::Path::new(beamtime_path);
         match ingest_beamtime(path, &header_items, incremental, None) {
             Ok(p) => Ok(p.to_string_lossy().to_string()),
-            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
         }
     }
 
@@ -347,7 +356,9 @@ mod extension {
         let cat_filter = filter.and_then(|f| dict_to_catalog_filter(f).ok());
         match scan_from_catalog(path, cat_filter.as_ref()) {
             Ok(df) => Ok(PyDataFrame(df)),
-            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
         }
     }
 
@@ -387,15 +398,14 @@ mod extension {
     #[pyfunction]
     #[pyo3(name = "py_get_overrides")]
     #[pyo3(signature = (db_path, path=None), text_signature = "(db_path, path=None)")]
-    pub fn py_get_overrides(
-        db_path: &str,
-        path: Option<String>,
-    ) -> PyResult<PyDataFrame> {
+    pub fn py_get_overrides(db_path: &str, path: Option<String>) -> PyResult<PyDataFrame> {
         let db = std::path::Path::new(db_path);
         let path_ref = path.as_deref();
         match get_overrides(db, path_ref) {
             Ok(df) => Ok(PyDataFrame(df)),
-            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
         }
     }
 
@@ -413,7 +423,9 @@ mod extension {
         let db = std::path::Path::new(db_path);
         match set_override(db, path, sample_name, tag, notes) {
             Ok(()) => Ok(()),
-            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
         }
     }
 
@@ -422,12 +434,18 @@ mod extension {
     pub fn pyref(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(pyo3::wrap_pyfunction!(py_read_fits_headers_only, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_read_experiment_headers_only, m)?)?;
-        m.add_function(pyo3::wrap_pyfunction!(py_read_multiple_fits_headers_only, m)?)?;
+        m.add_function(pyo3::wrap_pyfunction!(
+            py_read_multiple_fits_headers_only,
+            m
+        )?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_get_image, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_get_image_for_row, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_materialize_image_filtered, m)?)?;
         m.add_function(pyo3::wrap_pyfunction!(py_get_image_corrected, m)?)?;
-        m.add_function(pyo3::wrap_pyfunction!(py_materialize_image_filtered_edges, m)?)?;
+        m.add_function(pyo3::wrap_pyfunction!(
+            py_materialize_image_filtered_edges,
+            m
+        )?)?;
         #[cfg(feature = "catalog")]
         {
             m.add_function(pyo3::wrap_pyfunction!(py_ingest_beamtime, m)?)?;

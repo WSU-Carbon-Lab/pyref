@@ -81,10 +81,7 @@ pub fn list_beamtime_entries(db_path: &Path) -> Result<BeamtimeEntries> {
     })
 }
 
-pub fn query_files(
-    db_path: &Path,
-    filter: Option<&CatalogFilter>,
-) -> Result<Vec<FileRow>> {
+pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec<FileRow>> {
     let (where_clause, params) = filter
         .map(build_where_and_params)
         .unwrap_or_else(|| (String::new(), Vec::new()));
@@ -152,7 +149,9 @@ fn build_where_and_params(filter: &CatalogFilter) -> (String, Vec<Box<dyn rusqli
     }
     if let Some(ref scan_nos) = filter.scan_numbers {
         if !scan_nos.is_empty() {
-            let placeholders: Vec<String> = (0..scan_nos.len()).map(|i| format!("?{}", params.len() + 1 + i)).collect();
+            let placeholders: Vec<String> = (0..scan_nos.len())
+                .map(|i| format!("?{}", params.len() + 1 + i))
+                .collect();
             conditions.push(format!("f.scan_number IN ({})", placeholders.join(",")));
             for s in scan_nos {
                 params.push(Box::new(*s));
@@ -177,10 +176,7 @@ fn build_where_and_params(filter: &CatalogFilter) -> (String, Vec<Box<dyn rusqli
     (where_clause, params)
 }
 
-pub fn scan_from_catalog(
-    db_path: &Path,
-    filter: Option<&CatalogFilter>,
-) -> Result<DataFrame> {
+pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<DataFrame> {
     let conn = Connection::open(db_path)?;
     let (where_clause, params) = filter
         .map(|f| build_where_and_params(f))
@@ -355,10 +351,29 @@ pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
 #[cfg(test)]
 fn scan_from_catalog_columns() -> Vec<&'static str> {
     vec![
-        "file_path", "data_offset", "naxis1", "naxis2", "bitpix", "bzero", "data_size",
-        "file_name", "sample_name", "tag", "scan_number", "frame_number",
-        "DATE", "Beamline Energy", "Sample Theta", "CCD Theta", "Higher Order Suppressor",
-        "EPU Polarization", "EXPOSURE", "Sample Name", "Scan ID", "Lambda", "Q",
+        "file_path",
+        "data_offset",
+        "naxis1",
+        "naxis2",
+        "bitpix",
+        "bzero",
+        "data_size",
+        "file_name",
+        "sample_name",
+        "tag",
+        "scan_number",
+        "frame_number",
+        "DATE",
+        "Beamline Energy",
+        "Sample Theta",
+        "CCD Theta",
+        "Higher Order Suppressor",
+        "EPU Polarization",
+        "EXPOSURE",
+        "Sample Name",
+        "Scan ID",
+        "Lambda",
+        "Q",
     ]
 }
 
@@ -408,11 +423,10 @@ pub fn set_override(
     notes: Option<&str>,
 ) -> Result<()> {
     let conn = Connection::open(db_path)?;
-    let exists: i64 = conn.query_row(
-        "SELECT COUNT(1) FROM files WHERE path = ?1",
-        [path],
-        |r| r.get(0),
-    )?;
+    let exists: i64 =
+        conn.query_row("SELECT COUNT(1) FROM files WHERE path = ?1", [path], |r| {
+            r.get(0)
+        })?;
     if exists == 0 {
         return Err(CatalogError::Validation(format!(
             "path not in files table: {}",

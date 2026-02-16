@@ -12,7 +12,9 @@ fn image_shape(header: &Header) -> Result<(usize, usize), FitsReadError> {
         .and_then(|c| c.value.as_int())
         .unwrap_or(0) as usize;
     if naxis < 2 {
-        return Err(FitsReadError::Parse("Image HDU must have NAXIS >= 2".into()));
+        return Err(FitsReadError::Parse(
+            "Image HDU must have NAXIS >= 2".into(),
+        ));
     }
     let naxis1 = header
         .get_card("NAXIS1")

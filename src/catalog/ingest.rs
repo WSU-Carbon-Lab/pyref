@@ -13,8 +13,8 @@ pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "Sample Name",
     "Scan ID",
 ];
-use crate::io::add_calculated_domains;
-use crate::loader::read_multiple_fits_headers_only;
+use crate::io::options::ReadFitsOptions;
+use crate::loader::read_fits_metadata_batch;
 use polars::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -57,12 +57,15 @@ pub fn ingest_beamtime(
 
     let total = to_ingest.len() as u32;
     let mut processed: u32 = 0;
+    let opts = ReadFitsOptions {
+        header_items: header_items.to_vec(),
+        batch_size: BATCH_SIZE,
+        ..ReadFitsOptions::default()
+    };
     for chunk in to_ingest.chunks(BATCH_SIZE) {
         let chunk_vec: Vec<PathBuf> = chunk.to_vec();
-        let df = read_multiple_fits_headers_only(chunk_vec, header_items)
-            .map_err(|e| CatalogError::Validation(e.to_string()))?;
-        let with_domains = add_calculated_domains(df.lazy());
-        upsert_files_batch(&conn, &with_domains, &path_to_mtime)?;
+        let df = read_fits_metadata_batch(chunk_vec, &opts)?;
+        upsert_files_batch(&conn, &df, &path_to_mtime)?;
         processed = (processed as usize + chunk.len()).min(to_ingest.len()) as u32;
         if let Some(ref tx) = progress_tx {
             let _ = tx.send((processed, total));
@@ -84,22 +87,39 @@ fn upsert_files_batch(
     if n == 0 {
         return Ok(());
     }
-    let file_path_col = df.column("file_path").map_err(|e| CatalogError::Validation(e.to_string()))?.str().map_err(|e| CatalogError::Validation(e.to_string()))?;
+    let file_path_col = df
+        .column("file_path")
+        .map_err(|e| CatalogError::Validation(e.to_string()))?
+        .str()
+        .map_err(|e| CatalogError::Validation(e.to_string()))?;
     let get_str = |name: &str| -> Result<Vec<Option<String>>> {
         match df.column(name) {
-            Ok(c) => Ok(c.str().map_err(|e| CatalogError::Validation(e.to_string()))?.iter().map(|s| s.map(|v| v.to_string())).collect()),
+            Ok(c) => Ok(c
+                .str()
+                .map_err(|e| CatalogError::Validation(e.to_string()))?
+                .iter()
+                .map(|s| s.map(|v| v.to_string()))
+                .collect()),
             _ => Ok(std::iter::repeat(None).take(n).collect()),
         }
     };
     let get_i64 = |name: &str| -> Result<Vec<Option<i64>>> {
         match df.column(name) {
-            Ok(c) => Ok(c.i64().map_err(|e| CatalogError::Validation(e.to_string()))?.iter().collect()),
+            Ok(c) => Ok(c
+                .i64()
+                .map_err(|e| CatalogError::Validation(e.to_string()))?
+                .iter()
+                .collect()),
             _ => Ok(std::iter::repeat(None).take(n).collect()),
         }
     };
     let get_f64 = |name: &str| -> Result<Vec<Option<f64>>> {
         match df.column(name) {
-            Ok(c) => Ok(c.f64().map_err(|e| CatalogError::Validation(e.to_string()))?.iter().collect()),
+            Ok(c) => Ok(c
+                .f64()
+                .map_err(|e| CatalogError::Validation(e.to_string()))?
+                .iter()
+                .collect()),
             _ => Ok(std::iter::repeat(None).take(n).collect()),
         }
     };

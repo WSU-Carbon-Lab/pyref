@@ -18,7 +18,8 @@ fn image_size(header: &Header) -> Result<usize, FitsReadError> {
         let v = header
             .get_card(&key)
             .and_then(|c| c.value.as_int())
-            .ok_or_else(|| FitsReadError::Parse(format!("Missing {}", key)))? as usize;
+            .ok_or_else(|| FitsReadError::Parse(format!("Missing {}", key)))?
+            as usize;
         nelem *= v;
     }
     let bitpix = header

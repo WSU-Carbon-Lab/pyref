@@ -2,7 +2,7 @@ use chrono::NaiveDateTime;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ratatui::layout::Rect;
-use ratatui::widgets::{ListState, TableState};
+use ratatui::widgets::{ListState, ScrollbarState, TableState};
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -18,12 +18,13 @@ use pyref::build_fits_stem;
 #[cfg(feature = "catalog")]
 use pyref::catalog::{
     catalog_file_count, list_beamtime_entries, list_beamtimes, query_files, register_beamtime,
-    rename_file_in_catalog, FileRow, CATALOG_DB_NAME, DEFAULT_INGEST_HEADER_ITEMS,
+    rename_file_in_catalog, update_beamspot, FileRow, CATALOG_DB_NAME, DEFAULT_INGEST_HEADER_ITEMS,
 };
 #[cfg(feature = "watch")]
 use pyref::catalog::{run_catalog_watcher, DEFAULT_DEBOUNCE_MS};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ProfileRow {
     pub sample: String,
     pub tag: String,
@@ -112,6 +113,21 @@ pub struct BeamtimeBodyRects {
     pub tag_list: Rect,
     pub scan_list: Rect,
     pub table: Rect,
+    pub sample_scrollbar: Option<Rect>,
+    pub tag_scrollbar: Option<Rect>,
+    pub scan_scrollbar: Option<Rect>,
+    pub table_scrollbar: Option<Rect>,
+    pub expanded_files: Option<Rect>,
+    pub expanded_files_scrollbar: Option<Rect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarDragTarget {
+    SampleList,
+    TagList,
+    ScanList,
+    Table,
+    ExpandedFiles,
 }
 
 pub struct App {
@@ -140,11 +156,18 @@ pub struct App {
     pub tag_state: ListState,
     pub scan_list_state: ListState,
     pub table_state: TableState,
+    pub sample_scroll_state: ScrollbarState,
+    pub tag_scroll_state: ScrollbarState,
+    pub scan_scroll_state: ScrollbarState,
+    pub table_scroll_state: ScrollbarState,
+    pub expanded_files_scroll_state: ScrollbarState,
     pub table_sort_column: Option<usize>,
     pub table_sort_ordering: Option<std::cmp::Ordering>,
     pub expanded_table_row: Option<usize>,
+    pub expanded_selected_file_index: Option<usize>,
     pub expanded_files_scroll_offset: usize,
     pub last_expanded_files_visible: usize,
+    pub preview_tx: Option<mpsc::Sender<PathBuf>>,
     pub focus: Focus,
     pub mode: AppMode,
     pub current_root: String,
@@ -152,6 +175,7 @@ pub struct App {
     pub needs_redraw: bool,
     pub layout: String,
     pub keymap: String,
+    #[allow(dead_code)]
     pub keybind_bar_lines: u8,
     pub theme: String,
     pub has_catalog: bool,
@@ -174,6 +198,7 @@ pub struct App {
     #[cfg(feature = "watch")]
     pub watcher_events_rx: Option<mpsc::Receiver<WatcherEvent>>,
     pub last_body_rects: Option<(Rect, BeamtimeBodyRects)>,
+    pub scrollbar_drag: Option<ScrollbarDragTarget>,
     pub app_error: Option<super::error::TuiError>,
     pub app_warning: Option<super::error::TuiError>,
 }
@@ -240,6 +265,28 @@ const E_ROUND_EV: f64 = 0.1;
 
 fn round_energy_ev(e: f64) -> i64 {
     (e / E_ROUND_EV).round() as i64
+}
+
+fn beamspot_stats(beamspots: &[(i64, i64)]) -> (f64, f64, f64, f64) {
+    let n = beamspots.len() as f64;
+    if n == 0.0 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let (row_sum, col_sum): (i64, i64) =
+        beamspots.iter().fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
+    let row_mean = row_sum as f64 / n;
+    let col_mean = col_sum as f64 / n;
+    if n < 2.0 {
+        return (row_mean, 0.0, col_mean, 0.0);
+    }
+    let (row_var, col_var) = beamspots.iter().fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
+        let dr = ri as f64 - row_mean;
+        let dc = ci as f64 - col_mean;
+        (rv + dr * dr, cv + dc * dc)
+    });
+    let row_std = (row_var / (n - 1.0)).sqrt();
+    let col_std = (col_var / (n - 1.0)).sqrt();
+    (row_mean, row_std, col_mean, col_std)
 }
 
 #[cfg(feature = "catalog")]
@@ -457,11 +504,18 @@ impl App {
             tag_state,
             scan_list_state,
             table_state,
+            sample_scroll_state: ScrollbarState::default(),
+            tag_scroll_state: ScrollbarState::default(),
+            scan_scroll_state: ScrollbarState::default(),
+            table_scroll_state: ScrollbarState::default(),
+            expanded_files_scroll_state: ScrollbarState::default(),
             table_sort_column: None,
             table_sort_ordering: None,
             expanded_table_row: None,
+            expanded_selected_file_index: None,
             expanded_files_scroll_offset: 0,
             last_expanded_files_visible: 5,
+            preview_tx: None,
             focus: Focus::SampleList,
             mode: AppMode::Normal,
             current_root,
@@ -491,6 +545,7 @@ impl App {
             #[cfg(feature = "watch")]
             watcher_events_rx: None,
             last_body_rects: None,
+            scrollbar_drag: None,
             app_error: None,
             app_warning: None,
         }
@@ -532,11 +587,18 @@ impl App {
             tag_state: ListState::default(),
             scan_list_state: ListState::default(),
             table_state: TableState::default(),
+            sample_scroll_state: ScrollbarState::default(),
+            tag_scroll_state: ScrollbarState::default(),
+            scan_scroll_state: ScrollbarState::default(),
+            table_scroll_state: ScrollbarState::default(),
+            expanded_files_scroll_state: ScrollbarState::default(),
             table_sort_column: None,
             table_sort_ordering: None,
             expanded_table_row: None,
+            expanded_selected_file_index: None,
             expanded_files_scroll_offset: 0,
             last_expanded_files_visible: 5,
+            preview_tx: None,
             focus: Focus::SampleList,
             mode: AppMode::Normal,
             current_root: String::new(),
@@ -563,6 +625,7 @@ impl App {
             #[cfg(feature = "watch")]
             watcher_events_rx: None,
             last_body_rects: None,
+            scrollbar_drag: None,
             app_error: None,
             app_warning: None,
         }
@@ -872,6 +935,7 @@ impl App {
     }
 
     #[cfg(feature = "catalog")]
+    #[allow(dead_code)]
     pub fn start_ingest_at(&mut self, path: &Path) {
         if self.loading_state != LoadingState::Idle {
             return;
@@ -931,6 +995,12 @@ impl App {
             self.tag_state = ListState::default();
             self.scan_list_state = ListState::default();
             self.table_state = TableState::default();
+            self.sample_scroll_state = ScrollbarState::default();
+            self.tag_scroll_state = ScrollbarState::default();
+            self.scan_scroll_state = ScrollbarState::default();
+            self.table_scroll_state = ScrollbarState::default();
+            self.expanded_files_scroll_state = ScrollbarState::default();
+            self.scrollbar_drag = None;
             if !self.samples.is_empty() {
                 self.sample_state.select(Some(0));
             }
@@ -972,6 +1042,12 @@ impl App {
             self.tag_state = ListState::default();
             self.scan_list_state = ListState::default();
             self.table_state = TableState::default();
+            self.sample_scroll_state = ScrollbarState::default();
+            self.tag_scroll_state = ScrollbarState::default();
+            self.scan_scroll_state = ScrollbarState::default();
+            self.table_scroll_state = ScrollbarState::default();
+            self.expanded_files_scroll_state = ScrollbarState::default();
+            self.scrollbar_drag = None;
         }
         self.needs_redraw = true;
         true
@@ -1158,6 +1234,107 @@ impl App {
         self.filtered_groups.get(orig)
     }
 
+    pub fn set_preview_tx(&mut self, tx: mpsc::Sender<PathBuf>) {
+        self.preview_tx = Some(tx);
+    }
+
+    pub fn send_preview_path_if_selected(&mut self) {
+        if let (Some(tx), Some(idx), Some(file_ix)) = (
+            self.preview_tx.as_ref(),
+            self.expanded_table_row,
+            self.expanded_selected_file_index,
+        ) {
+            if let Some(g) = self.group_at_display_index(idx) {
+                if let Some(row) = g.file_rows.get(file_ix) {
+                    let _ = tx.send(PathBuf::from(&row.file_path));
+                }
+            }
+        }
+    }
+
+    pub fn materialize_profile_beamspots(&mut self) {
+        let idx = self
+            .expanded_table_row
+            .or_else(|| self.table_state.selected());
+        let Some(idx) = idx else {
+            self.set_status(
+                "Select a profile and press m to materialize beamspots.".to_string(),
+                false,
+            );
+            return;
+        };
+        let was_expanded = self.expanded_table_row.is_some();
+        let file_paths: Vec<String> = match self.group_at_display_index(idx) {
+            Some(g) => g.file_rows.iter().map(|r| r.file_path.clone()).collect(),
+            None => return,
+        };
+        let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
+        if !db_path.exists() {
+            self.set_status("No catalog in current root.".to_string(), true);
+            return;
+        }
+        let mut ok = 0usize;
+        let mut err_count = 0usize;
+        let mut beamspots: Vec<(i64, i64)> = Vec::new();
+        for file_path in &file_paths {
+            let path = Path::new(file_path);
+            match pyref::io::image_mmap::materialize_image_from_path(path) {
+                Ok((_, subtracted)) => {
+                    let (r, c) = pyref::beamfinding::locate_beam_simple(&subtracted);
+                    if let Err(e) = update_beamspot(&db_path, file_path, r as i64, c as i64) {
+                        self.set_status(
+                            format!("Failed to store beamspot for {}: {}", file_path, e),
+                            true,
+                        );
+                        return;
+                    }
+                    beamspots.push((r as i64, c as i64));
+                    ok += 1;
+                }
+                Err(e) => {
+                    err_count += 1;
+                    self.set_status(
+                        format!("Failed to load {}: {}", file_path, e),
+                        true,
+                    );
+                }
+            }
+        }
+        self.reload_from_catalog_impl(
+            was_expanded,
+            if was_expanded {
+                None
+            } else {
+                Some(idx)
+            },
+        );
+        let msg = if beamspots.is_empty() {
+            if err_count == 0 {
+                format!("Materialized {} file(s); beamspots stored.", ok)
+            } else {
+                format!("Materialized {} file(s), {} failed.", ok, err_count)
+            }
+        } else {
+            let (row_mean, row_std, col_mean, col_std) = beamspot_stats(&beamspots);
+            const HIGH_VARIANCE_THRESHOLD: f64 = 5.0;
+            let lost = row_std >= HIGH_VARIANCE_THRESHOLD || col_std >= HIGH_VARIANCE_THRESHOLD;
+            let stats = format!(
+                "row mean={:.1} std={:.1}  col mean={:.1} std={:.1}",
+                row_mean, row_std, col_mean, col_std
+            );
+            let base = format!(
+                "Materialized {} file(s); beamspots stored.  {}",
+                ok, stats
+            );
+            if lost {
+                format!("{}  (high variance: beam may be lost)", base)
+            } else {
+                base
+            }
+        };
+        self.set_status(msg, err_count > 0);
+    }
+
     pub fn refresh_filtered(&mut self) {
         self.filtered_groups = Self::filter_groups(
             &self.all_groups,
@@ -1169,15 +1346,35 @@ impl App {
         self.clamp_selections();
         self.table_state.select(None);
         self.expanded_table_row = None;
+        self.expanded_selected_file_index = None;
         if !self.filtered_groups.is_empty() {
             self.table_state.select(Some(0));
         }
         self.needs_redraw = true;
     }
 
-    pub fn reload_from_catalog(&mut self) {
+    pub fn reload_from_catalog(&mut self, preserve_expansion: bool) {
+        self.reload_from_catalog_impl(preserve_expansion, None);
+    }
+
+    fn reload_from_catalog_impl(
+        &mut self,
+        preserve_expansion: bool,
+        restore_selection: Option<usize>,
+    ) {
         #[cfg(feature = "catalog")]
         {
+            let saved_expanded_row = preserve_expansion.then_some(self.expanded_table_row).flatten();
+            let saved_expanded_file_ix = if preserve_expansion {
+                self.expanded_selected_file_index
+            } else {
+                None
+            };
+            let saved_expanded_scroll = if preserve_expansion {
+                self.expanded_files_scroll_offset
+            } else {
+                0
+            };
             let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
             if !db_path.exists() {
                 return;
@@ -1220,6 +1417,12 @@ impl App {
             self.tag_state = ListState::default();
             self.scan_list_state = ListState::default();
             self.table_state = TableState::default();
+            self.sample_scroll_state = ScrollbarState::default();
+            self.tag_scroll_state = ScrollbarState::default();
+            self.scan_scroll_state = ScrollbarState::default();
+            self.table_scroll_state = ScrollbarState::default();
+            self.expanded_files_scroll_state = ScrollbarState::default();
+            self.scrollbar_drag = None;
             if !self.samples.is_empty() {
                 self.sample_state.select(Some(0));
             }
@@ -1230,6 +1433,27 @@ impl App {
                 self.scan_list_state.select(Some(0));
             }
             self.refresh_filtered();
+            if let Some(idx) = saved_expanded_row {
+                if idx < self.filtered_groups.len() {
+                    self.expanded_table_row = Some(idx);
+                    self.table_state.select(Some(idx));
+                    let n = self.filtered_groups[idx].file_rows.len();
+                    self.expanded_selected_file_index = if n == 0 {
+                        None
+                    } else {
+                        Some(
+                            saved_expanded_file_ix
+                                .map(|i| i.min(n.saturating_sub(1)))
+                                .unwrap_or(0),
+                        )
+                    };
+                    self.expanded_files_scroll_offset = saved_expanded_scroll;
+                }
+            } else if let Some(idx) = restore_selection {
+                if idx < self.filtered_groups.len() {
+                    self.table_state.select(Some(idx));
+                }
+            }
             #[cfg(feature = "watch")]
             {
                 self.catalog_watcher = None;
@@ -1341,7 +1565,7 @@ impl App {
                             }
                             self.set_status("Catalog indexed.".to_string(), false);
                         } else {
-                            self.reload_from_catalog();
+                            self.reload_from_catalog(false);
                             let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
                             let file_count = catalog_file_count(&db_path).ok();
                             let _ = register_beamtime(Path::new(&self.current_root), file_count);
@@ -1379,7 +1603,7 @@ impl App {
                 }
                 WatcherEvent::IngestEnded => {
                     self.loading_state = LoadingState::Idle;
-                    self.reload_from_catalog();
+                    self.reload_from_catalog(false);
                 }
             }
             self.needs_redraw = true;
@@ -1483,12 +1707,19 @@ impl App {
                 if let Some(idx) = self.expanded_table_row {
                     if let Some(g) = self.group_at_display_index(idx) {
                         let file_count = g.file_rows.len();
-                        let max_offset =
-                            file_count.saturating_sub(self.last_expanded_files_visible.max(1));
-                        self.expanded_files_scroll_offset =
-                            cmp::min(self.expanded_files_scroll_offset + 1, max_offset);
-                        self.needs_redraw = true;
-                        return;
+                        if file_count > 0 {
+                            let cur = self.expanded_selected_file_index.unwrap_or(0);
+                            let next = cmp::min(cur + 1, file_count - 1);
+                            self.expanded_selected_file_index = Some(next);
+                            let visible = self.last_expanded_files_visible.max(1);
+                            let max_offset = file_count.saturating_sub(visible);
+                            if next >= self.expanded_files_scroll_offset + visible {
+                                self.expanded_files_scroll_offset =
+                                    cmp::min((next + 1).saturating_sub(visible), max_offset);
+                            }
+                            self.needs_redraw = true;
+                            return;
+                        }
                     }
                 }
                 let len = self.filtered_groups.len();
@@ -1528,11 +1759,20 @@ impl App {
                 }
             }
             Focus::Table => {
-                if self.expanded_table_row.is_some() {
-                    self.expanded_files_scroll_offset =
-                        self.expanded_files_scroll_offset.saturating_sub(1);
-                    self.needs_redraw = true;
-                    return;
+                if let Some(idx) = self.expanded_table_row {
+                    if let Some(g) = self.group_at_display_index(idx) {
+                        let file_count = g.file_rows.len();
+                        if file_count > 0 {
+                            let cur = self.expanded_selected_file_index.unwrap_or(0);
+                            let prev = cur.saturating_sub(1);
+                            self.expanded_selected_file_index = Some(prev);
+                            if prev < self.expanded_files_scroll_offset {
+                                self.expanded_files_scroll_offset = prev;
+                            }
+                            self.needs_redraw = true;
+                            return;
+                        }
+                    }
                 }
                 let len = self.filtered_groups.len();
                 if len > 0 {
@@ -1543,6 +1783,70 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    pub fn set_sample_list_offset(&mut self, pos: usize) {
+        let len = self.samples.len();
+        let o = len.saturating_sub(1).min(pos);
+        *self.sample_state.offset_mut() = o;
+        if let Some(sel) = self.sample_state.selected() {
+            if sel < o {
+                self.sample_state.select(Some(o));
+            } else if len > 0 && sel >= len {
+                self.sample_state.select(Some(len - 1));
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    pub fn set_tag_list_offset(&mut self, pos: usize) {
+        let len = self.tags.len();
+        let o = len.saturating_sub(1).min(pos);
+        *self.tag_state.offset_mut() = o;
+        if let Some(sel) = self.tag_state.selected() {
+            if sel < o {
+                self.tag_state.select(Some(o));
+            } else if len > 0 && sel >= len {
+                self.tag_state.select(Some(len - 1));
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    pub fn set_scan_list_offset(&mut self, pos: usize) {
+        let len = self.scans.len();
+        let o = len.saturating_sub(1).min(pos);
+        *self.scan_list_state.offset_mut() = o;
+        if let Some(sel) = self.scan_list_state.selected() {
+            if sel < o {
+                self.scan_list_state.select(Some(o));
+            } else if len > 0 && sel >= len {
+                self.scan_list_state.select(Some(len - 1));
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    pub fn set_table_offset(&mut self, pos: usize) {
+        let len = self.filtered_groups.len();
+        let o = len.saturating_sub(1).min(pos);
+        *self.table_state.offset_mut() = o;
+        if let Some(sel) = self.table_state.selected() {
+            if sel >= len && len > 0 {
+                self.table_state.select(Some(len - 1));
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    pub fn set_expanded_files_offset(&mut self, pos: usize) {
+        let max_offset = self
+            .expanded_table_row
+            .and_then(|i| self.group_at_display_index(i))
+            .map(|g| g.file_rows.len().saturating_sub(self.last_expanded_files_visible.max(1)))
+            .unwrap_or(0);
+        self.expanded_files_scroll_offset = pos.min(max_offset);
+        self.needs_redraw = true;
     }
 
     pub fn toggle_filter(&mut self) {
@@ -1702,7 +2006,7 @@ impl App {
             }
             renamed += 1;
         }
-        self.reload_from_catalog();
+        self.reload_from_catalog(false);
         self.set_status(format!("Renamed {} file(s).", renamed), false);
         self.set_mode_normal();
     }

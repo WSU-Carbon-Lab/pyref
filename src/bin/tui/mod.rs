@@ -9,12 +9,11 @@ pub mod terminal_guard;
 mod theme;
 mod ui;
 
-#[cfg(feature = "catalog")]
-pub use app::LauncherState;
-pub use app::{App, AppMode, Focus, Screen};
+pub mod preview;
+
+pub use app::{App, Screen};
 pub use config::TuiConfig;
-pub use error::{TuiError, TuiErrorKind};
+pub use error::TuiError;
 pub use run::run;
 #[cfg(feature = "catalog")]
 pub use scan_type::ReflectivityScanType;
-pub use ui::render;

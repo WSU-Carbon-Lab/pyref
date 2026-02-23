@@ -249,16 +249,16 @@ pub fn subtract_background(
         return data.to_owned();
     }
     let view = data.slice(ndarray::s![5..(rows - 5), 5..(cols - 5)]);
-    let rows = view.len_of(Axis(0));
-    let cols = view.len_of(Axis(1));
+    let view_rows = view.len_of(Axis(0));
+    let view_cols = view.len_of(Axis(1));
 
     let left = view.slice(ndarray::s![.., ..20]);
-    let right = view.slice(ndarray::s![.., (cols - 20)..]);
+    let right = view.slice(ndarray::s![.., (view_cols - 20)..]);
 
     let left_sum: i64 = left.iter().copied().sum();
     let right_sum: i64 = right.iter().copied().sum();
 
-    let mut background = ndarray::Array1::zeros(rows);
+    let mut background = ndarray::Array1::zeros(view_rows);
 
     if left_sum < right_sum {
         for (i, row) in right.axis_iter(Axis(0)).enumerate() {
@@ -270,15 +270,15 @@ pub fn subtract_background(
         }
     }
 
-    let mut result = view.to_owned();
-
-    for (i, mut row) in result.axis_iter_mut(Axis(0)).enumerate() {
+    let mut result = data.to_owned();
+    let mut interior = result.slice_mut(ndarray::s![5..(rows - 5), 5..(cols - 5)]);
+    for (i, mut row) in interior.axis_iter_mut(Axis(0)).enumerate() {
         let bg = background[i];
         for val in row.iter_mut() {
             *val -= bg;
         }
     }
-    result.into_dyn()
+    result
 }
 
 pub fn subtract_background_edges(

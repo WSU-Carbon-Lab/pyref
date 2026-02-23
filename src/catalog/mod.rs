@@ -19,7 +19,7 @@ pub const CATALOG_DB_NAME: &str = ".pyref_catalog.db";
 pub use ingest::{ingest_beamtime, DEFAULT_INGEST_HEADER_ITEMS};
 pub use query::{
     catalog_file_count, get_overrides, list_beamtime_entries, query_files, rename_file_in_catalog,
-    scan_from_catalog, set_override, BeamtimeEntries, CatalogFilter, FileRow,
+    scan_from_catalog, set_override, update_beamspot, BeamtimeEntries, CatalogFilter, FileRow,
 };
 
 #[cfg(feature = "watch")]
@@ -89,7 +89,9 @@ CREATE TABLE IF NOT EXISTS files (
     "Sample Name" TEXT,
     "Scan ID" REAL,
     Lambda REAL,
-    Q REAL
+    Q REAL,
+    beam_row INTEGER,
+    beam_col INTEGER
 )"#;
 
 const FILES_INDEX_MTIME: &str = "CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime)";
@@ -151,11 +153,25 @@ pub fn discover_fits_paths(beamtime_dir: &Path) -> Result<Vec<(PathBuf, i64)>> {
     Ok(out)
 }
 
+fn migrate_add_beamspot_columns(conn: &Connection) -> Result<()> {
+    let has_beam_row: bool = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('files') WHERE name = 'beam_row'",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_beam_row {
+        conn.execute("ALTER TABLE files ADD COLUMN beam_row INTEGER", [])?;
+        conn.execute("ALTER TABLE files ADD COLUMN beam_col INTEGER", [])?;
+    }
+    Ok(())
+}
+
 pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
     conn.execute_batch(FILES_TABLE)?;
     conn.execute_batch(OVERRIDES_TABLE)?;
     migrate_experiment_number_to_scan_number(&conn)?;
+    migrate_add_beamspot_columns(&conn)?;
     conn.execute_batch(FILES_INDEX_MTIME)?;
     conn.execute_batch(FILES_INDEX_SAMPLE)?;
     conn.execute_batch(FILES_INDEX_TAG)?;

@@ -4,7 +4,7 @@ use ratatui::prelude::Backend;
 use std::io;
 use std::time::Duration;
 
-use super::app::{App, OpenDirFocus};
+use super::app::{App, OpenDirFocus, ScrollbarDragTarget};
 use super::keymap::{self, Action};
 
 #[cfg(feature = "catalog")]
@@ -137,6 +137,21 @@ pub fn run<B: Backend>(
     }
 }
 
+fn scroll_position_from_row(sb_rect: Rect, row: u16, content_len: usize, viewport: usize) -> usize {
+    if sb_rect.height == 0 || content_len <= viewport {
+        return 0;
+    }
+    let max_pos = content_len.saturating_sub(viewport);
+    let row_offset = row.saturating_sub(sb_rect.y) as usize;
+    let h = sb_rect.height as usize;
+    let pos = if h > 0 {
+        (row_offset * content_len) / h
+    } else {
+        0
+    };
+    pos.min(max_pos)
+}
+
 fn handle_mouse(
     app: &mut App,
     mouse_event: crossterm::event::MouseEvent,
@@ -154,7 +169,166 @@ fn handle_mouse(
     };
     let col = mouse_event.column;
     let row = mouse_event.row;
+
+    if let MouseEventKind::Up(MouseButton::Left) = mouse_event.kind {
+        if app.scrollbar_drag.take().is_some() {
+            return true;
+        }
+    }
+
+    if let Some(drag_target) = app.scrollbar_drag {
+        if let MouseEventKind::Drag(MouseButton::Left) = mouse_event.kind {
+            let (sb_rect, content_len, viewport) = {
+                let rects = match &app.last_body_rects {
+                    Some((_, r)) => r,
+                    None => return false,
+                };
+                match drag_target {
+                    ScrollbarDragTarget::SampleList => {
+                        let r = match rects.sample_scrollbar {
+                            Some(rect) => rect,
+                            None => return false,
+                        };
+                        let viewport = (rects.sample_list.height.saturating_sub(2)).max(1) as usize;
+                        (r, app.samples.len(), viewport)
+                    }
+                    ScrollbarDragTarget::TagList => {
+                        let r = match rects.tag_scrollbar {
+                            Some(rect) => rect,
+                            None => return false,
+                        };
+                        let viewport = (rects.tag_list.height.saturating_sub(2)).max(1) as usize;
+                        (r, app.tags.len(), viewport)
+                    }
+                    ScrollbarDragTarget::ScanList => {
+                        let r = match rects.scan_scrollbar {
+                            Some(rect) => rect,
+                            None => return false,
+                        };
+                        let viewport = (rects.scan_list.height.saturating_sub(2)).max(1) as usize;
+                        (r, app.scans.len(), viewport)
+                    }
+                    ScrollbarDragTarget::Table => {
+                        let r = match rects.table_scrollbar {
+                            Some(rect) => rect,
+                            None => return false,
+                        };
+                        let viewport = (rects.table.height.saturating_sub(1)).max(1) as usize;
+                        (r, app.filtered_groups.len(), viewport)
+                    }
+                    ScrollbarDragTarget::ExpandedFiles => {
+                        let r = match rects.expanded_files_scrollbar {
+                            Some(rect) => rect,
+                            None => return false,
+                        };
+                        let file_count = app
+                            .expanded_table_row
+                            .and_then(|i| app.group_at_display_index(i))
+                            .map(|g| g.file_rows.len())
+                            .unwrap_or(0);
+                        (r, file_count, app.last_expanded_files_visible.max(1))
+                    }
+                }
+            };
+            let pos = scroll_position_from_row(sb_rect, row, content_len, viewport);
+            match drag_target {
+                ScrollbarDragTarget::SampleList => app.set_sample_list_offset(pos),
+                ScrollbarDragTarget::TagList => app.set_tag_list_offset(pos),
+                ScrollbarDragTarget::ScanList => app.set_scan_list_offset(pos),
+                ScrollbarDragTarget::Table => app.set_table_offset(pos),
+                ScrollbarDragTarget::ExpandedFiles => app.set_expanded_files_offset(pos),
+            }
+            return true;
+        }
+    }
+
+    let is_scroll = matches!(
+        mouse_event.kind,
+        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+    );
+    if is_scroll {
+        let down = matches!(mouse_event.kind, MouseEventKind::ScrollDown);
+        if rect_contains(rects.sample_list, col, row) {
+            app.focus = super::app::Focus::SampleList;
+            if down {
+                app.list_down();
+            } else {
+                app.list_up();
+            }
+            return true;
+        }
+        if rect_contains(rects.tag_list, col, row) {
+            app.focus = super::app::Focus::TagList;
+            if down {
+                app.list_down();
+            } else {
+                app.list_up();
+            }
+            return true;
+        }
+        if rect_contains(rects.scan_list, col, row) {
+            app.focus = super::app::Focus::ScanList;
+            if down {
+                app.list_down();
+            } else {
+                app.list_up();
+            }
+            return true;
+        }
+        if rect_contains(rects.table, col, row) {
+            app.focus = super::app::Focus::Table;
+            if down {
+                app.list_down();
+            } else {
+                app.list_up();
+            }
+            return true;
+        }
+        if let Some(ef) = rects.expanded_files {
+            if rect_contains(ef, col, row) {
+                app.focus = super::app::Focus::Table;
+                if down {
+                    app.list_down();
+                } else {
+                    app.list_up();
+                }
+                return true;
+            }
+        }
+    }
+
     if let MouseEventKind::Down(MouseButton::Left) = mouse_event.kind {
+        if let Some(sb) = rects.sample_scrollbar {
+            if rect_contains(sb, col, row) {
+                app.scrollbar_drag = Some(ScrollbarDragTarget::SampleList);
+                return true;
+            }
+        }
+        if let Some(sb) = rects.tag_scrollbar {
+            if rect_contains(sb, col, row) {
+                app.scrollbar_drag = Some(ScrollbarDragTarget::TagList);
+                return true;
+            }
+        }
+        if let Some(sb) = rects.scan_scrollbar {
+            if rect_contains(sb, col, row) {
+                app.scrollbar_drag = Some(ScrollbarDragTarget::ScanList);
+                return true;
+            }
+        }
+        if let Some(sb) = rects.table_scrollbar {
+            if rect_contains(sb, col, row) {
+                app.scrollbar_drag = Some(ScrollbarDragTarget::Table);
+                return true;
+            }
+        }
+        if let Some(sb) = rects.expanded_files_scrollbar {
+            if rect_contains(sb, col, row) {
+                app.scrollbar_drag = Some(ScrollbarDragTarget::ExpandedFiles);
+                return true;
+            }
+        }
+
         if rect_contains(rects.sample_list, col, row) {
             let idx = list_index_at(rects.sample_list, row, app.samples.len());
             app.focus = super::app::Focus::SampleList;
@@ -197,6 +371,24 @@ fn handle_mouse(
             }
             return true;
         }
+        if let Some(ef) = rects.expanded_files {
+            if rect_contains(ef, col, row) {
+                if let Some(idx) = app.expanded_table_row {
+                    if let Some(g) = app.group_at_display_index(idx) {
+                        let file_count = g.file_rows.len();
+                        let file_ix = expanded_file_index_at(
+                            ef,
+                            row,
+                            app.expanded_files_scroll_offset,
+                            file_count,
+                        );
+                        app.focus = super::app::Focus::Table;
+                        app.expanded_selected_file_index = Some(file_ix);
+                        return true;
+                    }
+                }
+            }
+        }
         if rect_contains(rects.table, col, row) {
             if row == rects.table.y {
                 if let Some(layout_col) = table_header_column_at(rects.table, col) {
@@ -210,8 +402,11 @@ fn handle_mouse(
             app.focus = super::app::Focus::Table;
             app.table_state.select(Some(idx));
             app.expanded_table_row = if app.expanded_table_row == Some(idx) {
+                app.expanded_selected_file_index = None;
                 None
             } else {
+                app.expanded_selected_file_index = Some(0);
+                app.expanded_files_scroll_offset = 0;
                 Some(idx)
             };
             return true;
@@ -240,6 +435,21 @@ fn table_row_at(rect: Rect, row: u16, len: usize) -> usize {
     }
     let idx = (row - data_y) as usize;
     idx.min(len.saturating_sub(1))
+}
+
+fn expanded_file_index_at(
+    rect: Rect,
+    row: u16,
+    scroll_offset: usize,
+    file_count: usize,
+) -> usize {
+    let data_y = rect.y + 3;
+    if row < data_y || file_count == 0 {
+        return 0;
+    }
+    let rel = (row - data_y) as usize;
+    let idx = scroll_offset + rel;
+    idx.min(file_count.saturating_sub(1))
 }
 
 const TABLE_WIDTHS: [Constraint; 11] = [
@@ -415,6 +625,8 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         Action::NavUp => app.nav_up(),
         Action::NavBack => app.nav_back(),
         Action::NavFwd => app.nav_fwd(),
+        Action::PreviewImage => app.send_preview_path_if_selected(),
+        Action::BeamPosition => app.materialize_profile_beamspots(),
         Action::Open => {
             if matches!(
                 app.focus,
@@ -426,8 +638,10 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             } else if app.focus == super::app::Focus::Table {
                 if let Some(i) = app.table_state.selected() {
                     app.expanded_table_row = if app.expanded_table_row == Some(i) {
+                        app.expanded_selected_file_index = None;
                         None
                     } else {
+                        app.expanded_selected_file_index = Some(0);
                         app.expanded_files_scroll_offset = 0;
                         Some(i)
                     };

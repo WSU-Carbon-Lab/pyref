@@ -10,7 +10,7 @@ pub const DOUBLE_UP: &str = "\u{21C8}";
 pub const DOUBLE_DOWN: &str = "\u{21CA}";
 
 pub const BROWSE_TITLE: &str = " Reflectivity profiles [b] ";
-pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag  i Re-ingest ";
+pub const BROWSE_SHORTCUTS: &str = " r Rename  R Retag  i Re-ingest  m Materialize ";
 
 pub fn bottom_bar_line() -> String {
     format!(
@@ -45,6 +45,8 @@ pub enum Action {
     NavUp,
     NavBack,
     NavFwd,
+    PreviewImage,
+    BeamPosition,
     None,
 }
 
@@ -112,6 +114,8 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('u') => return Action::NavUp,
                 KeyCode::Char('h') => return Action::NavBack,
                 KeyCode::Char('l') => return Action::NavFwd,
+                KeyCode::Char('v') => return Action::PreviewImage,
+                KeyCode::Char('m') => return Action::BeamPosition,
                 _ => {}
             }
         }
@@ -169,6 +173,8 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('u') => return Action::NavUp,
                 KeyCode::Char('h') => return Action::NavBack,
                 KeyCode::Char('l') => return Action::NavFwd,
+                KeyCode::Char('v') => return Action::PreviewImage,
+                KeyCode::Char('m') => return Action::BeamPosition,
                 _ => {}
             }
         }
@@ -180,6 +186,7 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
     Action::None
 }
 
+#[allow(dead_code)]
 pub fn search_bar_hint(keymap: &str) -> String {
     if keymap == "emacs" {
         format!("{}K Search", CMD_SYMBOL)
@@ -227,6 +234,7 @@ pub fn keybind_bar_lines_emacs() -> [(String, String); 12] {
     ]
 }
 
+#[allow(dead_code)]
 pub fn search_line_hotkeys(keymap: &str) -> String {
     let pairs = if keymap == "emacs" {
         [

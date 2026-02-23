@@ -31,6 +31,8 @@ pub struct FileRow {
     pub epu_polarization: Option<f64>,
     pub q: Option<f64>,
     pub date_iso: Option<String>,
+    pub beam_row: Option<i64>,
+    pub beam_col: Option<i64>,
 }
 
 pub fn catalog_file_count(db_path: &Path) -> Result<u32> {
@@ -91,7 +93,7 @@ pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec
             COALESCE(o.tag, f.tag),
             f.scan_number, f.frame_number,
             f."Beamline Energy", f."Sample Theta", f."EPU Polarization", f.Q,
-            f."DATE"
+            f."DATE", f.beam_row, f.beam_col
             FROM files f LEFT JOIN overrides o ON f.path = o.path{}
             ORDER BY f.scan_number, f.frame_number"#,
         where_clause
@@ -109,6 +111,8 @@ pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec
             epu_polarization: row.get(7)?,
             q: row.get(8)?,
             date_iso: row.get(9)?,
+            beam_row: row.get(10)?,
+            beam_col: row.get(11)?,
         })
     };
     let rows = if params.is_empty() {
@@ -120,6 +124,20 @@ pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec
     rows.map(|r| r.map_err(CatalogError::Sqlite)).collect()
 }
 
+pub fn update_beamspot(
+    db_path: &Path,
+    file_path: &str,
+    beam_row: i64,
+    beam_col: i64,
+) -> Result<()> {
+    let conn = open_catalog_db(db_path)?;
+    conn.execute(
+        "UPDATE files SET beam_row = ?1, beam_col = ?2 WHERE path = ?3",
+        rusqlite::params![beam_row, beam_col, file_path],
+    )?;
+    Ok(())
+}
+
 const RESOLVED_QUERY: &str = r#"
 SELECT
     f.file_path, f.data_offset, f.naxis1, f.naxis2, f.bitpix, f.bzero, f.data_size,
@@ -129,7 +147,8 @@ SELECT
     f.scan_number, f.frame_number,
     f."DATE", f."Beamline Energy", f."Sample Theta", f."CCD Theta",
     f."Higher Order Suppressor", f."EPU Polarization", f.EXPOSURE,
-    f."Sample Name", f."Scan ID", f.Lambda, f.Q
+    f."Sample Name", f."Scan ID", f.Lambda, f.Q,
+    f.beam_row, f.beam_col
 FROM files f
 LEFT JOIN overrides o ON f.path = o.path
 "#;
@@ -209,6 +228,8 @@ pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Resu
             row.get::<_, Option<String>>(20)?,
             row.get::<_, Option<f64>>(21)?,
             row.get::<_, Option<f64>>(22)?,
+            row.get::<_, Option<i64>>(23)?,
+            row.get::<_, Option<i64>>(24)?,
         ))
     };
     let rows = if params.is_empty() {
@@ -241,6 +262,8 @@ pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Resu
     let mut scan_id = Vec::new();
     let mut lambda = Vec::new();
     let mut q = Vec::new();
+    let mut beam_row = Vec::new();
+    let mut beam_col = Vec::new();
 
     for row in rows {
         let r = row.map_err(CatalogError::Sqlite)?;
@@ -267,6 +290,8 @@ pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Resu
         scan_id.push(r.20);
         lambda.push(r.21);
         q.push(r.22);
+        beam_row.push(r.23);
+        beam_col.push(r.24);
     }
 
     let series = vec![
@@ -293,6 +318,8 @@ pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Resu
         Series::new("Scan ID".into(), scan_id),
         Series::new("Lambda".into(), lambda),
         Series::new("Q".into(), q),
+        Series::new("beam_row".into(), beam_row),
+        Series::new("beam_col".into(), beam_col),
     ];
     let columns: Vec<Column> = series.into_iter().map(|s| s.into()).collect();
     let df = DataFrame::new(columns).map_err(|e| CatalogError::Validation(e.to_string()))?;
@@ -373,6 +400,8 @@ fn scan_from_catalog_columns() -> Vec<&'static str> {
         "Scan ID",
         "Lambda",
         "Q",
+        "beam_row",
+        "beam_col",
     ]
 }
 

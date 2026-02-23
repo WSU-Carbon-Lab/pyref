@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use memmap2::MmapOptions;
 use ndarray::Array2;
@@ -8,6 +8,7 @@ use polars::prelude::*;
 use super::blur::{gaussian_blur_f32_copy, i64_to_f32_array};
 use super::{subtract_background, subtract_background_edges, ImageInfo};
 use crate::errors::FitsError;
+use crate::fits::HduList;
 
 type ImagePair = (Array2<i64>, Array2<i64>);
 
@@ -50,6 +51,18 @@ pub fn materialize_image(path: &Path, info: &ImageInfo) -> Result<ImagePair, Fit
 pub fn get_image_for_row(df: &DataFrame, row_index: usize) -> Result<ImagePair, FitsError> {
     let info = ImageInfo::from_dataframe_row(df, row_index)?;
     materialize_image(info.path.as_path(), &info)
+}
+
+pub fn materialize_image_from_path(path: &Path) -> Result<ImagePair, FitsError> {
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| FitsError::validation("Invalid UTF-8 in path"))?;
+    let hdul = HduList::from_file_headers_only(path_str).map_err(FitsError::from)?;
+    let image_header = hdul.image_header.as_ref().ok_or_else(|| {
+        FitsError::validation("No image HDU found").with_context("path", path_str)
+    })?;
+    let info = ImageInfo::from_header(PathBuf::from(path), image_header);
+    materialize_image(path, &info)
 }
 
 pub fn materialize_image_unprocessed(

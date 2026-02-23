@@ -1,7 +1,9 @@
 use ratatui::layout::Alignment;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, List, ListItem, Padding, Paragraph, Row, Table};
+use ratatui::widgets::{
+    Block, Cell, List, ListItem, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation, Table,
+};
 use ratatui::Frame;
 
 use super::app::{App, AppMode, Focus, GroupedProfileRow, LoadingState, OpenDirFocus, Screen};
@@ -10,8 +12,19 @@ use super::theme::ThemeMode;
 use super::ReflectivityScanType;
 
 const NAV_PATH_TRUNCATE: usize = 60;
+const SCROLLBAR_WIDTH: u16 = 1;
 const CIRCLE_EMPTY: &str = "\u{25CB}";
 const CIRCLE_FILLED: &str = "\u{25CF}";
+
+const SCROLLBAR_THUMB: &str = "\u{2590}";
+
+fn vertical_scrollbar_widget() -> Scrollbar<'static> {
+    Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_symbol(SCROLLBAR_THUMB)
+        .track_symbol(None)
+        .begin_symbol(None)
+        .end_symbol(None)
+}
 
 fn truncate_path(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -41,6 +54,7 @@ fn layout_constraints(app: &App) -> [Constraint; 2] {
     }
 }
 
+#[allow(dead_code)]
 pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::BeamtimeBodyRects> {
     if !app.has_catalog {
         return None;
@@ -78,6 +92,12 @@ pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::Bea
         tag_list: left_chunks[2],
         scan_list: left_chunks[4],
         table: table_area,
+        sample_scrollbar: None,
+        tag_scrollbar: None,
+        scan_scrollbar: None,
+        table_scrollbar: None,
+        expanded_files: None,
+        expanded_files_scrollbar: None,
     })
 }
 
@@ -482,9 +502,9 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
             Constraint::Min(3),
         ])
         .split(left_area);
-    render_sample_list(frame, app, left_chunks[0], theme);
-    render_tag_list(frame, app, left_chunks[2], theme);
-    render_scan_list(frame, app, left_chunks[4], theme);
+    let sample_scrollbar = render_sample_list(frame, app, left_chunks[0], theme);
+    let tag_scrollbar = render_tag_list(frame, app, left_chunks[2], theme);
+    let scan_scrollbar = render_scan_list(frame, app, left_chunks[4], theme);
 
     let right_border_style = if app.focus == Focus::Table || app.focus == Focus::SearchBar {
         super::theme::focus_border_style(theme)
@@ -525,18 +545,28 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
 
     frame.render_widget(right_block, right_area);
     render_browse_shortcuts(frame, shortcuts_area, theme);
-    render_table(frame, app, table_area, theme);
-    if let Some(area) = files_area {
+    let table_scrollbar = render_table(frame, app, table_area, theme);
+    let expanded_files_scrollbar = if let Some(files_rect) = files_area {
         if app.expanded_table_row.is_some() {
-            render_expanded_file_list(frame, area, theme, app);
+            render_expanded_file_list(frame, files_rect, theme, app)
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
     render_search_box(frame, app, search_area, theme);
     let rects = super::app::BeamtimeBodyRects {
         sample_list: left_chunks[0],
         tag_list: left_chunks[2],
         scan_list: left_chunks[4],
         table: table_area,
+        sample_scrollbar,
+        tag_scrollbar,
+        scan_scrollbar,
+        table_scrollbar,
+        expanded_files: files_area,
+        expanded_files_scrollbar,
     };
     app.last_body_rects = Some((area, rects));
 }
@@ -549,7 +579,19 @@ fn list_style(active: bool, theme: ThemeMode) -> ratatui::style::Style {
     }
 }
 
-fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
+    let content_len = app.samples.len();
+    let viewport = (area.height.saturating_sub(2)).max(1) as usize;
+    let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
+    let (list_area, scrollbar_area) = if needs_scrollbar {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)])
+            .split(area);
+        (chunks[0], chunks[1])
+    } else {
+        (area, Rect::default())
+    };
     let items: Vec<ListItem> = app
         .samples
         .iter()
@@ -575,10 +617,42 @@ fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: Theme
         )
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
-    frame.render_stateful_widget(list, area, &mut app.sample_state);
+    frame.render_stateful_widget(list, list_area, &mut app.sample_state);
+    if needs_scrollbar && scrollbar_area.width > 0 && scrollbar_area.height > 0 {
+        let viewport_actual = (list_area.height.saturating_sub(2)).max(1) as usize;
+        app.sample_scroll_state = app
+            .sample_scroll_state
+            .content_length(content_len)
+            .position(app.sample_state.offset())
+            .viewport_content_length(viewport_actual);
+        let sb_rect = scrollbar_area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+        frame.render_stateful_widget(
+            vertical_scrollbar_widget(),
+            sb_rect,
+            &mut app.sample_scroll_state,
+        );
+        Some(sb_rect)
+    } else {
+        None
+    }
 }
 
-fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
+    let content_len = app.tags.len();
+    let viewport = (area.height.saturating_sub(2)).max(1) as usize;
+    let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
+    let (list_area, scrollbar_area) = if needs_scrollbar {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)])
+            .split(area);
+        (chunks[0], chunks[1])
+    } else {
+        (area, Rect::default())
+    };
     let items: Vec<ListItem> = app
         .tags
         .iter()
@@ -604,10 +678,42 @@ fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
         )
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
-    frame.render_stateful_widget(list, area, &mut app.tag_state);
+    frame.render_stateful_widget(list, list_area, &mut app.tag_state);
+    if needs_scrollbar && scrollbar_area.width > 0 && scrollbar_area.height > 0 {
+        let viewport_actual = (list_area.height.saturating_sub(2)).max(1) as usize;
+        app.tag_scroll_state = app
+            .tag_scroll_state
+            .content_length(content_len)
+            .position(app.tag_state.offset())
+            .viewport_content_length(viewport_actual);
+        let sb_rect = scrollbar_area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+        frame.render_stateful_widget(
+            vertical_scrollbar_widget(),
+            sb_rect,
+            &mut app.tag_scroll_state,
+        );
+        Some(sb_rect)
+    } else {
+        None
+    }
 }
 
-fn render_scan_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+fn render_scan_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
+    let content_len = app.scans.len();
+    let viewport = (area.height.saturating_sub(2)).max(1) as usize;
+    let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
+    let (list_area, scrollbar_area) = if needs_scrollbar {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)])
+            .split(area);
+        (chunks[0], chunks[1])
+    } else {
+        (area, Rect::default())
+    };
     let items: Vec<ListItem> = app
         .scans
         .iter()
@@ -633,7 +739,27 @@ fn render_scan_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMo
         )
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
-    frame.render_stateful_widget(list, area, &mut app.scan_list_state);
+    frame.render_stateful_widget(list, list_area, &mut app.scan_list_state);
+    if needs_scrollbar && scrollbar_area.width > 0 && scrollbar_area.height > 0 {
+        let viewport_actual = (list_area.height.saturating_sub(2)).max(1) as usize;
+        app.scan_scroll_state = app
+            .scan_scroll_state
+            .content_length(content_len)
+            .position(app.scan_list_state.offset())
+            .viewport_content_length(viewport_actual);
+        let sb_rect = scrollbar_area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+        frame.render_stateful_widget(
+            vertical_scrollbar_widget(),
+            sb_rect,
+            &mut app.scan_scroll_state,
+        );
+        Some(sb_rect)
+    } else {
+        None
+    }
 }
 
 #[cfg(feature = "catalog")]
@@ -652,14 +778,70 @@ fn pol_str_from_epu(epu: Option<f64>) -> String {
 }
 
 #[cfg(feature = "catalog")]
+fn beamspot_mean_std(beamspots: &[(i64, i64)]) -> (f64, f64, f64, f64) {
+    let n = beamspots.len() as f64;
+    if n == 0.0 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let (row_sum, col_sum): (i64, i64) =
+        beamspots.iter().fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
+    let row_mean = row_sum as f64 / n;
+    let col_mean = col_sum as f64 / n;
+    if n < 2.0 {
+        return (row_mean, 0.0, col_mean, 0.0);
+    }
+    let (row_var, col_var) = beamspots.iter().fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
+        let dr = ri as f64 - row_mean;
+        let dc = ci as f64 - col_mean;
+        (rv + dr * dr, cv + dc * dc)
+    });
+    let row_std = (row_var / (n - 1.0)).sqrt();
+    let col_std = (col_var / (n - 1.0)).sqrt();
+    (row_mean, row_std, col_mean, col_std)
+}
+
+#[cfg(feature = "catalog")]
+fn beamspot_status_z(
+    row: Option<i64>,
+    col: Option<i64>,
+    row_mean: f64,
+    row_std: f64,
+    col_mean: f64,
+    col_std: f64,
+) -> &'static str {
+    let (r, c) = match (row, col) {
+        (Some(a), Some(b)) => (a as f64, b as f64),
+        _ => return "-",
+    };
+    let z_row = if row_std > 1e-9 {
+        (r - row_mean) / row_std
+    } else {
+        0.0
+    };
+    let z_col = if col_std > 1e-9 {
+        (c - col_mean) / col_std
+    } else {
+        0.0
+    };
+    let max_z = z_row.abs().max(z_col.abs());
+    if max_z < 2.0 {
+        "ok"
+    } else if max_z < 4.0 {
+        "warning"
+    } else {
+        "err"
+    }
+}
+
+#[cfg(feature = "catalog")]
 fn render_expanded_file_list(
     frame: &mut Frame,
     area: Rect,
     theme: ThemeMode,
     app: &mut super::app::App,
-) {
+) -> Option<Rect> {
     let Some(i) = app.expanded_table_row else {
-        return;
+        return None;
     };
     let file_count = app
         .group_at_display_index(i)
@@ -667,7 +849,7 @@ fn render_expanded_file_list(
         .unwrap_or(0);
     let border_style = super::theme::header_style(theme);
     let block = Block::bordered()
-        .title(" FITS files for reflectivity profile (j/k scroll, Enter collapse) ")
+        .title(" FITS files for reflectivity profile (j/k scroll, Enter collapse)  v View image ")
         .border_style(border_style);
     let inner = block.inner(area);
     let visible_rows = inner.height.saturating_sub(2) as usize;
@@ -678,7 +860,7 @@ fn render_expanded_file_list(
     }
     let file_rows = match app.group_at_display_index(i) {
         Some(g) => &g.file_rows,
-        None => return,
+        None => return None,
     };
     let offset = app.expanded_files_scroll_offset;
     let start = offset.min(file_rows.len());
@@ -686,6 +868,25 @@ fn render_expanded_file_list(
     let take = slice.len().min(visible_rows);
     let visible_slice = slice.get(..take).unwrap_or(&[]);
     frame.render_widget(block, area);
+    let needs_scrollbar = inner.width > SCROLLBAR_WIDTH
+        && file_count > app.last_expanded_files_visible;
+    let (table_inner, scrollbar_area) = if needs_scrollbar {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)])
+            .split(inner);
+        (chunks[0], chunks[1])
+    } else {
+        (inner, Rect::default())
+    };
+    let beamspots: Vec<(i64, i64)> = file_rows
+        .iter()
+        .filter_map(|r| match (r.beam_row, r.beam_col) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        })
+        .collect();
+    let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(&beamspots);
     let header_style = super::theme::header_style(theme);
     let header = Row::new(vec![
         Cell::from("Scan"),
@@ -693,12 +894,21 @@ fn render_expanded_file_list(
         Cell::from("pol"),
         Cell::from("E (eV)"),
         Cell::from("\u{03B8} (\u{00B0})"),
+        Cell::from("Beamspot"),
+        Cell::from("Status"),
     ])
     .style(header_style)
     .bottom_margin(1);
     let rows: Vec<Row> = visible_slice
         .iter()
-        .map(|r| {
+        .enumerate()
+        .map(|(i, r)| {
+            let file_ix = start + i;
+            let row_style = if app.expanded_selected_file_index == Some(file_ix) {
+                super::theme::row_highlight_style(theme)
+            } else {
+                ratatui::style::Style::default()
+            };
             let scan = r.scan_number.to_string();
             let frame = r.frame_number.to_string();
             let pol = pol_str_from_epu(r.epu_polarization);
@@ -710,13 +920,22 @@ fn render_expanded_file_list(
                 .sample_theta
                 .map(|t| format!("{:.2}", t))
                 .unwrap_or_else(|| "-".to_string());
+            let beamspot = match (r.beam_row, r.beam_col) {
+                (Some(row), Some(col)) => format!("{},{}", row, col),
+                _ => "-".to_string(),
+            };
+            let status =
+                beamspot_status_z(r.beam_row, r.beam_col, row_mean, row_std, col_mean, col_std);
             Row::new(vec![
                 Cell::from(scan),
                 Cell::from(frame),
                 Cell::from(pol),
                 Cell::from(energy),
                 Cell::from(theta),
+                Cell::from(beamspot),
+                Cell::from(status),
             ])
+            .style(row_style)
         })
         .collect();
     let widths = [
@@ -725,9 +944,30 @@ fn render_expanded_file_list(
         Constraint::Length(4),
         Constraint::Length(8),
         Constraint::Length(8),
+        Constraint::Length(10),
+        Constraint::Length(7),
     ];
     let table = Table::new(rows, widths).header(header).column_spacing(1);
-    frame.render_widget(table, inner);
+    frame.render_widget(table, table_inner);
+    if needs_scrollbar && scrollbar_area.width > 0 && scrollbar_area.height > 0 {
+        app.expanded_files_scroll_state = app
+            .expanded_files_scroll_state
+            .content_length(file_count)
+            .position(app.expanded_files_scroll_offset)
+            .viewport_content_length(app.last_expanded_files_visible);
+        let sb_rect = scrollbar_area.inner(Margin {
+            vertical: 0,
+            horizontal: 0,
+        });
+        frame.render_stateful_widget(
+            vertical_scrollbar_widget(),
+            sb_rect,
+            &mut app.expanded_files_scroll_state,
+        );
+        Some(sb_rect)
+    } else {
+        None
+    }
 }
 
 fn scan_type_label(st: ReflectivityScanType) -> &'static str {
@@ -789,7 +1029,7 @@ fn table_header_cell(
     Cell::from(format!("{}{}", label, suffix))
 }
 
-fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
     let header_style = super::theme::header_style(theme);
     let (sort_col, sort_ord) = (app.table_sort_column, app.table_sort_ordering);
     let header = Row::new(vec![
@@ -843,8 +1083,21 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
             empty_style,
         )));
         frame.render_widget(msg, area);
-        return;
+        return None;
     }
+
+    let content_len = order.len();
+    let viewport = (area.height.saturating_sub(1)).max(1) as usize;
+    let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
+    let (table_area, scrollbar_area) = if needs_scrollbar {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)])
+            .split(area);
+        (chunks[0], chunks[1])
+    } else {
+        (area, Rect::default())
+    };
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -852,5 +1105,26 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
         .row_highlight_style(super::theme::row_highlight_style(theme))
         .highlight_symbol("  ");
 
-    frame.render_stateful_widget(table, area, &mut app.table_state);
+    frame.render_stateful_widget(table, table_area, &mut app.table_state);
+
+    if needs_scrollbar && scrollbar_area.width > 0 && scrollbar_area.height > 0 {
+        let viewport_actual = (table_area.height.saturating_sub(1)).max(1) as usize;
+        app.table_scroll_state = app
+            .table_scroll_state
+            .content_length(content_len)
+            .position(app.table_state.offset())
+            .viewport_content_length(viewport_actual);
+        let sb_rect = scrollbar_area.inner(Margin {
+            vertical: 0,
+            horizontal: 0,
+        });
+        frame.render_stateful_widget(
+            vertical_scrollbar_widget(),
+            sb_rect,
+            &mut app.table_scroll_state,
+        );
+        Some(sb_rect)
+    } else {
+        None
+    }
 }

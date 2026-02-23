@@ -92,6 +92,23 @@ pub fn array2_i64_to_rgba_rainbow(
     Some(scalar_to_rgba_rainbow(&f64_data, Some((min, max))))
 }
 
+pub fn array2_f32_to_rgba_rainbow(
+    data: &Array2<f32>,
+    min_max: Option<(f32, f32)>,
+) -> Option<Vec<u8>> {
+    let slice = data.as_slice()?;
+    let (min, max) = match min_max {
+        Some((lo, hi)) => (lo as f64, hi as f64),
+        None => {
+            let min = slice.iter().fold(f64::INFINITY, |a, &b| a.min(b as f64));
+            let max = slice.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b as f64));
+            (min, max)
+        }
+    };
+    let f64_data: Vec<f64> = slice.iter().map(|&x| x as f64).collect();
+    Some(scalar_to_rgba_rainbow(&f64_data, Some((min, max))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

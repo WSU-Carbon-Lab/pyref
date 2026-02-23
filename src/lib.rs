@@ -3,6 +3,7 @@ use polars::prelude::*;
 
 pub mod beamfinding;
 pub mod colormap;
+pub mod gaussian_fit;
 pub mod errors;
 pub mod fits;
 pub mod io;

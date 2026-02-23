@@ -166,6 +166,8 @@ pub struct App {
     pub expanded_table_row: Option<usize>,
     pub expanded_selected_file_index: Option<usize>,
     pub expanded_files_scroll_offset: usize,
+    pub expanded_files_sort_column: Option<usize>,
+    pub expanded_files_sort_ordering: Option<cmp::Ordering>,
     pub last_expanded_files_visible: usize,
     pub preview_tx: Option<mpsc::Sender<PathBuf>>,
     pub focus: Focus,
@@ -386,7 +388,7 @@ fn build_groups_from_files(rows: Vec<FileRow>) -> Vec<GroupedProfileRow> {
     groups.sort_by(|a, b| {
         a.sample
             .cmp(&b.sample)
-            .then(a.tag.cmp(&b.tag))
+            .then_with(|| a.tag.cmp(&b.tag))
             .then(a.scan_numbers.first().cmp(&b.scan_numbers.first()))
             .then(
                 a.energy_min
@@ -396,6 +398,30 @@ fn build_groups_from_files(rows: Vec<FileRow>) -> Vec<GroupedProfileRow> {
             .then(a.pol_str.cmp(&b.pol_str))
     });
     groups
+}
+
+#[cfg(feature = "catalog")]
+fn beamspot_mean_std(rows: &[FileRow]) -> (f64, f64, f64, f64) {
+    let vals: Vec<(f64, f64)> = rows
+        .iter()
+        .filter_map(|r| match (r.beam_row, r.beam_col) {
+            (Some(a), Some(b)) => Some((a as f64, b as f64)),
+            _ => None,
+        })
+        .collect();
+    if vals.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let n = vals.len() as f64;
+    let (row_sum, col_sum) = vals.iter().fold((0.0, 0.0), |(sr, sc), (r, c)| (sr + r, sc + c));
+    let row_mean = row_sum / n;
+    let col_mean = col_sum / n;
+    let (row_var, col_var) = vals.iter().fold((0.0, 0.0), |(vr, vc), (r, c)| {
+        (vr + (r - row_mean).powi(2), vc + (c - col_mean).powi(2))
+    });
+    let row_std = (row_var / n).max(0.0).sqrt();
+    let col_std = (col_var / n).max(0.0).sqrt();
+    (row_mean, row_std, col_mean, col_std)
 }
 
 fn catalog_to_profiles(
@@ -514,6 +540,8 @@ impl App {
             expanded_table_row: None,
             expanded_selected_file_index: None,
             expanded_files_scroll_offset: 0,
+            expanded_files_sort_column: Some(1),
+            expanded_files_sort_ordering: Some(cmp::Ordering::Less),
             last_expanded_files_visible: 5,
             preview_tx: None,
             focus: Focus::SampleList,
@@ -597,6 +625,8 @@ impl App {
             expanded_table_row: None,
             expanded_selected_file_index: None,
             expanded_files_scroll_offset: 0,
+            expanded_files_sort_column: Some(1),
+            expanded_files_sort_ordering: Some(cmp::Ordering::Less),
             last_expanded_files_visible: 5,
             preview_tx: None,
             focus: Focus::SampleList,
@@ -1234,19 +1264,110 @@ impl App {
         self.filtered_groups.get(orig)
     }
 
+    #[cfg(feature = "catalog")]
+    pub fn expanded_files_display_order(&self, group: &GroupedProfileRow) -> Vec<usize> {
+        use super::beamspot;
+        let sort_col = self.expanded_files_sort_column.unwrap_or(1);
+        let sort_ord = self.expanded_files_sort_ordering.unwrap_or(cmp::Ordering::Less);
+        let files = &group.file_rows;
+        let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(files);
+        let fit = beamspot::fit_beamspot_linear(files, group.scan_type);
+        let mut indices: Vec<usize> = (0..files.len()).collect();
+        indices.sort_by(|&a, &b| {
+            let ra = &files[a];
+            let rb = &files[b];
+            let ord = match sort_col {
+                0 => ra.scan_number.cmp(&rb.scan_number),
+                1 => ra.frame_number.cmp(&rb.frame_number),
+                2 => ra
+                    .epu_polarization
+                    .partial_cmp(&rb.epu_polarization)
+                    .unwrap_or(cmp::Ordering::Equal),
+                3 => ra
+                    .beamline_energy
+                    .partial_cmp(&rb.beamline_energy)
+                    .unwrap_or(cmp::Ordering::Equal),
+                4 => ra
+                    .sample_theta
+                    .partial_cmp(&rb.sample_theta)
+                    .unwrap_or(cmp::Ordering::Equal),
+                5 => ra
+                    .beam_row
+                    .cmp(&rb.beam_row)
+                    .then_with(|| ra.beam_col.cmp(&rb.beam_col)),
+                6 => beamspot::beamspot_status(
+                    ra.beam_row,
+                    ra.beam_col,
+                    beamspot::domain_for_row(ra, group.scan_type),
+                    fit.as_ref(),
+                    row_mean,
+                    row_std,
+                    col_mean,
+                    col_std,
+                )
+                .1
+                .cmp(&beamspot::beamspot_status(
+                    rb.beam_row,
+                    rb.beam_col,
+                    beamspot::domain_for_row(rb, group.scan_type),
+                    fit.as_ref(),
+                    row_mean,
+                    row_std,
+                    col_mean,
+                    col_std,
+                )
+                .1),
+                _ => cmp::Ordering::Equal,
+            };
+            if sort_ord == cmp::Ordering::Greater {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+        indices
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn cycle_expanded_files_sort(&mut self, column: usize) {
+        if column >= 7 {
+            return;
+        }
+        let (new_col, new_ord) = match (
+            self.expanded_files_sort_column,
+            self.expanded_files_sort_ordering,
+        ) {
+            (Some(c), Some(o)) if c == column => {
+                if o == cmp::Ordering::Less {
+                    (Some(column), Some(cmp::Ordering::Greater))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (Some(column), Some(cmp::Ordering::Less)),
+        };
+        self.expanded_files_sort_column = new_col;
+        self.expanded_files_sort_ordering = new_ord;
+        self.expanded_files_scroll_offset = 0;
+        self.needs_redraw = true;
+    }
+
     pub fn set_preview_tx(&mut self, tx: mpsc::Sender<PathBuf>) {
         self.preview_tx = Some(tx);
     }
 
     pub fn send_preview_path_if_selected(&mut self) {
-        if let (Some(tx), Some(idx), Some(file_ix)) = (
+        if let (Some(tx), Some(idx), Some(display_ix)) = (
             self.preview_tx.as_ref(),
             self.expanded_table_row,
             self.expanded_selected_file_index,
         ) {
             if let Some(g) = self.group_at_display_index(idx) {
-                if let Some(row) = g.file_rows.get(file_ix) {
-                    let _ = tx.send(PathBuf::from(&row.file_path));
+                let order = self.expanded_files_display_order(g);
+                if let Some(&real_ix) = order.get(display_ix) {
+                    if let Some(row) = g.file_rows.get(real_ix) {
+                        let _ = tx.send(PathBuf::from(&row.file_path));
+                    }
                 }
             }
         }
@@ -1322,9 +1443,34 @@ impl App {
                 "row mean={:.1} std={:.1}  col mean={:.1} std={:.1}",
                 row_mean, row_std, col_mean, col_std
             );
+            let fit_str = self
+                .group_at_display_index(idx)
+                .and_then(|g| {
+                    super::beamspot::fit_beamspot_linear(&g.file_rows, g.scan_type)
+                        .map(|f| (g.scan_type, f))
+                })
+                .map(|(scan_type, f)| {
+                    let domain = match scan_type {
+                        super::scan_type::ReflectivityScanType::FixedEnergy => "theta",
+                        super::scan_type::ReflectivityScanType::FixedAngle => "E",
+                        super::scan_type::ReflectivityScanType::SinglePoint => "?",
+                    };
+                    format!(
+                        "  Fit({}): row={:.3}*x+{:.1} col={:.3}*x+{:.1}  res_std row={:.2} col={:.2}",
+                        domain,
+                        f.row_slope,
+                        f.row_intercept,
+                        f.col_slope,
+                        f.col_intercept,
+                        f.row_residual_std,
+                        f.col_residual_std
+                    )
+                });
             let base = format!(
-                "Materialized {} file(s); beamspots stored.  {}",
-                ok, stats
+                "Materialized {} file(s); beamspots stored.  {}{}",
+                ok,
+                stats,
+                fit_str.as_deref().unwrap_or("")
             );
             if lost {
                 format!("{}  (high variance: beam may be lost)", base)

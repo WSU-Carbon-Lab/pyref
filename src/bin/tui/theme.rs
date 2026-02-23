@@ -93,7 +93,9 @@ pub fn status_ok_style(mode: ThemeMode) -> Style {
 pub fn status_warning_style(mode: ThemeMode) -> Style {
     match mode {
         ThemeMode::Bw => Style::new().add_modifier(Modifier::BOLD),
-        ThemeMode::C16 | ThemeMode::C256 | ThemeMode::Truecolor => Style::new().fg(Color::Yellow),
+        ThemeMode::C16 => Style::new().fg(Color::Yellow),
+        ThemeMode::C256 => Style::new().fg(Color::Indexed(208)),
+        ThemeMode::Truecolor => Style::new().fg(Color::Rgb(255, 165, 0)),
     }
 }
 

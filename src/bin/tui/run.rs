@@ -373,6 +373,13 @@ fn handle_mouse(
         }
         if let Some(ef) = rects.expanded_files {
             if rect_contains(ef, col, row) {
+                #[cfg(feature = "catalog")]
+                if row == ef.y + 1 {
+                    if let Some(layout_col) = expanded_file_header_column_at(ef, col, app) {
+                        app.cycle_expanded_files_sort(layout_col);
+                        return true;
+                    }
+                }
                 if let Some(idx) = app.expanded_table_row {
                     if let Some(g) = app.group_at_display_index(idx) {
                         let file_count = g.file_rows.len();
@@ -465,6 +472,58 @@ const TABLE_WIDTHS: [Constraint; 11] = [
     Constraint::Length(6),
     Constraint::Percentage(10),
 ];
+
+const EXPANDED_FILES_TABLE_COLUMN_SPACING: u16 = 1;
+
+const EXPANDED_FILES_TABLE_LAYOUT: [Constraint; 13] = [
+    Constraint::Length(7),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(7),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(5),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(8),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(8),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(10),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(8),
+];
+
+fn expanded_file_header_column_at(rect: Rect, col: u16, app: &App) -> Option<usize> {
+    let inner_x = rect.x + 1;
+    let inner_width = rect.width.saturating_sub(2);
+    let need_scrollbar = app
+        .expanded_table_row
+        .and_then(|i| app.group_at_display_index(i))
+        .map(|g| g.file_rows.len() > app.last_expanded_files_visible)
+        .unwrap_or(false);
+    let table_width = if need_scrollbar && inner_width > 1 {
+        inner_width - 1
+    } else {
+        inner_width
+    };
+    if col < inner_x || col >= inner_x + table_width {
+        return None;
+    }
+    let inner = Rect {
+        x: inner_x,
+        y: rect.y,
+        width: table_width,
+        height: 1,
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(EXPANDED_FILES_TABLE_LAYOUT)
+        .split(inner);
+    for (i, r) in chunks.iter().enumerate() {
+        if col >= r.x && col < r.x + r.width {
+            return Some(i / 2);
+        }
+    }
+    None
+}
 
 fn table_header_column_at(rect: Rect, col: u16) -> Option<usize> {
     if col < rect.x || col >= rect.x + rect.width {

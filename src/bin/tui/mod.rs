@@ -4,6 +4,8 @@ mod error;
 pub mod keymap;
 mod run;
 #[cfg(feature = "catalog")]
+mod beamspot;
+#[cfg(feature = "catalog")]
 mod scan_type;
 pub mod terminal_guard;
 mod theme;

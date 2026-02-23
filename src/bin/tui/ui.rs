@@ -801,39 +801,6 @@ fn beamspot_mean_std(beamspots: &[(i64, i64)]) -> (f64, f64, f64, f64) {
 }
 
 #[cfg(feature = "catalog")]
-fn beamspot_status_z(
-    row: Option<i64>,
-    col: Option<i64>,
-    row_mean: f64,
-    row_std: f64,
-    col_mean: f64,
-    col_std: f64,
-) -> &'static str {
-    let (r, c) = match (row, col) {
-        (Some(a), Some(b)) => (a as f64, b as f64),
-        _ => return "-",
-    };
-    let z_row = if row_std > 1e-9 {
-        (r - row_mean) / row_std
-    } else {
-        0.0
-    };
-    let z_col = if col_std > 1e-9 {
-        (c - col_mean) / col_std
-    } else {
-        0.0
-    };
-    let max_z = z_row.abs().max(z_col.abs());
-    if max_z < 2.0 {
-        "ok"
-    } else if max_z < 4.0 {
-        "warning"
-    } else {
-        "err"
-    }
-}
-
-#[cfg(feature = "catalog")]
 fn render_expanded_file_list(
     frame: &mut Frame,
     area: Rect,
@@ -858,15 +825,15 @@ fn render_expanded_file_list(
     if app.expanded_files_scroll_offset > max_offset {
         app.expanded_files_scroll_offset = max_offset;
     }
-    let file_rows = match app.group_at_display_index(i) {
-        Some(g) => &g.file_rows,
+    let group = match app.group_at_display_index(i) {
+        Some(g) => g,
         None => return None,
     };
+    let file_rows = &group.file_rows;
+    let display_order = app.expanded_files_display_order(group);
     let offset = app.expanded_files_scroll_offset;
-    let start = offset.min(file_rows.len());
-    let slice = file_rows.get(start..).unwrap_or(&[]);
-    let take = slice.len().min(visible_rows);
-    let visible_slice = slice.get(..take).unwrap_or(&[]);
+    let start = offset.min(display_order.len());
+    let take = (display_order.len().saturating_sub(start)).min(visible_rows);
     frame.render_widget(block, area);
     let needs_scrollbar = inner.width > SCROLLBAR_WIDTH
         && file_count > app.last_expanded_files_visible;
@@ -887,24 +854,29 @@ fn render_expanded_file_list(
         })
         .collect();
     let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(&beamspots);
+    let fit = super::beamspot::fit_beamspot_linear(file_rows, group.scan_type);
     let header_style = super::theme::header_style(theme);
+    let (sort_col, sort_ord) = (
+        app.expanded_files_sort_column,
+        app.expanded_files_sort_ordering,
+    );
     let header = Row::new(vec![
-        Cell::from("Scan"),
-        Cell::from("Frame"),
-        Cell::from("pol"),
-        Cell::from("E (eV)"),
-        Cell::from("\u{03B8} (\u{00B0})"),
-        Cell::from("Beamspot"),
-        Cell::from("Status"),
+        table_header_cell("Scan", sort_col, sort_ord, 0),
+        table_header_cell("Frame", sort_col, sort_ord, 1),
+        table_header_cell("pol", sort_col, sort_ord, 2),
+        table_header_cell("E (eV)", sort_col, sort_ord, 3),
+        table_header_cell("\u{03B8} (\u{00B0})", sort_col, sort_ord, 4),
+        table_header_cell("Beamspot", sort_col, sort_ord, 5),
+        table_header_cell("Status", sort_col, sort_ord, 6),
     ])
     .style(header_style)
     .bottom_margin(1);
-    let rows: Vec<Row> = visible_slice
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let file_ix = start + i;
-            let row_style = if app.expanded_selected_file_index == Some(file_ix) {
+    let rows: Vec<Row> = (0..take)
+        .map(|i| {
+            let display_ix = start + i;
+            let real_ix = display_order[display_ix];
+            let r = &file_rows[real_ix];
+            let row_style = if app.expanded_selected_file_index == Some(display_ix) {
                 super::theme::row_highlight_style(theme)
             } else {
                 ratatui::style::Style::default()
@@ -924,8 +896,23 @@ fn render_expanded_file_list(
                 (Some(row), Some(col)) => format!("{},{}", row, col),
                 _ => "-".to_string(),
             };
-            let status =
-                beamspot_status_z(r.beam_row, r.beam_col, row_mean, row_std, col_mean, col_std);
+            let status = super::beamspot::beamspot_status(
+                r.beam_row,
+                r.beam_col,
+                super::beamspot::domain_for_row(r, group.scan_type),
+                fit.as_ref(),
+                row_mean,
+                row_std,
+                col_mean,
+                col_std,
+            )
+            .0;
+            let status_style = match status {
+                "ok" => super::theme::status_ok_style(theme),
+                "warning" => super::theme::status_warning_style(theme),
+                "err" => super::theme::status_error_style(theme),
+                _ => ratatui::style::Style::default(),
+            };
             Row::new(vec![
                 Cell::from(scan),
                 Cell::from(frame),
@@ -933,19 +920,19 @@ fn render_expanded_file_list(
                 Cell::from(energy),
                 Cell::from(theta),
                 Cell::from(beamspot),
-                Cell::from(status),
+                Cell::from(Span::styled(status, status_style)),
             ])
             .style(row_style)
         })
         .collect();
     let widths = [
-        Constraint::Length(6),
-        Constraint::Length(6),
-        Constraint::Length(4),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(5),
         Constraint::Length(8),
         Constraint::Length(8),
         Constraint::Length(10),
-        Constraint::Length(7),
+        Constraint::Length(8),
     ];
     let table = Table::new(rows, widths).header(header).column_spacing(1);
     frame.render_widget(table, table_inner);

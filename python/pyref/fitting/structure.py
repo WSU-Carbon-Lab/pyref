@@ -1411,7 +1411,7 @@ class UniTensorSLD(Scatterer):
 
     @property
     def n(self) -> NDArray[np.complex128]:
-        e = self.get_energy()
+        e = float(self.get_energy())
         return np.array(
             [
                 [self.n_xx(e) + self.n_ixx(e) * 1j, 0],

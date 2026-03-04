@@ -15,6 +15,7 @@ __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
 
 from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
+from pyref.nexafs import accessor  # noqa: F401 - registers df.nexafs accessor
 from pyref.io import scan_experiment, build_catalog
 from pyref.loader import PrsoxrLoader
 from pyref.masking import InteractiveImageMasker

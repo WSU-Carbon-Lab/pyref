@@ -49,6 +49,9 @@ dependencies = [
     "jupyter-bokeh>=4.0.5",
     "uncertainties>=3.2.3",
     "ezfit>=0.1.5",
+    "scienceplots>=2.2.1",
+    "datasets>=4.6.0",
+    "huggingface-hub>=1.5.0",
 ]
 
 [tool.maturin]
@@ -165,6 +168,7 @@ python-source = "python"
 [dependency-groups]
 dev = [
     "maturin>=1.11.5",
+    "nbconvert>=7.17.0",
     "patchelf>=0.17.2.2",
     "pyrefly>=0.24.2",
     "ruff>=0.11.9",

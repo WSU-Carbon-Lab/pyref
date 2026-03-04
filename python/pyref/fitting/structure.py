@@ -12,7 +12,7 @@ import periodictable as pt
 import periodictable.xsf as xsf
 from refnx.analysis import Parameter, Parameters, possibly_create_parameter
 from refnx.reflect.interface import Erf, Step
-from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import interp1d
 
 from pyref.fitting.model import reflectivity
 
@@ -1372,47 +1372,33 @@ class UniTensorSLD(Scatterer):
         energy_offset: float = 0,
         name: str = "",
     ):
-        # =================/ Initialize /================
+        required_columns = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
+        if not all(col in ooc.columns for col in required_columns):
+            missing = [col for col in required_columns if col not in ooc.columns]
+            raise ValueError(
+                f"Optical constants dataframe missing required columns: {missing}"
+            )
+
         self._parameters = Parameters(name=name)
         super().__init__(name=name)
 
-        # ============/ Isotropic Parameters /===========
         self.density: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             density, name=f"{name}_density", bounds=(0, 5 * density), vary=True
         )
         self.rotation: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             rotation, name=f"{name}_rotation", vary=True, bounds=(-np.pi, np.pi)
         )
-        # ============/ Optical Constants /===========
         self.energy = energy
         self.energy_offset: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             energy_offset, name=f"{name}_energy_offset", vary=True, bounds=(-0.01, 0.01)
         )
-        # store the optical constants as n_xx n_ixx, n_zz, n_izz
-        self._load_ooc(ooc)
-        # Add parameters to parameter set
+        self.n_xx = interp1d(ooc["energy"], ooc["n_xx"], bounds_error=False)
+        self.n_ixx = interp1d(ooc["energy"], ooc["n_ixx"], bounds_error=False)
+        self.n_zz = interp1d(ooc["energy"], ooc["n_zz"], bounds_error=False)
+        self.n_izz = interp1d(ooc["energy"], ooc["n_izz"], bounds_error=False)
+
         self._parameters.extend(
             [self.density, self.rotation, self.energy_offset])
-
-    def _load_ooc(self, ooc: pd.DataFrame):
-        """Loac Optical Constants from a DataFrame."""
-
-        # Validate the DataFrame
-        required_columns = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
-        if not all(col in ooc.columns for col in required_columns):
-            missing = [
-                col for col in required_columns if col not in ooc.columns]
-            e = f"Optical constants dataframe missing required columns: {missing}"
-            raise ValueError(e)
-        cropped_tensor = slice_range(ooc, "energy", self.energy, 0.5)
-        self.n_xx = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_xx"])
-        self.n_ixx = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_ixx"])
-        self.n_zz = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_zz"])
-        self.n_izz = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_izz"])
 
     def __complex__(self):
         """Complex representation of the scatterer."""
@@ -1422,6 +1408,17 @@ class UniTensorSLD(Scatterer):
     def __repr__(self):
         """Representation of the scatterer."""
         return "Index of Refraction = (name={name!r})".format(**self.__dict__)
+
+    @property
+    def n(self) -> NDArray[np.complex128]:
+        e = self.get_energy()
+        return np.array(
+            [
+                [self.n_xx(e) + self.n_ixx(e) * 1j, 0],
+                [0, self.n_zz(e) + self.n_izz(e) * 1j],
+            ],
+            dtype=np.complex128,
+        )
 
     @property
     def parameters(self):
@@ -1441,22 +1438,12 @@ class UniTensorSLD(Scatterer):
             out : np.ndarray (3x3)
                 complex tensor index of refraction
         """
-
+        n: NDArray[np.complex128] = self.get_density() * self.n
         cos_squared: float = np.square(np.cos(self.get_rotation()))
         sin_squared: float = 1 - cos_squared
 
-        n_xx = complex(
-            self.n_xx(self.energy + self.energy_offset)
-            + 1j*self.n_ixx(self.energy + self.energy_offset)
-        )
-        n_zz = complex(
-            self.n_zz(self.energy + self.energy_offset)
-            + 1j*self.n_izz(self.energy + self.energy_offset)
-        )
-
-        n_o: complex = (n_xx * (1 + cos_squared) +
-                        n_zz * sin_squared) / 2
-        n_e: complex = n_xx * sin_squared + n_zz * cos_squared
+        n_o: complex = (n[0, 0] * (1 + cos_squared) + n[1, 1] * sin_squared) / 2
+        n_e: complex = n[0, 0] * sin_squared + n[1, 1] * cos_squared
 
         self._tensor = np.array(
             [
@@ -1466,7 +1453,7 @@ class UniTensorSLD(Scatterer):
             ],
             dtype=np.complex128,
         )
-        return self._tensor * self.get_density()
+        return self._tensor
 
 
 class MixedMaterialSlab(PXR_Component):

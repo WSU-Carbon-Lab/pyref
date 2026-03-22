@@ -1,5 +1,6 @@
 use ndarray::Array2;
 
+/// 2D Gaussian fit result: center (row, col), sigmas, amplitude, and constant baseline.
 #[derive(Debug, Clone, Copy)]
 pub struct Gaussian2DFit {
     pub center_row: f64,

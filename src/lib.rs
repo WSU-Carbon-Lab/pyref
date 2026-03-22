@@ -8,6 +8,7 @@ pub mod errors;
 pub mod fits;
 pub mod io;
 pub mod loader;
+pub mod path_policy;
 
 #[cfg(feature = "catalog")]
 pub mod catalog;
@@ -18,9 +19,11 @@ pub use io::schema::FitsMetadataSchema;
 pub use io::source::{FitsSource, ResolvePreference, ResolvedSource};
 pub use io::{build_fits_stem, image_mmap, ImageInfo};
 pub use loader::{
-    read_experiment_headers_only, read_fits, read_fits_headers_only, read_fits_metadata_batch,
-    read_multiple_fits_headers_only, scan_fits,
+    catalog_from_stems, list_fits_in_dir, read_experiment_headers_only, read_fits,
+    read_fits_headers_only, read_fits_metadata_batch, read_multiple_fits_headers_only, scan_fits,
+    StemCatalog,
 };
+pub use path_policy::is_indexable_als_path;
 
 #[cfg(feature = "extension-module")]
 #[allow(clippy::useless_conversion)]

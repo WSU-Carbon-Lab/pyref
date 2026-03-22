@@ -19,10 +19,12 @@ path = "src/bin/browser.rs"
 required-features = ["tui"]
 
 [features]
-default = ["extension-module", "catalog"]
+default = ["extension-module", "catalog", "parallel_ingest"]
 extension-module = ["dep:pyo3", "dep:pyo3-polars", "dep:numpy"]
 catalog = ["dep:rusqlite", "dep:walkdir"]
-tui = ["catalog", "watch", "dep:ratatui", "dep:crossterm", "dep:toml", "dep:fuzzy-matcher", "dep:log", "dep:eframe", "dep:plotters"]
+parallel_ingest = ["catalog", "dep:crossbeam-channel"]
+zarr = ["catalog", "dep:zarrs"]
+tui = ["catalog", "watch", "parallel_ingest", "dep:ratatui", "dep:crossterm", "dep:toml", "dep:fuzzy-matcher", "dep:log", "dep:eframe"]
 watch = ["dep:notify-debouncer-mini"]
 
 [dependencies]
@@ -46,11 +48,11 @@ toml = {version = "0.8", optional = true}
 fuzzy-matcher = {version = "0.3", optional = true}
 rusqlite = {version = "0.32", optional = true, features = ["bundled"]}
 walkdir = {version = "2", optional = true}
+crossbeam-channel = {version = "0.5", optional = true}
 notify-debouncer-mini = {version = "0.4", optional = true}
 log = {version = "0.4", optional = true}
 eframe = {version = "0.28", optional = true, default-features = true}
-plotters = {version = "0.3", optional = true, default-features = false, features = ["bitmap_backend", "bitmap_encoder", "line_series"]}
-
+zarrs = {version = "0.23", optional = true, default-features = false, features = ["filesystem", "ndarray"]}
 [dev-dependencies]
 tempfile = "3.14"
 rstest = "0.18"

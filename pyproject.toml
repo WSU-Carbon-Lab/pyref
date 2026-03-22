@@ -56,7 +56,7 @@ dependencies = [
 
 [tool.maturin]
 bindings = "pyo3"
-features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
+features = ["pyo3/extension-module", "pyo3/generate-import-lib", "parallel_ingest"]
 format = ["wheel"]
 minimum-python-version = "3.12"
 module-name = "pyref"

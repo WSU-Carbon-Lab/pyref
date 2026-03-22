@@ -25,62 +25,8 @@ hc = (speed_of_light * plank_constant) * 1e10  # ev*A
 
 tensor_index = ["xx", "yy", "zz"]  # Indexing for later definitions
 
-# ===============/ Helper Functions /===================
 
-
-def slice_range(
-    df: pd.DataFrame,
-    col: str,
-    center: float,
-    bounds: float,
-    min_length: int = 3,
-) -> pd.DataFrame:
-    """
-    Slice a DataFrame to rows within a given range around a center value,
-    ensuring at least `min_length` rows are returned.
-
-    Finds the row where 'col' is closest to the given `center` value, then
-    attempts to slice the DataFrame to all rows with 'col' between
-    `center - bounds` and `center + bounds`. If the number of such rows is
-    less than `min_length`, returns a symmetric window of
-    `min_length` rows centered on the closest row.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame to slice.
-    col : str
-        Name of the column to use for slicing.
-    center : float
-        Center value for the range.
-    bounds : float
-        Bounds on either side of the center (the range is [center - bounds, center + bounds]).
-    min_length : int, default=3
-        Minimum number of rows to return.
-
-    Returns
-    -------
-    pd.DataFrame
-        Sliced DataFrame with at least `min_length` rows in the specified range.
-    """
-    from math import floor, ceil
-
-    center_row = (df[col] - center).abs().idxmin()
-    mask = (df[col] >= center - bounds) & (df[col] <= center + bounds)
-    if mask.sum() < min_length:
-        start = max(center_row - floor(min_length / 2), 0)
-        end = start + min_length
-        # Ensure we don't go out of bounds
-        end = min(end, len(df))
-        start = max(end - min_length, 0)
-        return df.iloc[start:end]
-    mask_res = df[mask]
-    if isinstance(mask_res, pd.DataFrame):
-        return mask_res
-    raise TypeError(
-        f"Expected pd.DataFrame or pd.Series, got {type(mask_res)}")
 # ==============/ Base Classes /===================
-
 
 class Structure(UserList):
     r"""
@@ -1372,33 +1318,37 @@ class UniTensorSLD(Scatterer):
         energy_offset: float = 0,
         name: str = "",
     ):
+        # =================/ Input Validation /================
         required_columns = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
         if not all(col in ooc.columns for col in required_columns):
             missing = [col for col in required_columns if col not in ooc.columns]
-            raise ValueError(
-                f"Optical constants dataframe missing required columns: {missing}"
-            )
+            e = f"Optical constants dataframe missing required columns: {missing}"
+            raise ValueError(e)
 
+        # =================/ Initialize /================
         self._parameters = Parameters(name=name)
         super().__init__(name=name)
 
+        # ============/ Isotropic Parameters /===========
         self.density: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             density, name=f"{name}_density", bounds=(0, 5 * density), vary=True
         )
         self.rotation: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             rotation, name=f"{name}_rotation", vary=True, bounds=(-np.pi, np.pi)
         )
+        # ============/ Optical Constants /===========
         self.energy = energy
         self.energy_offset: Parameter = possibly_create_parameter(  # type: ignore[assignment]
             energy_offset, name=f"{name}_energy_offset", vary=True, bounds=(-0.01, 0.01)
         )
+        # store the optical constants as n_xx n_ixx, n_zz, n_izz
         self.n_xx = interp1d(ooc["energy"], ooc["n_xx"], bounds_error=False)
         self.n_ixx = interp1d(ooc["energy"], ooc["n_ixx"], bounds_error=False)
         self.n_zz = interp1d(ooc["energy"], ooc["n_zz"], bounds_error=False)
         self.n_izz = interp1d(ooc["energy"], ooc["n_izz"], bounds_error=False)
 
-        self._parameters.extend(
-            [self.density, self.rotation, self.energy_offset])
+        # Add parameters to parameter set
+        self._parameters.extend([self.density, self.rotation, self.energy_offset])
 
     def __complex__(self):
         """Complex representation of the scatterer."""
@@ -1411,7 +1361,15 @@ class UniTensorSLD(Scatterer):
 
     @property
     def n(self) -> NDArray[np.complex128]:
-        e = float(self.get_energy())
+        """
+        Optical constants of the material.
+
+        Returns
+        -------
+        n : np.ndarray
+            Optical constants of the material.
+        """
+        e = self.get_energy()
         return np.array(
             [
                 [self.n_xx(e) + self.n_ixx(e) * 1j, 0],
@@ -1438,7 +1396,7 @@ class UniTensorSLD(Scatterer):
             out : np.ndarray (3x3)
                 complex tensor index of refraction
         """
-        n: NDArray[np.complex128] = self.get_density() * self.n
+        n: np.ndarray = self.get_density() * self.n
         cos_squared: float = np.square(np.cos(self.get_rotation()))
         sin_squared: float = 1 - cos_squared
 

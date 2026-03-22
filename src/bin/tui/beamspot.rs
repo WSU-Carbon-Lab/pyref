@@ -1,4 +1,3 @@
-#![cfg(feature = "catalog")]
 
 use pyref::catalog::FileRow;
 use super::scan_type::ReflectivityScanType;

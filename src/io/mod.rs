@@ -4,6 +4,9 @@ pub mod options;
 pub mod schema;
 pub mod source;
 
+#[cfg(feature = "zarr")]
+pub mod zarr_store;
+
 use ndarray::{Array2, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use polars::prelude::*;
 use regex::Regex;
@@ -109,6 +112,11 @@ pub struct ParsedFitsStem {
     pub frame_number: i64,
 }
 
+pub fn is_polarization_tag(name: &str) -> bool {
+    let n = name.trim().to_lowercase();
+    n == "s" || n == "p"
+}
+
 pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
     let stem = stem.trim();
     let re = Regex::new(r"^(.+?)[\s\-_]?(\d{5})-(\d{5})$").ok()?;
@@ -121,7 +129,13 @@ pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
     let (sample_name, tag) = if base.contains('_') {
         let parts: Vec<&str> = base.split('_').collect();
         let (last, rest) = parts.split_last()?;
-        (rest.join("_"), Some((*last).to_string()))
+        let raw_tag = (*last).to_string();
+        let tag = if is_polarization_tag(&raw_tag) {
+            None
+        } else {
+            Some(raw_tag)
+        };
+        (rest.join("_"), tag)
     } else {
         (base.to_string(), None)
     };
@@ -238,6 +252,72 @@ pub fn add_calculated_domains(mut lzf: LazyFrame) -> DataFrame {
     }
 
     lz.collect().unwrap_or_else(|_| DataFrame::empty())
+}
+
+pub const TRIM_ROWS: usize = 5;
+pub const TRIM_COLS: usize = 5;
+pub const ROW_BG_STRIP_WIDTH: usize = 10;
+pub const DARK_BAND_HEIGHT: usize = 10;
+
+pub fn trim_image_interior(
+    data: &Array2<i64>,
+    trim_rows: usize,
+    trim_cols: usize,
+) -> Array2<i64> {
+    let rows = data.nrows();
+    let cols = data.ncols();
+    if rows < 2 * trim_rows || cols < 2 * trim_cols {
+        return data.clone();
+    }
+    data.slice(ndarray::s![
+        trim_rows..(rows - trim_rows),
+        trim_cols..(cols - trim_cols)
+    ])
+    .to_owned()
+}
+
+pub fn subtract_background_row_strips(data: &Array2<i64>) -> Array2<i64> {
+    let rows = data.nrows();
+    let cols = data.ncols();
+    let strip = ROW_BG_STRIP_WIDTH.min(cols / 2);
+    if strip == 0 {
+        return data.clone();
+    }
+    let mut result = data.clone();
+    for r in 0..rows {
+        let left_slice = result.slice(ndarray::s![r, ..strip]);
+        let right_slice = result.slice(ndarray::s![r, (cols - strip)..]);
+        let left_sum: i64 = left_slice.iter().copied().sum();
+        let right_sum: i64 = right_slice.iter().copied().sum();
+        let left_mean = left_sum / strip as i64;
+        let right_mean = right_sum / strip as i64;
+        let bg = left_mean.min(right_mean);
+        for c in 0..cols {
+            result[[r, c]] -= bg;
+        }
+    }
+    result
+}
+
+pub fn subtract_dark_cold_side(data: &Array2<i64>) -> Array2<i64> {
+    let rows = data.nrows();
+    let cols = data.ncols();
+    let band = DARK_BAND_HEIGHT.min(rows / 2);
+    if band == 0 {
+        return data.clone();
+    }
+    let top_slice = data.slice(ndarray::s![..band, ..]);
+    let bottom_slice = data.slice(ndarray::s![(rows - band).., ..]);
+    let top_sum: i64 = top_slice.iter().copied().sum();
+    let bottom_sum: i64 = bottom_slice.iter().copied().sum();
+    let top_mean = top_sum / (band * cols) as i64;
+    let bottom_mean = bottom_sum / (band * cols) as i64;
+    let dark = top_mean.min(bottom_mean);
+    let mut result = data.clone();
+    for v in result.iter_mut() {
+        *v -= dark;
+    }
+    result
 }
 
 pub fn subtract_background(
@@ -420,6 +500,99 @@ pub fn build_headers_only_columns(
     Ok(columns)
 }
 
+#[derive(Debug, Clone)]
+pub struct BtIngestRow {
+    pub file_path: String,
+    pub data_offset: i64,
+    pub naxis1: i64,
+    pub naxis2: i64,
+    pub bitpix: i64,
+    pub bzero: i64,
+    pub file_name: String,
+    pub sample_name: String,
+    pub tag: Option<String>,
+    pub scan_number: i64,
+    pub frame_number: i64,
+    pub beamline_energy: Option<f64>,
+    pub sample_theta: Option<f64>,
+    pub ccd_theta: Option<f64>,
+    pub epu_polarization: Option<f64>,
+    pub exposure: Option<f64>,
+}
+
+fn header_float(primary: &PrimaryHdu, key: &str) -> Option<f64> {
+    if key == "Beamline Energy" {
+        if let Some(card) = primary.header.get_card(key) {
+            if let Some(v) = card.value.as_float() {
+                return Some(v);
+            }
+        }
+        if let Some(card) = primary.header.get_card("Beamline Energy Goal") {
+            return card.value.as_float();
+        }
+        return Some(0.0);
+    }
+    if key == "DATE" || key == "Sample Name" {
+        return None;
+    }
+    primary
+        .header
+        .get_card(key)
+        .map(|c| c.value.as_float().unwrap_or(1.0))
+}
+
+pub fn build_bt_ingest_row(
+    primary: &PrimaryHdu,
+    image_header: &ImageHduHeader,
+    path: PathBuf,
+    header_items: &[String],
+) -> Result<BtIngestRow, FitsError> {
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| FitsError::validation("Invalid UTF-8 in path"))?
+        .to_string();
+    let file_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let (sample_name, tag, scan_number, frame_number) = match parse_fits_stem(&file_name) {
+        Some(p) => (p.sample_name, p.tag, p.scan_number, p.frame_number),
+        None => (String::new(), None, 0i64, 0i64),
+    };
+    let bzero = image_header
+        .header
+        .get_card("BZERO")
+        .and_then(|c| c.value.as_int())
+        .unwrap_or(0);
+    let mut row = BtIngestRow {
+        file_path: path_str,
+        data_offset: image_header.data_offset as i64,
+        naxis1: image_header.naxis1 as i64,
+        naxis2: image_header.naxis2 as i64,
+        bitpix: image_header.bitpix as i64,
+        bzero,
+        file_name,
+        sample_name,
+        tag,
+        scan_number,
+        frame_number,
+        beamline_energy: None,
+        sample_theta: None,
+        ccd_theta: None,
+        epu_polarization: None,
+        exposure: None,
+    };
+    for key in header_items {
+        let v = header_float(primary, key);
+        match key.as_str() {
+            "Beamline Energy" => row.beamline_energy = v,
+            "Sample Theta" => row.sample_theta = v,
+            "CCD Theta" => row.ccd_theta = v,
+            "EPU Polarization" => row.epu_polarization = v,
+            "EXPOSURE" => row.exposure = v,
+            _ => {}
+        }
+    }
+    Ok(row)
+}
+
 pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
     let file_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let mut columns = vec![Column::new("file_name".into(), vec![file_name.to_string()])];
@@ -498,6 +671,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_fits_stem_polarization_not_tag() {
+        let p = parse_fits_stem("znpc_s 81041-00001").expect("should parse");
+        assert_eq!(p.sample_name, "znpc");
+        assert_eq!(p.tag, None);
+        let p2 = parse_fits_stem("znpc_P 81041-00002").expect("should parse");
+        assert_eq!(p2.sample_name, "znpc");
+        assert_eq!(p2.tag, None);
+    }
+
+    #[test]
     fn test_subtract_background_edges() {
         let data = Array2::from_shape_vec(
             (4, 6),
@@ -524,6 +707,141 @@ mod tests {
         assert_eq!(result.shape(), data.shape());
         for (a, b) in data.iter().zip(result.iter()) {
             assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn test_trim_image_interior_shape() {
+        let data = Array2::from_shape_vec((20, 30), vec![0i64; 20 * 30]).unwrap();
+        let trimmed = trim_image_interior(&data, TRIM_ROWS, TRIM_COLS);
+        assert_eq!(trimmed.nrows(), 10);
+        assert_eq!(trimmed.ncols(), 20);
+    }
+
+    #[test]
+    fn test_trim_image_interior_too_small_returns_clone() {
+        let data = Array2::from_shape_vec((8, 8), vec![1i64; 64]).unwrap();
+        let trimmed = trim_image_interior(&data, TRIM_ROWS, TRIM_COLS);
+        assert_eq!(trimmed.shape(), data.shape());
+        assert_eq!(trimmed[[0, 0]], 1);
+    }
+
+    #[test]
+    fn test_trim_image_interior_content_preserved() {
+        let mut data = Array2::zeros((15, 25));
+        data[[5, 5]] = 100;
+        let trimmed = trim_image_interior(&data, TRIM_ROWS, TRIM_COLS);
+        assert_eq!(trimmed.nrows(), 5);
+        assert_eq!(trimmed.ncols(), 15);
+        assert_eq!(trimmed[[0, 0]], 100);
+    }
+
+    #[test]
+    fn test_subtract_background_row_strips_whole_row_corrected() {
+        let data = Array2::from_shape_vec(
+            (2, 30),
+            (0..60).map(|i| if i < 10 { 5i64 } else if i >= 20 { 5i64 } else { 100 }).collect(),
+        )
+        .unwrap();
+        let result = subtract_background_row_strips(&data);
+        for c in 0..30 {
+            assert!(result[[0, c]] <= 100 - 5, "row 0 col {} should be corrected", c);
+            assert!(result[[1, c]] <= 100 - 5, "row 1 col {} should be corrected", c);
+        }
+    }
+
+    #[test]
+    fn test_subtract_background_row_strips_colder_side_per_row() {
+        let mut data = Array2::zeros((2, 30));
+        for c in 0..10 {
+            data[[0, c]] = 3;
+            data[[1, c]] = 20;
+        }
+        for c in 20..30 {
+            data[[0, c]] = 20;
+            data[[1, c]] = 3;
+        }
+        for c in 10..20 {
+            data[[0, c]] = 50;
+            data[[1, c]] = 50;
+        }
+        let result = subtract_background_row_strips(&data);
+        assert_eq!(result[[0, 0]], 0);
+        assert_eq!(result[[0, 15]], 50 - 3);
+        assert_eq!(result[[1, 0]], 20 - 3);
+        assert_eq!(result[[1, 25]], 0);
+    }
+
+    #[test]
+    fn test_subtract_background_row_strips_narrow_image() {
+        let data = Array2::from_shape_vec((4, 10), vec![10i64; 40]).unwrap();
+        let result = subtract_background_row_strips(&data);
+        assert_eq!(result.shape(), data.shape());
+        for v in result.iter() {
+            assert!(*v <= 10);
+        }
+    }
+
+    #[test]
+    fn test_subtract_background_row_strips_exactly_20_cols() {
+        let data = Array2::from_shape_vec((2, 20), vec![7i64; 40]).unwrap();
+        let result = subtract_background_row_strips(&data);
+        assert_eq!(result.shape(), data.shape());
+        for v in result.iter() {
+            assert_eq!(*v, 0);
+        }
+    }
+
+    #[test]
+    fn test_subtract_dark_cold_side_one_scalar() {
+        let data = Array2::from_shape_vec((25, 20), vec![100i64; 500]).unwrap();
+        let result = subtract_dark_cold_side(&data);
+        assert_eq!(result.shape(), data.shape());
+        let expected = 100 - 100;
+        for v in result.iter() {
+            assert_eq!(*v, expected);
+        }
+    }
+
+    #[test]
+    fn test_subtract_dark_cold_side_colder_chosen() {
+        let mut data = Array2::from_shape_vec((30, 15), vec![50i64; 450]).unwrap();
+        for r in 0..10 {
+            for c in 0..15 {
+                data[[r, c]] = 10;
+            }
+        }
+        for r in 20..30 {
+            for c in 0..15 {
+                data[[r, c]] = 80;
+            }
+        }
+        let result = subtract_dark_cold_side(&data);
+        assert_eq!(result[[0, 0]], 0);
+        assert!(result[[15, 0]] < 50);
+        assert_eq!(result[[25, 0]], 80 - 10);
+    }
+
+    #[test]
+    fn test_subtract_dark_cold_side_small_height() {
+        let data = Array2::from_shape_vec((5, 20), vec![1i64; 100]).unwrap();
+        let result = subtract_dark_cold_side(&data);
+        assert_eq!(result.shape(), data.shape());
+    }
+
+    #[test]
+    fn test_raw_pipeline_full_trim_row_dark() {
+        let rows = 30usize;
+        let cols = 40usize;
+        let data = Array2::from_shape_vec((rows, cols), vec![100i64; rows * cols]).unwrap();
+        let trimmed = trim_image_interior(&data, TRIM_ROWS, TRIM_COLS);
+        assert_eq!(trimmed.nrows(), rows - 2 * TRIM_ROWS);
+        assert_eq!(trimmed.ncols(), cols - 2 * TRIM_COLS);
+        let row_corrected = subtract_background_row_strips(&trimmed);
+        let processed = subtract_dark_cold_side(&row_corrected);
+        assert_eq!(processed.shape(), trimmed.shape());
+        for v in processed.iter() {
+            assert!(*v <= 100);
         }
     }
 }

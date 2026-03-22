@@ -47,6 +47,10 @@ pub enum Action {
     NavFwd,
     PreviewImage,
     BeamPosition,
+    NextProblem,
+    PrevProblem,
+    UseLastOkBeamspot,
+    UseNextOkBeamspot,
     None,
 }
 
@@ -116,6 +120,10 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('l') => return Action::NavFwd,
                 KeyCode::Char('v') => return Action::PreviewImage,
                 KeyCode::Char('m') => return Action::BeamPosition,
+                KeyCode::Char('N') => return Action::NextProblem,
+                KeyCode::Char('P') => return Action::PrevProblem,
+                KeyCode::Char('[') => return Action::UseLastOkBeamspot,
+                KeyCode::Char(']') => return Action::UseNextOkBeamspot,
                 _ => {}
             }
         }
@@ -175,6 +183,10 @@ pub fn from_key_event(key: KeyEvent, keymap: &str) -> Action {
                 KeyCode::Char('l') => return Action::NavFwd,
                 KeyCode::Char('v') => return Action::PreviewImage,
                 KeyCode::Char('m') => return Action::BeamPosition,
+                KeyCode::Char('N') => return Action::NextProblem,
+                KeyCode::Char('P') => return Action::PrevProblem,
+                KeyCode::Char('[') => return Action::UseLastOkBeamspot,
+                KeyCode::Char(']') => return Action::UseNextOkBeamspot,
                 _ => {}
             }
         }

@@ -1,0 +1,311 @@
+<h2>TUI Architecture: Current vs. Proposed</h2>
+<p class="subtitle">
+  ASCII wireframes comparing the existing browser interface with the proposed file-explorer redesign.<br>
+  Both mockups represent the full terminal window at a typical 220×50 terminal.
+</p>
+
+<style>
+  .tui-wrap {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    margin: 24px 0;
+  }
+  .tui-panel {
+    border: 2px solid var(--border, #444);
+    border-radius: 8px;
+    padding: 0;
+    background: #0d1117;
+    overflow: hidden;
+  }
+  .tui-label {
+    background: #21262d;
+    color: #8b949e;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 6px 14px;
+    text-transform: uppercase;
+    border-bottom: 1px solid #30363d;
+  }
+  pre.tui {
+    font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: #c9d1d9;
+    margin: 0;
+    padding: 10px 14px 12px;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  pre.tui .dim    { color: #484f58; }
+  pre.tui .muted  { color: #6e7681; }
+  pre.tui .accent { color: #58a6ff; }
+  pre.tui .hi     { color: #e3b341; font-weight: bold; }
+  pre.tui .sel    { background: #1f3a5f; color: #79c0ff; border-radius: 2px; }
+  pre.tui .ok     { color: #3fb950; }
+  pre.tui .warn   { color: #d29922; }
+  pre.tui .err    { color: #f85149; }
+  pre.tui .border { color: #30363d; }
+  pre.tui .title  { color: #f0f6fc; font-weight: bold; }
+  pre.tui .bar    { background: #161b22; color: #6e7681; display: block; }
+  pre.tui .new    { color: #56d364; }
+  pre.tui .path   { color: #a5d6ff; }
+  pre.tui .faint  { color: #3d444d; }
+
+  .annotation-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    margin-bottom: 28px;
+  }
+  .annotation-box {
+    border-radius: 6px;
+    padding: 14px 16px;
+    background: #161b22;
+    border: 1px solid #30363d;
+  }
+  .annotation-box h4 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #79c0ff;
+  }
+  .annotation-box ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 12px;
+    color: #8b949e;
+    line-height: 1.7;
+  }
+  .annotation-box ul li strong { color: #c9d1d9; }
+  .annotation-box .pill {
+    display: inline-block;
+    background: #1f3a5f;
+    color: #79c0ff;
+    border-radius: 3px;
+    font-size: 10px;
+    padding: 1px 6px;
+    margin-right: 4px;
+    font-family: monospace;
+  }
+  .section { margin-bottom: 32px; }
+  h3 { color: #f0f6fc; font-size: 15px; margin: 0 0 12px; border-bottom: 1px solid #21262d; padding-bottom: 6px; }
+</style>
+
+<div class="section">
+  <h3>Screen 1 of 2 — Entry / Launcher Screen</h3>
+
+  <div class="tui-wrap">
+    <!-- CURRENT LAUNCHER -->
+    <div class="tui-panel">
+      <div class="tui-label">Current — Flat Beamtime List</div>
+      <pre class="tui">
+<span class="bar"> pyref browser                                [q]quit  [o]open dir  [↵]open   </span>
+<span class="border">┌─────────────────────────────────────────────────────────────────────────────┐</span>
+<span class="border">│</span> <span class="title">Recent Beamtimes</span>                                                            <span class="border">│</span>
+<span class="border">├─────────────────────────────────────────────────────────────────────────────┤</span>
+<span class="border">│</span> <span class="sel">  /Volumes/DATA/Smith/2024Jan                             2024-01-15  1423 f</span> <span class="border">│</span>
+<span class="border">│</span>   /Volumes/DATA/Jones/2024Feb                            2024-02-03   891 f <span class="border">│</span>
+<span class="border">│</span>   /Volumes/DATA/Smith/2023Nov                            2023-11-22  2110 f <span class="border">│</span>
+<span class="border">│</span>   /Volumes/DATA/Williams/2024Mar                         2024-03-07   344 f <span class="border">│</span>
+<span class="border">│</span>   /Volumes/DATA/Jones/2023Sep                            2023-09-19   755 f <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">│</span>                                                                              <span class="border">│</span>
+<span class="border">└─────────────────────────────────────────────────────────────────────────────┘</span>
+<span class="muted"> 5 beamtimes indexed                                                           </span>
+<span class="bar"> [o] Open directory   [↵] Open selected   [q] Quit                            </span>
+</pre>
+    </div>
+
+    <!-- PROPOSED EXPLORER -->
+    <div class="tui-panel">
+      <div class="tui-label">Proposed — NAS File Explorer</div>
+      <pre class="tui">
+<span class="bar"> pyref browser  <span class="path">/Volumes/DATA</span>             [←]back  [→]enter  [i]ingest  [q]quit </span>
+<span class="border">┌───────────────────────────────────────────────────────────────────────────────────────────────┐</span>
+<span class="border">│</span> <span class="path">▸ /Volumes/DATA</span>                                                                               <span class="border">│</span>
+<span class="border">├──────────────────────────────────────┬────────────────┬───────────┬──────────┬───────────────┤</span>
+<span class="border">│</span> <span class="muted"> Name                                </span><span class="border">│</span><span class="muted"> Date Modified  </span><span class="border">│</span><span class="muted"> Size      </span><span class="border">│</span><span class="muted"> Kind     </span><span class="border">│</span><span class="muted"> # Beamtimes   </span><span class="border">│</span>
+<span class="border">├──────────────────────────────────────┼────────────────┼───────────┼──────────┼───────────────┤</span>
+<span class="border">│</span> <span class="sel">  📁 Smith                           │  2024-03-15    │  48.2 GB  │  Person  │  6 beamtimes  </span><span class="border">│</span>
+<span class="border">│</span>   📁 Jones                           │  2024-03-07    │  22.7 GB  │  Person  │  4 beamtimes  <span class="border">│</span>
+<span class="border">│</span>   📁 Williams                        │  2024-02-28    │   9.1 GB  │  Person  │  2 beamtimes  <span class="border">│</span>
+<span class="border">│</span>   📁 Chen                            │  2024-01-12    │  31.5 GB  │  Person  │  3 beamtimes  <span class="border">│</span>
+<span class="border">│</span>   📁 Patel                           │  2023-11-05    │   5.4 GB  │  Person  │  1 beamtime   <span class="border">│</span>
+<span class="border">│</span>   <span class="muted">📄 .pyref/                         │  2024-03-15    │   2.1 MB  │  Catalog │  (index)      </span><span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">│</span>                                      │                │           │          │               <span class="border">│</span>
+<span class="border">└──────────────────────────────────────┴────────────────┴───────────┴──────────┴───────────────┘</span>
+<span class="muted"> 5 experimentalists  │  116.9 GB total  │  catalog: ✓ DATA/.pyref/catalog.db    </span>
+<span class="bar"> [↑↓] navigate  [→/↵] enter dir  [←/h] up  [i] ingest  [/] search  [q] quit   </span>
+</pre>
+    </div>
+  </div>
+
+  <div class="annotation-row">
+    <div class="annotation-box">
+      <h4>Current Launcher — Limitations</h4>
+      <ul>
+        <li><strong>Flat list</strong> — no hierarchy, just recently-ingested paths</li>
+        <li><strong>Global index</strong> at <span class="pill">~/.pyref/</span> — not co-located with DATA</li>
+        <li><strong>No browsing</strong> — must type a path or pick from history</li>
+        <li><strong>No metadata</strong> — no size, no count of beamtimes per experimentalist</li>
+        <li><strong>No catalog context</strong> — no indication of what's indexed vs. not</li>
+      </ul>
+    </div>
+    <div class="annotation-box">
+      <h4>Proposed Explorer — What Changes</h4>
+      <ul>
+        <li><strong>Rooted at DATA/</strong> — passed as CLI arg, full NAS awareness</li>
+        <li><strong>Standard columns</strong> — Name, Date Modified, Size, Kind, # Beamtimes</li>
+        <li><strong>Catalog indicator</strong> — shows whether <span class="pill">.pyref/catalog.db</span> exists at this level</li>
+        <li><strong>Navigate down</strong> → Experimentalist → Beamtime → scan profiles</li>
+        <li><strong>Inline ingest</strong> — press <span class="pill">i</span> to ingest selected folder</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Screen 2 of 2 — Experimentalist Drill-Down → Beamtimes</h3>
+  <div class="tui-wrap">
+    <!-- CURRENT BEAMTIME VIEW (no intermediate level exists) -->
+    <div class="tui-panel">
+      <div class="tui-label">Current — Goes straight to Scan Profiles</div>
+      <pre class="tui">
+<span class="bar"> pyref  <span class="path">/Volumes/DATA/Smith/2024Jan</span>          [i]ingest  [/]search  [q]quit      </span>
+<span class="border">┌─────────────┬─────────────┬─────────────┬──────────────────────────────────────┐</span>
+<span class="border">│</span> <span class="title">Samples</span>      <span class="border">│</span> <span class="title">Tags</span>         <span class="border">│</span> <span class="title">Scans</span>        <span class="border">│</span> <span class="title">Profiles</span>                              <span class="border">│</span>
+<span class="border">├─────────────┼─────────────┼─────────────┼──────────────────────────────────────┤</span>
+<span class="border">│</span> <span class="sel">▸ PS-b-PEO   </span><span class="border">│</span> <span class="sel">▸ annealed   </span><span class="border">│</span> <span class="sel">▸ 001        </span><span class="border">│</span> <span class="muted">Sample  Tag     Pol  E(eV)   θ-range  </span><span class="border">│</span>
+<span class="border">│</span>   PBDB-T     <span class="border">│</span>   pristine  <span class="border">│</span>   002        <span class="border">│</span> <span class="sel">PS-b-P anneale  S  284.5   2°-20°   </span><span class="border">│</span>
+<span class="border">│</span>   PC61BM     <span class="border">│</span>   solvent   <span class="border">│</span>   003        <span class="border">│</span>  PS-b-P anneale  P  284.5   2°-20°  <span class="border">│</span>
+<span class="border">│</span>   PM6        <span class="border">│</span>             <span class="border">│</span>   004        <span class="border">│</span>  PS-b-P pristine S  284.5   2°-20°  <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   005        <span class="border">│</span>  PS-b-P pristine P  284.5   2°-20°  <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   006        <span class="border">│</span>  PBDB-T anneale  S  270.0   2°-15°  <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   007        <span class="border">│</span>  PBDB-T anneale  P  270.0   2°-15°  <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   008        <span class="border">│</span>  PC61BM solvent  S  285.0   5°-25°  <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   009        <span class="border">│</span>                                      <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   010        <span class="border">│</span>                                      <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   011        <span class="border">│</span>                                      <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>   012        <span class="border">│</span>                                      <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>              <span class="border">│</span>                                      <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>              <span class="border">│</span>                                      <span class="border">│</span>
+<span class="border">│</span>             <span class="border">│</span>             <span class="border">│</span>              <span class="border">│</span>                                      <span class="border">│</span>
+<span class="border">└─────────────┴─────────────┴─────────────┴──────────────────────────────────────┘</span>
+<span class="muted"> 1423 files  •  no intermediate "Beamtime" level exists                         </span>
+<span class="bar"> [tab] focus  [space] filter  [i] ingest  [r] rename  [m] materialize  [q] quit </span>
+</pre>
+    </div>
+
+    <!-- PROPOSED EXPERIMENTALIST LEVEL -->
+    <div class="tui-panel">
+      <div class="tui-label">Proposed — Experimentalist Level (Smith/)</div>
+      <pre class="tui">
+<span class="bar"> pyref  <span class="path">/Volumes/DATA/Smith</span>               [←]back  [→]enter  [i]ingest  [q]quit </span>
+<span class="border">┌──────────────────────────────────────────────────────────────────────────────────────────┐</span>
+<span class="border">│</span> <span class="path">▸ /Volumes/DATA / Smith</span>                                                                   <span class="border">│</span>
+<span class="border">├────────────────────┬────────────────┬──────────┬───────────┬──────────────┬──────────────┤</span>
+<span class="border">│</span> <span class="muted"> Name               </span><span class="border">│</span><span class="muted"> Date           </span><span class="border">│</span><span class="muted"> Size     </span><span class="border">│</span><span class="muted"> Kind      </span><span class="border">│</span><span class="muted"> FITS Files   </span><span class="border">│</span><span class="muted"> Catalog      </span><span class="border">│</span>
+<span class="border">├────────────────────┼────────────────┼──────────┼───────────┼──────────────┼──────────────┤</span>
+<span class="border">│</span> <span class="sel">  📁 2024Jan        │  2024-01-22    │  12.1 GB │  Beamtime │  1,423 files │  ✓ indexed   </span><span class="border">│</span>
+<span class="border">│</span>   📁 2023Nov        │  2023-11-30    │  18.4 GB │  Beamtime │  2,110 files │  ✓ indexed   <span class="border">│</span>
+<span class="border">│</span>   📁 2023Aug        │  2023-08-14    │   9.2 GB │  Beamtime │    987 files │  ✓ indexed   <span class="border">│</span>
+<span class="border">│</span>   📁 2022Oct        │  2022-10-07    │   5.8 GB │  Beamtime │    612 files │  <span class="warn">⚠ stale     </span><span class="border">│</span>
+<span class="border">│</span>   📁 2022Feb        │  2022-02-18    │   2.1 GB │  Beamtime │    231 files │  <span class="err">✗ not indexed</span><span class="border">│</span>
+<span class="border">│</span>   📁 scratch        │  2024-03-10    │ 847.0 MB │  Dir      │     94 files │  — —         <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">│</span>                     │                │          │           │              │              <span class="border">│</span>
+<span class="border">└────────────────────┴────────────────┴──────────┴───────────┴──────────────┴──────────────┘</span>
+<span class="muted"> 5 beamtimes  │  48.2 GB  │  3 indexed  •  1 stale  •  1 not indexed             </span>
+<span class="bar"> [↑↓] nav  [→/↵] open beamtime  [←/h] up  [i] ingest here  [I] ingest all  [q]  </span>
+</pre>
+    </div>
+  </div>
+
+  <div class="annotation-row">
+    <div class="annotation-box">
+      <h4>Current — No Intermediate Layer</h4>
+      <ul>
+        <li>Must already <strong>know the exact beamtime path</strong> to navigate to it</li>
+        <li>No way to see <em>all beamtimes</em> for a given experimentalist in one view</li>
+        <li>Cannot bulk-ingest multiple beamtimes from a single screen</li>
+        <li>The <strong>Beamtime screen</strong> works well — but it is the only screen</li>
+      </ul>
+    </div>
+    <div class="annotation-box">
+      <h4>Proposed — Experimentalist Level</h4>
+      <ul>
+        <li><strong>Per-beamtime catalog status</strong> — ✓ indexed / ⚠ stale / ✗ not indexed</li>
+        <li><strong>FITS file count</strong> surfaced without opening the directory</li>
+        <li><span class="pill">i</span> ingests selected beamtime, <span class="pill">I</span> ingests all not-yet-indexed</li>
+        <li>Entering a beamtime transitions to the <strong>existing Beamtime screen</strong> — unchanged</li>
+        <li>Non-beamtime dirs (scratch, misc) shown but clearly typed as generic</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Navigation Flow Comparison</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">Current Navigation</div>
+      <div class="mockup-body" style="padding: 14px; font-family: monospace; font-size: 12px; color: #8b949e; line-height: 2;">
+        <span style="color:#f85149">▪</span> <strong style="color:#c9d1d9">Launcher</strong> — flat list of past beamtime paths<br>
+        &nbsp;&nbsp;&nbsp;<span style="color:#3d444d">↓ [↵] open selected or [o] type path</span><br>
+        <span style="color:#3fb950">▪</span> <strong style="color:#c9d1d9">Beamtime Screen</strong> — samples/tags/scans/profiles<br>
+        &nbsp;&nbsp;&nbsp;<span style="color:#3d444d">↓ [h] nav_up goes to parent dir (reloads beamtime screen)</span><br>
+        <span style="color:#d29922">▪</span> <em>No awareness of DATA root or experimentalist level</em><br>
+        <span style="color:#d29922">▪</span> <em>Cannot navigate from Beamtime → sibling Beamtime</em><br>
+        <span style="color:#d29922">▪</span> <em>Global beamtime index lives in ~/.pyref/</em>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">Proposed Navigation</div>
+      <div class="mockup-body" style="padding: 14px; font-family: monospace; font-size: 12px; color: #8b949e; line-height: 2;">
+        <span style="color:#3fb950">▪</span> <strong style="color:#c9d1d9">Explorer Screen</strong> — rooted at DATA/ (CLI arg)<br>
+        &nbsp;&nbsp;&nbsp;<span style="color:#3d444d">↓ [→] enter dir — shows experimentalist dirs</span><br>
+        <span style="color:#3fb950">▪</span> <strong style="color:#c9d1d9">Experimentalist Level</strong> — beamtime folders with metadata<br>
+        &nbsp;&nbsp;&nbsp;<span style="color:#3d444d">↓ [→] enter beamtime — if cataloged, goes to beamtime view</span><br>
+        <span style="color:#3fb950">▪</span> <strong style="color:#c9d1d9">Beamtime Screen</strong> — existing samples/tags/scans view (unchanged)<br>
+        &nbsp;&nbsp;&nbsp;<span style="color:#3d444d">↓ [←/h] back to experimentalist level</span><br>
+        <span style="color:#58a6ff">▪</span> <em>Full back/forward history stack across all levels</em><br>
+        <span style="color:#58a6ff">▪</span> <em>Catalog lives at DATA/.pyref/ — co-located with data</em>
+      </div>
+    </div>
+  </div>
+</div>
+</content>
+</invoke>

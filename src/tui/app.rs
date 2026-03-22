@@ -18,7 +18,7 @@ use pyref::build_fits_stem;
 #[cfg(feature = "catalog")]
 use pyref::catalog::{
     catalog_file_count, list_beamtime_entries, list_beamtimes, query_files, register_beamtime,
-    rename_file_in_catalog, FileRow, CATALOG_DB_NAME, DEFAULT_INGEST_HEADER_ITEMS,
+    rename_file_in_catalog, FileRow, DEFAULT_INGEST_HEADER_ITEMS, resolve_catalog_path,
 };
 #[cfg(feature = "watch")]
 use pyref::catalog::{run_catalog_watcher, DEFAULT_DEBOUNCE_MS};
@@ -361,7 +361,7 @@ fn catalog_to_profiles(
 )> {
     #[cfg(feature = "catalog")]
     {
-        let db_path = Path::new(current_root).join(CATALOG_DB_NAME);
+        let db_path = resolve_catalog_path(Path::new(current_root));
         if !db_path.exists() {
             return None;
         }
@@ -418,8 +418,7 @@ impl App {
             table_state.select(Some(0));
         }
         #[cfg(feature = "watch")]
-        let catalog_watcher = Path::new(&current_root)
-            .join(CATALOG_DB_NAME)
+        let catalog_watcher = resolve_catalog_path(Path::new(&current_root))
             .exists()
             .then(|| {
                 run_catalog_watcher(
@@ -942,7 +941,7 @@ impl App {
             }
             self.refresh_filtered();
             #[cfg(feature = "watch")]
-            if Path::new(&self.current_root).join(CATALOG_DB_NAME).exists() {
+            if resolve_catalog_path(Path::new(&self.current_root)).exists() {
                 let (tx, rx) = mpsc::channel();
                 let tx_end = tx.clone();
                 let on_start = Box::new(move || {
@@ -1178,7 +1177,7 @@ impl App {
     pub fn reload_from_catalog(&mut self) {
         #[cfg(feature = "catalog")]
         {
-            let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
+            let db_path = resolve_catalog_path(Path::new(&self.current_root));
             if !db_path.exists() {
                 return;
             }
@@ -1320,8 +1319,8 @@ impl App {
                     Ok(()) => {
                         self.app_error = None;
                         if let Some(path) = self.pending_ingest_path.take() {
-                            let db_path = path.join(CATALOG_DB_NAME);
-                            let file_count = catalog_file_count(&db_path).ok();
+                            let db_path = resolve_catalog_path(&path);
+                            let file_count = catalog_file_count(&db_path, Some(&path)).ok();
                             let _ = register_beamtime(&path, file_count);
                             if self.screen == Screen::Launcher {
                                 let beamtimes = list_beamtimes().unwrap_or_default();
@@ -1342,8 +1341,8 @@ impl App {
                             self.set_status("Catalog indexed.".to_string(), false);
                         } else {
                             self.reload_from_catalog();
-                            let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
-                            let file_count = catalog_file_count(&db_path).ok();
+                            let db_path = resolve_catalog_path(Path::new(&self.current_root));
+                            let file_count = catalog_file_count(&db_path, Some(Path::new(&self.current_root))).ok();
                             let _ = register_beamtime(Path::new(&self.current_root), file_count);
                             self.set_status("Catalog indexed.".to_string(), false);
                         }
@@ -1462,21 +1461,21 @@ impl App {
                 let len = self.samples.len();
                 if len > 0 {
                     let i = self.sample_state.selected().unwrap_or(0);
-                    self.sample_state.select(Some((i + 1) % len));
+                    self.sample_state.select(Some(cmp::min(i + 1, len - 1)));
                 }
             }
             Focus::TagList => {
                 let len = self.tags.len();
                 if len > 0 {
                     let i = self.tag_state.selected().unwrap_or(0);
-                    self.tag_state.select(Some((i + 1) % len));
+                    self.tag_state.select(Some(cmp::min(i + 1, len - 1)));
                 }
             }
             Focus::ScanList => {
                 let len = self.scans.len();
                 if len > 0 {
                     let i = self.scan_list_state.selected().unwrap_or(0);
-                    self.scan_list_state.select(Some((i + 1) % len));
+                    self.scan_list_state.select(Some(cmp::min(i + 1, len - 1)));
                 }
             }
             Focus::Table => {
@@ -1508,7 +1507,7 @@ impl App {
                 if len > 0 {
                     let i = self.sample_state.selected().unwrap_or(0);
                     self.sample_state
-                        .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                        .select(Some(if i == 0 { 0 } else { i - 1 }));
                 }
             }
             Focus::TagList => {
@@ -1516,7 +1515,7 @@ impl App {
                 if len > 0 {
                     let i = self.tag_state.selected().unwrap_or(0);
                     self.tag_state
-                        .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                        .select(Some(if i == 0 { 0 } else { i - 1 }));
                 }
             }
             Focus::ScanList => {
@@ -1524,7 +1523,7 @@ impl App {
                 if len > 0 {
                     let i = self.scan_list_state.selected().unwrap_or(0);
                     self.scan_list_state
-                        .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                        .select(Some(if i == 0 { 0 } else { i - 1 }));
                 }
             }
             Focus::Table => {
@@ -1631,7 +1630,7 @@ impl App {
         if !self.has_catalog {
             return;
         }
-        let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
+        let db_path = resolve_catalog_path(Path::new(&self.current_root));
         if !db_path.exists() {
             return;
         }

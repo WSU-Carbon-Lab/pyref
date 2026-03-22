@@ -6,7 +6,10 @@ use ndarray::Array2;
 use polars::prelude::*;
 
 use super::blur::{gaussian_blur_f32_copy, i64_to_f32_array};
-use super::{subtract_background, subtract_background_edges, ImageInfo};
+use super::{
+    subtract_background_edges, subtract_dark_cold_side, subtract_background_row_strips,
+    trim_image_interior, ImageInfo, TRIM_COLS, TRIM_ROWS,
+};
 use crate::errors::FitsError;
 use crate::fits::HduList;
 
@@ -41,11 +44,10 @@ fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsE
 
 pub fn materialize_image(path: &Path, info: &ImageInfo) -> Result<ImagePair, FitsError> {
     let data = load_image_pixels(path, info)?;
-    let subtracted = subtract_background(&data.clone().into_dyn());
-    let subtracted_2d = subtracted
-        .into_shape_with_order((info.naxis2, info.naxis1))
-        .map_err(|e| FitsError::validation(e.to_string()))?;
-    Ok((data, subtracted_2d))
+    let trimmed_raw = trim_image_interior(&data, TRIM_ROWS, TRIM_COLS);
+    let row_corrected = subtract_background_row_strips(&trimmed_raw);
+    let trimmed_processed = subtract_dark_cold_side(&row_corrected);
+    Ok((trimmed_raw, trimmed_processed))
 }
 
 pub fn get_image_for_row(df: &DataFrame, row_index: usize) -> Result<ImagePair, FitsError> {

@@ -1,4 +1,3 @@
-#![cfg(feature = "catalog")]
 
 use std::collections::HashSet;
 

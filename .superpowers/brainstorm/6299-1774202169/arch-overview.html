@@ -1,0 +1,312 @@
+<h2>Design Section 1 — Architecture Overview</h2>
+<p class="subtitle">Navigator + per-screen state decomposition. Review and confirm before we detail each component.</p>
+
+<style>
+  pre.code {
+    font-family: 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    line-height: 1.55;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 14px 18px;
+    color: #c9d1d9;
+    overflow-x: auto;
+    margin: 0;
+  }
+  pre.code .kw   { color: #ff7b72; }
+  pre.code .ty   { color: #79c0ff; }
+  pre.code .str  { color: #a5d6ff; }
+  pre.code .cm   { color: #6e7681; font-style: italic; }
+  pre.code .en   { color: #d2a8ff; }
+  pre.code .fi   { color: #3fb950; }
+  pre.code .lf   { color: #58a6ff; }
+  pre.code .ann  { color: #e3b341; }
+
+  .arch-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin: 20px 0;
+  }
+  .arch-box {
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0d1117;
+  }
+  .arch-box-header {
+    background: #161b22;
+    color: #8b949e;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 7px 14px;
+    border-bottom: 1px solid #21262d;
+  }
+  .arch-box-body { padding: 14px 16px; }
+
+  .flow-diagram {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin: 20px 0;
+    font-family: 'Fira Code', monospace;
+    font-size: 11.5px;
+    line-height: 1.9;
+    color: #c9d1d9;
+  }
+  .flow-diagram .box   { color: #79c0ff; }
+  .flow-diagram .arrow { color: #484f58; }
+  .flow-diagram .label { color: #6e7681; font-style: italic; }
+  .flow-diagram .hi    { color: #3fb950; }
+  .flow-diagram .new   { color: #56d364; font-weight: bold; }
+  .flow-diagram .dim   { color: #3d444d; }
+  .flow-diagram .warn  { color: #e3b341; }
+
+  .section { margin-bottom: 28px; }
+  h3 { color: #f0f6fc; font-size: 14px; margin: 0 0 10px; border-bottom: 1px solid #21262d; padding-bottom: 5px; }
+  .pill {
+    display: inline-block;
+    background: #1f3a5f;
+    color: #79c0ff;
+    border-radius: 3px;
+    font-size: 10px;
+    padding: 1px 6px;
+    font-family: monospace;
+    margin: 0 2px;
+  }
+  .pill.green { background: #0f2d1a; color: #3fb950; }
+  .pill.yellow { background: #2d1f00; color: #e3b341; }
+  .pill.red { background: #2d0f0f; color: #f85149; }
+  .note {
+    background: #161b22;
+    border-left: 3px solid #58a6ff;
+    border-radius: 0 6px 6px 0;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: #8b949e;
+    margin: 12px 0;
+    line-height: 1.6;
+  }
+  .note strong { color: #c9d1d9; }
+</style>
+
+<div class="section">
+  <h3>Module Structure — What Changes vs. What Stays</h3>
+  <div class="arch-grid">
+    <div class="arch-box">
+      <div class="arch-box-header">🗂 src/bin/tui/ — Restructured</div>
+      <div class="arch-box-body">
+        <pre class="code"><span class="cm">// NEW files</span>
+<span class="fi">navigator.rs</span>     <span class="cm">// Navigator + ScreenState enum</span>
+<span class="fi">explorer/</span>
+  <span class="fi">mod.rs</span>         <span class="cm">// ExplorerState + level enum</span>
+  <span class="fi">heuristic.rs</span>   <span class="cm">// date-pattern path classification</span>
+  <span class="fi">modal.rs</span>       <span class="cm">// layout-config modal (ratatui)</span>
+<span class="fi">catalog_handle.rs</span> <span class="cm">// CatalogHandle — shared query API</span>
+
+<span class="cm">// MODIFIED files</span>
+<span class="ann">app.rs</span>           <span class="cm">// App → thin shell, owns Navigator</span>
+<span class="ann">ui.rs</span>            <span class="cm">// dispatches on ScreenState variant</span>
+<span class="ann">run.rs</span>           <span class="cm">// event loop delegates to Navigator</span>
+<span class="ann">keymap.rs</span>        <span class="cm">// per-screen keybind dispatch</span>
+
+<span class="cm">// UNCHANGED files</span>
+<span class="lf">beamspot.rs</span>      <span class="cm">// no changes</span>
+<span class="lf">preview.rs</span>       <span class="cm">// no changes</span>
+<span class="lf">scan_type.rs</span>     <span class="cm">// no changes</span>
+<span class="lf">theme.rs</span>         <span class="cm">// no changes</span>
+<span class="lf">terminal_guard.rs</span> <span class="cm">// no changes</span>
+<span class="lf">error.rs</span>         <span class="cm">// minor additions</span></pre>
+      </div>
+    </div>
+
+    <div class="arch-box">
+      <div class="arch-box-header">📚 src/catalog/ — Additions only</div>
+      <div class="arch-box-body">
+        <pre class="code"><span class="cm">// NEW files</span>
+<span class="fi">explorer_query.rs</span>
+  <span class="cm">// list_experimentalists(data_root)</span>
+  <span class="cm">// list_beamtimes(data_root, experimentalist)</span>
+  <span class="cm">// entry_metadata(path) → EntryMeta</span>
+  <span class="cm">// catalog_status(path) → Indexed|Stale|Missing</span>
+
+<span class="cm">// MODIFIED files</span>
+<span class="ann">ingest.rs</span>        <span class="cm">// writes to DATA-level catalog</span>
+                   <span class="cm">// records experimentalist + beamtime</span>
+<span class="ann">query.rs</span>          <span class="cm">// add beamtime_path filter param</span>
+                   <span class="cm">// to existing query_scan_points()</span>
+<span class="ann">mod.rs</span>            <span class="cm">// re-export new public API</span>
+
+<span class="cm">// UNCHANGED</span>
+<span class="lf">beamtime_index.rs</span> <span class="cm">// kept for backward compat</span>
+<span class="lf">watch.rs</span>          <span class="cm">// no changes</span>
+<span class="lf">materialize.rs</span>    <span class="cm">// no changes</span></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Core State Model</h3>
+  <div class="arch-grid">
+    <div class="arch-box">
+      <div class="arch-box-header">App — Thin Shell (was 2600-line monolith)</div>
+      <div class="arch-box-body">
+        <pre class="code"><span class="kw">pub struct</span> <span class="ty">App</span> {
+    <span class="cm">// navigation</span>
+    <span class="kw">pub</span> navigator: <span class="ty">Navigator</span>,
+
+    <span class="cm">// shared async channels (unchanged)</span>
+    <span class="kw">pub</span> preview_tx:  <span class="ty">Option</span>&lt;<span class="ty">Sender</span>&lt;(<span class="ty">PathBuf</span>, <span class="ty">Option</span>&lt;<span class="ty">f64</span>&gt;)&gt;&gt;,
+    <span class="kw">pub</span> beamspot_rx: <span class="ty">Option</span>&lt;<span class="ty">Receiver</span>&lt;<span class="ty">BeamspotUpdate</span>&gt;&gt;,
+    <span class="kw">pub</span> preview_cmd_rx: <span class="ty">Option</span>&lt;<span class="ty">Receiver</span>&lt;<span class="ty">PreviewCommand</span>&gt;&gt;,
+
+    <span class="cm">// shared config / theme (unchanged)</span>
+    <span class="kw">pub</span> layout:     <span class="ty">String</span>,
+    <span class="kw">pub</span> keymap:     <span class="ty">String</span>,
+    <span class="kw">pub</span> theme:      <span class="ty">String</span>,
+    <span class="kw">pub</span> needs_redraw: <span class="ty">bool</span>,
+}</pre>
+      </div>
+    </div>
+
+    <div class="arch-box">
+      <div class="arch-box-header">Navigator — Screen Stack</div>
+      <div class="arch-box-body">
+        <pre class="code"><span class="kw">pub struct</span> <span class="ty">Navigator</span> {
+    <span class="cm">// current screen + back-history</span>
+    stack: <span class="ty">Vec</span>&lt;<span class="ty">ScreenState</span>&gt;,
+    forward: <span class="ty">Vec</span>&lt;<span class="ty">ScreenState</span>&gt;,
+
+    <span class="cm">// shared catalog handle</span>
+    <span class="kw">pub</span> catalog: <span class="ty">CatalogHandle</span>,
+}
+
+<span class="kw">pub enum</span> <span class="ty">ScreenState</span> {
+    <span class="cm">// new: file-explorer at any depth</span>
+    <span class="en">Explorer</span>(<span class="ty">ExplorerState</span>),
+
+    <span class="cm">// adapted: was Screen::Beamtime</span>
+    <span class="en">Beamtime</span>(<span class="ty">BeamtimeState</span>),
+
+    <span class="cm">// new: layout-config modal</span>
+    <span class="en">ConfigModal</span>(<span class="ty">ModalState</span>),
+}
+
+<span class="kw">impl</span> <span class="ty">Navigator</span> {
+    <span class="kw">pub fn</span> push(&amp;<span class="kw">mut</span> self, s: <span class="ty">ScreenState</span>) {}
+    <span class="kw">pub fn</span> pop(&amp;<span class="kw">mut</span> self) {}
+    <span class="kw">pub fn</span> current(&amp;self) -&gt; &amp;<span class="ty">ScreenState</span> {}
+    <span class="kw">pub fn</span> current_mut(&amp;<span class="kw">mut</span> self) -&gt; &amp;<span class="kw">mut</span> <span class="ty">ScreenState</span> {}
+}</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Screen State Ownership</h3>
+  <div class="flow-diagram">
+<span class="new">Navigator</span> <span class="dim">owns</span> <span class="box">Vec&lt;ScreenState&gt;</span>  <span class="label">(back stack — no cloning, push/pop)</span>
+<span class="arrow">  │</span>
+<span class="arrow">  ├─▶</span> <span class="box">ScreenState::Explorer(ExplorerState)</span>
+<span class="arrow">  │       │</span>
+<span class="arrow">  │       ├─</span> <span class="hi">level: ExplorerLevel</span>         <span class="label">Root | Experimentalist | Generic</span>
+<span class="arrow">  │       ├─</span> <span class="hi">root: PathBuf</span>               <span class="label">DATA/ passed from CLI</span>
+<span class="arrow">  │       ├─</span> <span class="hi">current_dir: PathBuf</span>         <span class="label">where we are now</span>
+<span class="arrow">  │       ├─</span> <span class="hi">entries: Vec&lt;DirEntry&gt;</span>       <span class="label">enriched with metadata</span>
+<span class="arrow">  │       └─</span> <span class="hi">list_state: ListState</span>
+<span class="arrow">  │</span>
+<span class="arrow">  ├─▶</span> <span class="box">ScreenState::Beamtime(BeamtimeState)</span>
+<span class="arrow">  │       │</span>
+<span class="arrow">  │       ├─</span> <span class="hi">beamtime_path: PathBuf</span>       <span class="label">filter key into DATA catalog</span>
+<span class="arrow">  │       ├─</span> <span class="hi">experimentalist: String</span>      <span class="label">for display + catalog filter</span>
+<span class="arrow">  │       └─</span> <span class="hi">[existing fields from App]</span>   <span class="label">samples, tags, scans, groups…</span>
+<span class="arrow">  │</span>
+<span class="arrow">  └─▶</span> <span class="box">ScreenState::ConfigModal(ModalState)</span>
+<span class="arrow">          │</span>
+<span class="arrow">          ├─</span> <span class="warn">depth_to_beamtime: u8</span>        <span class="label">user-configured depth</span>
+<span class="arrow">          ├─</span> <span class="warn">pattern: String</span>             <span class="label">regex / format string</span>
+<span class="arrow">          └─</span> <span class="warn">return_to: Box&lt;ScreenState&gt;</span> <span class="label">screen to resume after confirm</span>
+
+<span class="new">CatalogHandle</span>  <span class="dim">shared via</span> <span class="box">Arc&lt;Mutex&lt;Connection&gt;&gt;</span>  <span class="label">or per-call open()</span>
+<span class="arrow">  ├─▶</span> <span class="hi">list_experimentalists(root)</span>
+<span class="arrow">  ├─▶</span> <span class="hi">list_beamtimes(root, experimentalist)</span>
+<span class="arrow">  ├─▶</span> <span class="hi">query_scan_points(root, beamtime_path, filter)</span>   <span class="label">adapted from existing</span>
+<span class="arrow">  └─▶</span> <span class="hi">catalog_status(path) → Indexed | Stale | Missing</span>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Catalog Schema Addition</h3>
+  <div class="arch-box">
+    <div class="arch-box-header">New columns added to bt_beamtimes (no breaking changes)</div>
+    <div class="arch-box-body">
+      <pre class="code"><span class="cm">-- existing bt_beamtimes already has: id, beamtime_path, user, year, month, esaf_number, label</span>
+<span class="cm">-- additions:</span>
+<span class="ty">ALTER TABLE</span> bt_beamtimes <span class="ty">ADD COLUMN</span> experimentalist  <span class="ty">TEXT</span> <span class="ty">NOT NULL DEFAULT</span> <span class="str">''</span>;
+<span class="ty">ALTER TABLE</span> bt_beamtimes <span class="ty">ADD COLUMN</span> data_root        <span class="ty">TEXT</span> <span class="ty">NOT NULL DEFAULT</span> <span class="str">''</span>;
+<span class="cm">-- data_root: the DATA/ path this beamtime was ingested under</span>
+<span class="cm">-- experimentalist: the folder name one level above the beamtime</span>
+
+<span class="cm">-- new index for explorer queries</span>
+<span class="ty">CREATE INDEX IF NOT EXISTS</span> idx_bt_experimentalist
+    <span class="ty">ON</span> bt_beamtimes(data_root, experimentalist);</pre>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Migration strategy:</strong> both new columns have DEFAULT '' so existing catalog DBs open without errors. The explorer_query functions treat empty strings as "unset" and fall back to path parsing to infer experimentalist from the beamtime_path. Re-ingesting any beamtime populates them correctly.
+  </div>
+</div>
+
+<div class="section">
+  <h3>Execution Phases</h3>
+  <div class="arch-grid">
+    <div class="arch-box">
+      <div class="arch-box-header">Phase 1 — Decompose (no new features)</div>
+      <div class="arch-box-body" style="padding:14px 16px; font-size:12px; color:#8b949e; line-height:1.8;">
+        Extract <span class="pill">BeamtimeState</span> from <span class="pill">App</span><br>
+        Introduce <span class="pill">Navigator</span> + <span class="pill">ScreenState</span><br>
+        App becomes thin shell<br>
+        All existing behavior preserved<br>
+        <span style="color:#3fb950">✓ mergeable independently</span>
+      </div>
+    </div>
+    <div class="arch-box">
+      <div class="arch-box-header">Phase 2 — Explorer screens</div>
+      <div class="arch-box-body" style="padding:14px 16px; font-size:12px; color:#8b949e; line-height:1.8;">
+        Add <span class="pill">ExplorerState</span> + <span class="pill">ExplorerLevel</span><br>
+        Add <span class="pill">heuristic.rs</span> path classifier<br>
+        Add <span class="pill">modal.rs</span> config dialog<br>
+        Wire CLI arg as DATA root<br>
+        <span style="color:#3fb950">✓ mergeable independently</span>
+      </div>
+    </div>
+    <div class="arch-box">
+      <div class="arch-box-header">Phase 3 — DATA-level catalog</div>
+      <div class="arch-box-body" style="padding:14px 16px; font-size:12px; color:#8b949e; line-height:1.8;">
+        Add <span class="pill">explorer_query.rs</span><br>
+        Migrate ingestion to DATA-level DB<br>
+        Add schema columns to bt_beamtimes<br>
+        Adapt <span class="pill">query_scan_points</span> filter<br>
+        <span style="color:#3fb950">✓ mergeable independently</span>
+      </div>
+    </div>
+    <div class="arch-box">
+      <div class="arch-box-header">Phase 4 — Auto-ingest + wiring</div>
+      <div class="arch-box-body" style="padding:14px 16px; font-size:12px; color:#8b949e; line-height:1.8;">
+        Auto-ingest on entry to un-indexed dir<br>
+        Explorer reads catalog status per entry<br>
+        Beamtime screen queries DATA catalog<br>
+        End-to-end flow validated<br>
+        <span style="color:#3fb950">✓ complete</span>
+      </div>
+    </div>
+  </div>
+</div>
+</content>

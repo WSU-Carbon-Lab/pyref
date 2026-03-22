@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "name": "cursor-sync",
+  "owner": "denisraison",
+  "repo": "claude-plugins",
+  "path": "plugins/cursor-sync/skills/cursor-sync",
+  "branch": "main",
+  "sha": "83237507c60e2505b5bf295c44a75c8e32ab4c21",
+  "source": "manual"
+}

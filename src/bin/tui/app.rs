@@ -17,11 +17,15 @@ use super::scan_type::{classify_scan_type, ReflectivityScanType};
 use pyref::build_fits_stem;
 #[cfg(feature = "catalog")]
 use pyref::catalog::{
-    catalog_file_count, list_beamtime_entries, list_beamtimes, query_files, register_beamtime,
-    rename_file_in_catalog, update_beamspot, FileRow, CATALOG_DB_NAME, DEFAULT_INGEST_HEADER_ITEMS,
+    catalog_file_count, get_scan_point_uid_by_source_path, list_beamtime_entries,
+    list_beamtime_entries_v2, list_beamtimes, query_files, query_scan_points, register_beamtime,
+    rename_file_in_catalog, update_beamspot, update_beamspot_scan_point, FileRow,
+    DEFAULT_INGEST_HEADER_ITEMS, resolve_catalog_path,
 };
 #[cfg(feature = "watch")]
 use pyref::catalog::{run_catalog_watcher, DEFAULT_DEBOUNCE_MS};
+
+type BeamspotUpdate = (PathBuf, i64, i64, Option<f64>);
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -169,7 +173,11 @@ pub struct App {
     pub expanded_files_sort_column: Option<usize>,
     pub expanded_files_sort_ordering: Option<cmp::Ordering>,
     pub last_expanded_files_visible: usize,
-    pub preview_tx: Option<mpsc::Sender<PathBuf>>,
+    pub preview_tx: Option<mpsc::Sender<(PathBuf, Option<f64>)>>,
+    #[cfg(feature = "catalog")]
+    pub beamspot_rx: Option<mpsc::Receiver<BeamspotUpdate>>,
+    #[cfg(feature = "catalog")]
+    pub preview_cmd_rx: Option<mpsc::Receiver<super::preview::PreviewCommand>>,
     pub focus: Focus,
     pub mode: AppMode,
     pub current_root: String,
@@ -434,9 +442,30 @@ fn catalog_to_profiles(
 )> {
     #[cfg(feature = "catalog")]
     {
-        let db_path = Path::new(current_root).join(CATALOG_DB_NAME);
+        let db_path = resolve_catalog_path(Path::new(current_root));
         if !db_path.exists() {
             return None;
+        }
+        let beamtime_path = Path::new(current_root);
+        let v2_entries = list_beamtime_entries_v2(&db_path, beamtime_path).ok();
+        let v2_rows = query_scan_points(&db_path, beamtime_path, None).ok();
+        let use_v2 = v2_entries
+            .as_ref()
+            .zip(v2_rows.as_ref())
+            .map(|(e, r)| {
+                !e.samples.is_empty() || !e.tags.is_empty() || !e.scans.is_empty() || !r.is_empty()
+            })
+            .unwrap_or(false);
+        if use_v2 {
+            let entries = v2_entries.unwrap();
+            let rows = v2_rows.unwrap();
+            let groups = build_groups_from_files(rows);
+            let scans: Vec<(u32, String)> = entries
+                .scans
+                .into_iter()
+                .map(|(n, s)| (n as u32, s))
+                .collect();
+            return Some((groups, entries.samples, entries.tags, scans));
         }
         let entries = list_beamtime_entries(&db_path).ok()?;
         let rows = query_files(&db_path, None).ok()?;
@@ -446,7 +475,7 @@ fn catalog_to_profiles(
             .into_iter()
             .map(|(n, s)| (n as u32, s))
             .collect();
-        return Some((groups, entries.samples, entries.tags, scans));
+        Some((groups, entries.samples, entries.tags, scans))
     }
     #[cfg(not(feature = "catalog"))]
     None
@@ -491,8 +520,7 @@ impl App {
             table_state.select(Some(0));
         }
         #[cfg(feature = "watch")]
-        let catalog_watcher = Path::new(&current_root)
-            .join(CATALOG_DB_NAME)
+        let catalog_watcher = resolve_catalog_path(Path::new(&current_root))
             .exists()
             .then(|| {
                 run_catalog_watcher(
@@ -544,6 +572,10 @@ impl App {
             expanded_files_sort_ordering: Some(cmp::Ordering::Less),
             last_expanded_files_visible: 5,
             preview_tx: None,
+            #[cfg(feature = "catalog")]
+            beamspot_rx: None,
+            #[cfg(feature = "catalog")]
+            preview_cmd_rx: None,
             focus: Focus::SampleList,
             mode: AppMode::Normal,
             current_root,
@@ -569,7 +601,7 @@ impl App {
             status_message: None,
             status_message_set_at: None,
             #[cfg(feature = "watch")]
-            catalog_watcher: catalog_watcher,
+            catalog_watcher,
             #[cfg(feature = "watch")]
             watcher_events_rx: None,
             last_body_rects: None,
@@ -629,6 +661,10 @@ impl App {
             expanded_files_sort_ordering: Some(cmp::Ordering::Less),
             last_expanded_files_visible: 5,
             preview_tx: None,
+            #[cfg(feature = "catalog")]
+            beamspot_rx: None,
+            #[cfg(feature = "catalog")]
+            preview_cmd_rx: None,
             focus: Focus::SampleList,
             mode: AppMode::Normal,
             current_root: String::new(),
@@ -1042,7 +1078,7 @@ impl App {
             }
             self.refresh_filtered();
             #[cfg(feature = "watch")]
-            if Path::new(&self.current_root).join(CATALOG_DB_NAME).exists() {
+            if resolve_catalog_path(Path::new(&self.current_root)).exists() {
                 let (tx, rx) = mpsc::channel();
                 let tx_end = tx.clone();
                 let on_start = Box::new(move || {
@@ -1295,7 +1331,11 @@ impl App {
                     .beam_row
                     .cmp(&rb.beam_row)
                     .then_with(|| ra.beam_col.cmp(&rb.beam_col)),
-                6 => beamspot::beamspot_status(
+                6 => ra
+                    .beam_sigma
+                    .partial_cmp(&rb.beam_sigma)
+                    .unwrap_or(cmp::Ordering::Equal),
+                7 => beamspot::beamspot_status(
                     ra.beam_row,
                     ra.beam_col,
                     beamspot::domain_for_row(ra, group.scan_type),
@@ -1330,7 +1370,7 @@ impl App {
 
     #[cfg(feature = "catalog")]
     pub fn cycle_expanded_files_sort(&mut self, column: usize) {
-        if column >= 7 {
+        if column >= 8 {
             return;
         }
         let (new_col, new_ord) = match (
@@ -1352,8 +1392,358 @@ impl App {
         self.needs_redraw = true;
     }
 
-    pub fn set_preview_tx(&mut self, tx: mpsc::Sender<PathBuf>) {
+    #[cfg(feature = "catalog")]
+    fn problem_display_indices(
+        group: &GroupedProfileRow,
+        display_order: &[usize],
+    ) -> Vec<usize> {
+        use super::beamspot;
+        let files = &group.file_rows;
+        let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(files);
+        let fit = beamspot::fit_beamspot_linear(files, group.scan_type);
+        (0..display_order.len())
+            .filter(|&display_ix| {
+                let real_ix = display_order[display_ix];
+                let row = match files.get(real_ix) {
+                    Some(r) => r,
+                    None => return false,
+                };
+                let (_, key) = beamspot::beamspot_status(
+                    row.beam_row,
+                    row.beam_col,
+                    beamspot::domain_for_row(row, group.scan_type),
+                    fit.as_ref(),
+                    row_mean,
+                    row_std,
+                    col_mean,
+                    col_std,
+                );
+                key == 1 || key == 2
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn go_to_next_problem(&mut self) {
+        let idx = match self.expanded_table_row {
+            Some(i) => i,
+            None => return,
+        };
+        let group = match self.group_at_display_index(idx) {
+            Some(g) => g,
+            None => return,
+        };
+        let order = self.expanded_files_display_order(group);
+        let problems = Self::problem_display_indices(group, &order);
+        if problems.is_empty() {
+            self.set_status("No err/warning frames in this profile.".to_string(), false);
+            return;
+        }
+        let cur = self.expanded_selected_file_index.unwrap_or(0);
+        let next_ix = problems.iter().find(|&&p| p > cur).copied();
+        let target = match next_ix {
+            Some(ix) => ix,
+            None => problems[0],
+        };
+        self.expanded_selected_file_index = Some(target);
+        let visible = self.last_expanded_files_visible.max(1);
+        let file_count = order.len();
+        let max_offset = file_count.saturating_sub(visible);
+        if target >= self.expanded_files_scroll_offset + visible {
+            self.expanded_files_scroll_offset =
+                cmp::min((target + 1).saturating_sub(visible), max_offset);
+        } else if target < self.expanded_files_scroll_offset {
+            self.expanded_files_scroll_offset = target;
+        }
+        self.needs_redraw = true;
+        if self.preview_tx.is_some() {
+            self.send_preview_path_if_selected();
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn go_to_prev_problem(&mut self) {
+        let idx = match self.expanded_table_row {
+            Some(i) => i,
+            None => return,
+        };
+        let group = match self.group_at_display_index(idx) {
+            Some(g) => g,
+            None => return,
+        };
+        let order = self.expanded_files_display_order(group);
+        let problems = Self::problem_display_indices(group, &order);
+        if problems.is_empty() {
+            self.set_status("No err/warning frames in this profile.".to_string(), false);
+            return;
+        }
+        let cur = self.expanded_selected_file_index.unwrap_or(0);
+        let prev_ix = problems.iter().rev().find(|&&p| p < cur).copied();
+        let target = match prev_ix {
+            Some(ix) => ix,
+            None => *problems.last().unwrap(),
+        };
+        self.expanded_selected_file_index = Some(target);
+        if target < self.expanded_files_scroll_offset {
+            self.expanded_files_scroll_offset = target;
+        }
+        self.needs_redraw = true;
+        if self.preview_tx.is_some() {
+            self.send_preview_path_if_selected();
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    fn last_ok_display_index(
+        group: &GroupedProfileRow,
+        display_order: &[usize],
+        current_ix: usize,
+    ) -> Option<usize> {
+        use super::beamspot;
+        let files = &group.file_rows;
+        let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(files);
+        let fit = beamspot::fit_beamspot_linear(files, group.scan_type);
+        for display_ix in (0..current_ix).rev() {
+            let real_ix = display_order[display_ix];
+            let row = files.get(real_ix)?;
+            let (_, key) = beamspot::beamspot_status(
+                row.beam_row,
+                row.beam_col,
+                beamspot::domain_for_row(row, group.scan_type),
+                fit.as_ref(),
+                row_mean,
+                row_std,
+                col_mean,
+                col_std,
+            );
+            if key == 0 {
+                return Some(display_ix);
+            }
+        }
+        None
+    }
+
+    #[cfg(feature = "catalog")]
+    fn next_ok_display_index(
+        group: &GroupedProfileRow,
+        display_order: &[usize],
+        current_ix: usize,
+    ) -> Option<usize> {
+        use super::beamspot;
+        let files = &group.file_rows;
+        let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(files);
+        let fit = beamspot::fit_beamspot_linear(files, group.scan_type);
+        for display_ix in (current_ix + 1)..display_order.len() {
+            let real_ix = display_order[display_ix];
+            let row = files.get(real_ix)?;
+            let (_, key) = beamspot::beamspot_status(
+                row.beam_row,
+                row.beam_col,
+                beamspot::domain_for_row(row, group.scan_type),
+                fit.as_ref(),
+                row_mean,
+                row_std,
+                col_mean,
+                col_std,
+            );
+            if key == 0 {
+                return Some(display_ix);
+            }
+        }
+        None
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn use_last_ok_beamspot(&mut self) {
+        let idx = match self.expanded_table_row {
+            Some(i) => i,
+            None => return,
+        };
+        let group = match self.group_at_display_index(idx) {
+            Some(g) => g,
+            None => return,
+        };
+        let order = self.expanded_files_display_order(group);
+        let cur = self.expanded_selected_file_index.unwrap_or(0);
+        let ok_ix = match Self::last_ok_display_index(group, &order, cur) {
+            Some(ix) => ix,
+            None => {
+                self.set_status(
+                    "No previous OK beamspot in this profile.".to_string(),
+                    false,
+                );
+                return;
+            }
+        };
+        let real_ix = order[ok_ix];
+        let src_row = match group.file_rows.get(real_ix) {
+            Some(r) => r,
+            None => return,
+        };
+        let (beam_row, beam_col) = match (src_row.beam_row, src_row.beam_col) {
+            (Some(r), Some(c)) => (r, c),
+            _ => return,
+        };
+        let beam_sigma = src_row.beam_sigma;
+        let current_real_ix = order.get(cur).copied().unwrap_or(0);
+        let current_row = match group.file_rows.get(current_real_ix) {
+            Some(r) => r,
+            None => return,
+        };
+        let db_path = resolve_catalog_path(Path::new(&self.current_root));
+        if !db_path.exists() {
+            self.set_status("No catalog in current root.".to_string(), true);
+            return;
+        }
+        let file_path = &current_row.file_path;
+        if let Err(e) = update_beamspot(&db_path, file_path, beam_row, beam_col, beam_sigma) {
+            self.set_status(
+                format!("Failed to store beamspot from last OK: {}", e),
+                true,
+            );
+            return;
+        }
+        if let Some(ref uid) = current_row.scan_point_uid {
+            let _ = update_beamspot_scan_point(&db_path, uid, beam_row, beam_col, beam_sigma);
+        }
+        let was_expanded = self.expanded_table_row.is_some();
+        let restore_selection = self.expanded_table_row.or(self.table_state.selected());
+        self.reload_from_catalog_impl(was_expanded, restore_selection);
+        self.set_status("Beamspot copied from previous OK frame.".to_string(), false);
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn use_next_ok_beamspot(&mut self) {
+        let idx = match self.expanded_table_row {
+            Some(i) => i,
+            None => return,
+        };
+        let group = match self.group_at_display_index(idx) {
+            Some(g) => g,
+            None => return,
+        };
+        let order = self.expanded_files_display_order(group);
+        let cur = self.expanded_selected_file_index.unwrap_or(0);
+        let ok_ix = match Self::next_ok_display_index(group, &order, cur) {
+            Some(ix) => ix,
+            None => {
+                self.set_status(
+                    "No next OK beamspot in this profile.".to_string(),
+                    false,
+                );
+                return;
+            }
+        };
+        let real_ix = order[ok_ix];
+        let src_row = match group.file_rows.get(real_ix) {
+            Some(r) => r,
+            None => return,
+        };
+        let (beam_row, beam_col) = match (src_row.beam_row, src_row.beam_col) {
+            (Some(r), Some(c)) => (r, c),
+            _ => return,
+        };
+        let beam_sigma = src_row.beam_sigma;
+        let current_real_ix = order.get(cur).copied().unwrap_or(0);
+        let current_row = match group.file_rows.get(current_real_ix) {
+            Some(r) => r,
+            None => return,
+        };
+        let db_path = resolve_catalog_path(Path::new(&self.current_root));
+        if !db_path.exists() {
+            self.set_status("No catalog in current root.".to_string(), true);
+            return;
+        }
+        let file_path = &current_row.file_path;
+        if let Err(e) = update_beamspot(&db_path, file_path, beam_row, beam_col, beam_sigma) {
+            self.set_status(
+                format!("Failed to store beamspot from next OK: {}", e),
+                true,
+            );
+            return;
+        }
+        if let Some(ref uid) = current_row.scan_point_uid {
+            let _ = update_beamspot_scan_point(&db_path, uid, beam_row, beam_col, beam_sigma);
+        }
+        let was_expanded = self.expanded_table_row.is_some();
+        let restore_selection = self.expanded_table_row.or(self.table_state.selected());
+        self.reload_from_catalog_impl(was_expanded, restore_selection);
+        self.set_status("Beamspot copied from next OK frame.".to_string(), false);
+    }
+
+    pub fn set_preview_tx(&mut self, tx: mpsc::Sender<(PathBuf, Option<f64>)>) {
         self.preview_tx = Some(tx);
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn set_beamspot_rx(&mut self, rx: mpsc::Receiver<BeamspotUpdate>) {
+        self.beamspot_rx = Some(rx);
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn set_preview_cmd_rx(&mut self, rx: mpsc::Receiver<super::preview::PreviewCommand>) {
+        self.preview_cmd_rx = Some(rx);
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn try_recv_preview_cmd(&mut self) {
+        let mut commands = Vec::new();
+        if let Some(rx) = self.preview_cmd_rx.as_mut() {
+            while let Ok(cmd) = rx.try_recv() {
+                commands.push(cmd);
+            }
+        }
+        for cmd in commands {
+            match cmd {
+                super::preview::PreviewCommand::GoToNextProblem => self.go_to_next_problem(),
+                super::preview::PreviewCommand::GoToPrevProblem => self.go_to_prev_problem(),
+            }
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn try_recv_beamspot_updates(&mut self) {
+        let mut updates = Vec::new();
+        if let Some(rx) = self.beamspot_rx.as_mut() {
+            while let Ok(x) = rx.try_recv() {
+                updates.push(x);
+            }
+        }
+        for (path, beam_row, beam_col, beam_sigma) in updates {
+            self.apply_beamspot_from_preview(path, beam_row, beam_col, beam_sigma);
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    fn apply_beamspot_from_preview(
+        &mut self,
+        path: PathBuf,
+        beam_row: i64,
+        beam_col: i64,
+        beam_sigma: Option<f64>,
+    ) {
+        let db_path = resolve_catalog_path(Path::new(&self.current_root));
+        if !db_path.exists() {
+            return;
+        }
+        let file_path = path.to_string_lossy().into_owned();
+        if let Err(e) = update_beamspot(&db_path, &file_path, beam_row, beam_col, beam_sigma) {
+            self.set_status(format!("Failed to store beamspot from preview: {}", e), true);
+            return;
+        }
+        if let Ok(Some(uid)) = get_scan_point_uid_by_source_path(&db_path, &file_path) {
+            let _ = update_beamspot_scan_point(
+                &db_path,
+                &uid,
+                beam_row,
+                beam_col,
+                beam_sigma,
+            );
+        }
+        let was_expanded = self.expanded_table_row.is_some();
+        let restore_selection = self.expanded_table_row.or(self.table_state.selected());
+        self.reload_from_catalog_impl(was_expanded, restore_selection);
+        self.set_status("Beamspot from preview stored; table updated.".to_string(), false);
     }
 
     pub fn send_preview_path_if_selected(&mut self) {
@@ -1366,7 +1756,12 @@ impl App {
                 let order = self.expanded_files_display_order(g);
                 if let Some(&real_ix) = order.get(display_ix) {
                     if let Some(row) = g.file_rows.get(real_ix) {
-                        let _ = tx.send(PathBuf::from(&row.file_path));
+                        let frame1 = g.file_rows.iter().min_by_key(|r| r.frame_number);
+                        let profile_sigma = frame1.and_then(|r| r.beam_sigma);
+                        let _ = tx.send((
+                            PathBuf::from(&row.file_path),
+                            profile_sigma,
+                        ));
                     }
                 }
             }
@@ -1389,7 +1784,7 @@ impl App {
             Some(g) => g.file_rows.iter().map(|r| r.file_path.clone()).collect(),
             None => return,
         };
-        let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
+        let db_path = resolve_catalog_path(Path::new(&self.current_root));
         if !db_path.exists() {
             self.set_status("No catalog in current root.".to_string(), true);
             return;
@@ -1402,12 +1797,37 @@ impl App {
             match pyref::io::image_mmap::materialize_image_from_path(path) {
                 Ok((_, subtracted)) => {
                     let (r, c) = pyref::beamfinding::locate_beam_simple(&subtracted);
-                    if let Err(e) = update_beamspot(&db_path, file_path, r as i64, c as i64) {
+                    let subtracted_f64: ndarray::Array2<f64> =
+                        subtracted.mapv(|x| x as f64);
+                    let beam_sigma = pyref::gaussian_fit::fit_2d_gaussian(
+                        &subtracted_f64,
+                        None,
+                    )
+                    .map(|f| (f.sigma_row + f.sigma_col) / 2.0)
+                    .map(|s| s.clamp(0.5, 20.0));
+                    if let Err(e) = update_beamspot(
+                        &db_path,
+                        file_path,
+                        r as i64,
+                        c as i64,
+                        beam_sigma,
+                    ) {
                         self.set_status(
                             format!("Failed to store beamspot for {}: {}", file_path, e),
                             true,
                         );
                         return;
+                    }
+                    if let Ok(Some(uid)) =
+                        get_scan_point_uid_by_source_path(&db_path, file_path)
+                    {
+                        let _ = update_beamspot_scan_point(
+                            &db_path,
+                            &uid,
+                            r as i64,
+                            c as i64,
+                            beam_sigma,
+                        );
                     }
                     beamspots.push((r as i64, c as i64));
                     ok += 1;
@@ -1521,30 +1941,40 @@ impl App {
             } else {
                 0
             };
-            let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
+            let db_path = resolve_catalog_path(Path::new(&self.current_root));
             if !db_path.exists() {
                 return;
             }
-            let entries = match list_beamtime_entries(&db_path) {
-                Ok(e) => e,
-                Err(e) => {
-                    self.set_app_error(super::error::TuiError::catalog_unavailable(
-                        &self.current_root,
-                        "list_beamtime_entries",
-                        e.to_string(),
-                    ));
-                    return;
-                }
-            };
-            let rows = match query_files(&db_path, None) {
-                Ok(r) => r,
-                Err(e) => {
-                    self.set_app_error(super::error::TuiError::catalog_unavailable(
-                        &self.current_root,
-                        "query_files",
-                        e.to_string(),
-                    ));
-                    return;
+            let beamtime_path = Path::new(&self.current_root);
+            let (entries, rows) = match (
+                list_beamtime_entries_v2(&db_path, beamtime_path),
+                query_scan_points(&db_path, beamtime_path, None),
+            ) {
+                (Ok(e), Ok(r)) if !r.is_empty() => (e, r),
+                _ => {
+                    let entries = match list_beamtime_entries(&db_path) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            self.set_app_error(super::error::TuiError::catalog_unavailable(
+                                &self.current_root,
+                                "list_beamtime_entries",
+                                e.to_string(),
+                            ));
+                            return;
+                        }
+                    };
+                    let rows = match query_files(&db_path, None) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            self.set_app_error(super::error::TuiError::catalog_unavailable(
+                                &self.current_root,
+                                "query_files",
+                                e.to_string(),
+                            ));
+                            return;
+                        }
+                    };
+                    (entries, rows)
                 }
             };
             let all_groups = build_groups_from_files(rows);
@@ -1690,8 +2120,8 @@ impl App {
                     Ok(()) => {
                         self.app_error = None;
                         if let Some(path) = self.pending_ingest_path.take() {
-                            let db_path = path.join(CATALOG_DB_NAME);
-                            let file_count = catalog_file_count(&db_path).ok();
+                            let db_path = resolve_catalog_path(&path);
+                            let file_count = catalog_file_count(&db_path, Some(&path)).ok();
                             let _ = register_beamtime(&path, file_count);
                             if self.screen == Screen::Launcher {
                                 let beamtimes = list_beamtimes().unwrap_or_default();
@@ -1712,8 +2142,8 @@ impl App {
                             self.set_status("Catalog indexed.".to_string(), false);
                         } else {
                             self.reload_from_catalog(false);
-                            let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
-                            let file_count = catalog_file_count(&db_path).ok();
+                            let db_path = resolve_catalog_path(Path::new(&self.current_root));
+                            let file_count = catalog_file_count(&db_path, Some(Path::new(&self.current_root))).ok();
                             let _ = register_beamtime(Path::new(&self.current_root), file_count);
                             self.set_status("Catalog indexed.".to_string(), false);
                         }
@@ -1832,21 +2262,21 @@ impl App {
                 let len = self.samples.len();
                 if len > 0 {
                     let i = self.sample_state.selected().unwrap_or(0);
-                    self.sample_state.select(Some((i + 1) % len));
+                    self.sample_state.select(Some(cmp::min(i + 1, len - 1)));
                 }
             }
             Focus::TagList => {
                 let len = self.tags.len();
                 if len > 0 {
                     let i = self.tag_state.selected().unwrap_or(0);
-                    self.tag_state.select(Some((i + 1) % len));
+                    self.tag_state.select(Some(cmp::min(i + 1, len - 1)));
                 }
             }
             Focus::ScanList => {
                 let len = self.scans.len();
                 if len > 0 {
                     let i = self.scan_list_state.selected().unwrap_or(0);
-                    self.scan_list_state.select(Some((i + 1) % len));
+                    self.scan_list_state.select(Some(cmp::min(i + 1, len - 1)));
                 }
             }
             Focus::Table => {
@@ -1885,7 +2315,7 @@ impl App {
                 if len > 0 {
                     let i = self.sample_state.selected().unwrap_or(0);
                     self.sample_state
-                        .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                        .select(Some(if i == 0 { 0 } else { i - 1 }));
                 }
             }
             Focus::TagList => {
@@ -1893,7 +2323,7 @@ impl App {
                 if len > 0 {
                     let i = self.tag_state.selected().unwrap_or(0);
                     self.tag_state
-                        .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                        .select(Some(if i == 0 { 0 } else { i - 1 }));
                 }
             }
             Focus::ScanList => {
@@ -1901,7 +2331,7 @@ impl App {
                 if len > 0 {
                     let i = self.scan_list_state.selected().unwrap_or(0);
                     self.scan_list_state
-                        .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                        .select(Some(if i == 0 { 0 } else { i - 1 }));
                 }
             }
             Focus::Table => {
@@ -2081,7 +2511,7 @@ impl App {
         if !self.has_catalog {
             return;
         }
-        let db_path = Path::new(&self.current_root).join(CATALOG_DB_NAME);
+        let db_path = resolve_catalog_path(Path::new(&self.current_root));
         if !db_path.exists() {
             return;
         }

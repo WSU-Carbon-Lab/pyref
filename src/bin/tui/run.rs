@@ -94,6 +94,10 @@ pub fn run<B: Backend>(
     loop {
         app.try_recv_ingest();
         app.try_recv_watcher();
+        #[cfg(feature = "catalog")]
+        app.try_recv_beamspot_updates();
+        #[cfg(feature = "catalog")]
+        app.try_recv_preview_cmd();
         app.clear_status_if_stale();
         if app.loading_state != super::app::LoadingState::Idle {
             app.needs_redraw = true;
@@ -399,7 +403,7 @@ fn handle_mouse(
         if rect_contains(rects.table, col, row) {
             if row == rects.table.y {
                 if let Some(layout_col) = table_header_column_at(rects.table, col) {
-                    if layout_col >= 1 && layout_col <= 10 {
+                    if (1..=10).contains(&layout_col) {
                         app.cycle_table_sort(layout_col - 1);
                         return true;
                     }
@@ -475,7 +479,7 @@ const TABLE_WIDTHS: [Constraint; 11] = [
 
 const EXPANDED_FILES_TABLE_COLUMN_SPACING: u16 = 1;
 
-const EXPANDED_FILES_TABLE_LAYOUT: [Constraint; 13] = [
+const EXPANDED_FILES_TABLE_LAYOUT: [Constraint; 15] = [
     Constraint::Length(7),
     Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
     Constraint::Length(7),
@@ -487,6 +491,8 @@ const EXPANDED_FILES_TABLE_LAYOUT: [Constraint; 13] = [
     Constraint::Length(8),
     Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
     Constraint::Length(10),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(7),
     Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
     Constraint::Length(8),
 ];
@@ -686,6 +692,19 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         Action::NavFwd => app.nav_fwd(),
         Action::PreviewImage => app.send_preview_path_if_selected(),
         Action::BeamPosition => app.materialize_profile_beamspots(),
+        #[cfg(feature = "catalog")]
+        Action::NextProblem => app.go_to_next_problem(),
+        #[cfg(feature = "catalog")]
+        Action::PrevProblem => app.go_to_prev_problem(),
+        #[cfg(feature = "catalog")]
+        Action::UseLastOkBeamspot => app.use_last_ok_beamspot(),
+        #[cfg(feature = "catalog")]
+        Action::UseNextOkBeamspot => app.use_next_ok_beamspot(),
+        #[cfg(not(feature = "catalog"))]
+        Action::NextProblem
+        | Action::PrevProblem
+        | Action::UseLastOkBeamspot
+        | Action::UseNextOkBeamspot => {}
         Action::Open => {
             if matches!(
                 app.focus,

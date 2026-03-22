@@ -1,6 +1,10 @@
 #![cfg(feature = "catalog")]
 
-use crate::catalog::{open_or_create_db, CatalogError, Result};
+use crate::catalog::{CatalogError, Result};
+use crate::io::BtIngestRow;
+#[cfg(not(feature = "parallel_ingest"))]
+use crate::catalog::open_or_create_db;
+use rusqlite::Error as RusqliteError;
 
 pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "DATE",
@@ -13,14 +17,101 @@ pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "Sample Name",
     "Scan ID",
 ];
+#[cfg(not(feature = "parallel_ingest"))]
 use crate::io::options::ReadFitsOptions;
+#[cfg(not(feature = "parallel_ingest"))]
 use crate::loader::read_fits_metadata_batch;
 use polars::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
+#[cfg(not(feature = "parallel_ingest"))]
 const BATCH_SIZE: usize = 500;
+
+fn resolve_sample(conn: &rusqlite::Connection, name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(String::new());
+    }
+    let first = name.split('_').next().unwrap_or(name);
+    let existing: Option<String> = match conn.query_row(
+        "SELECT name FROM samples WHERE LOWER(TRIM(name)) = LOWER(?1) OR LOWER(TRIM(name)) = LOWER(?2)",
+        rusqlite::params![name, first],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(RusqliteError::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e.into()),
+    };
+    if let Some(n) = existing {
+        return Ok(n);
+    }
+    conn.execute(
+        "INSERT INTO samples (name, chemical_formula, created_at, updated_at) VALUES (?1, NULL, strftime('%s','now'), strftime('%s','now'))",
+        rusqlite::params![name],
+    )?;
+    Ok(name.to_string())
+}
+
+fn resolve_tag(conn: &rusqlite::Connection, name: &str) -> Result<Option<String>> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    if crate::io::is_polarization_tag(name) {
+        return Ok(None);
+    }
+    let slug = name.to_lowercase().replace(' ', "_");
+    let existing: Option<String> = match conn.query_row(
+        "SELECT name FROM tags WHERE LOWER(TRIM(name)) = LOWER(?1)",
+        rusqlite::params![name],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(RusqliteError::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e.into()),
+    };
+    if let Some(n) = existing {
+        return Ok(Some(n));
+    }
+    conn.execute("INSERT INTO tags (name, slug) VALUES (?1, ?2)", rusqlite::params![name, slug])?;
+    Ok(Some(name.to_string()))
+}
+
+fn ensure_sample_tag(
+    conn: &rusqlite::Connection,
+    sample_name: &str,
+    tag_name: Option<&str>,
+) -> Result<()> {
+    let tag_name = match tag_name {
+        Some(t) if !t.trim().is_empty() => t.trim(),
+        _ => return Ok(()),
+    };
+    let sample_id: i64 = match conn.query_row(
+        "SELECT id FROM samples WHERE LOWER(TRIM(name)) = LOWER(?1)",
+        rusqlite::params![sample_name],
+        |r| r.get(0),
+    ) {
+        Ok(v) => v,
+        Err(RusqliteError::QueryReturnedNoRows) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let tag_id: i64 = match conn.query_row(
+        "SELECT id FROM tags WHERE LOWER(TRIM(name)) = LOWER(?1)",
+        rusqlite::params![tag_name],
+        |r| r.get(0),
+    ) {
+        Ok(v) => v,
+        Err(RusqliteError::QueryReturnedNoRows) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id) VALUES (?1, ?2)",
+        rusqlite::params![sample_id, tag_id],
+    )?;
+    Ok(())
+}
 
 pub fn ingest_beamtime(
     beamtime_dir: &Path,
@@ -28,8 +119,31 @@ pub fn ingest_beamtime(
     incremental: bool,
     progress_tx: Option<mpsc::Sender<(u32, u32)>>,
 ) -> Result<PathBuf> {
-    let db_path = beamtime_dir.join(super::CATALOG_DB_NAME);
+    #[cfg(feature = "parallel_ingest")]
+    {
+        return super::ingest_parallel::ingest_beamtime_pipelined(
+            beamtime_dir,
+            header_items,
+            incremental,
+            progress_tx,
+        );
+    }
+    #[cfg(not(feature = "parallel_ingest"))]
+    {
+        ingest_beamtime_sequential(beamtime_dir, header_items, incremental, progress_tx)
+    }
+}
+
+#[cfg(not(feature = "parallel_ingest"))]
+fn ingest_beamtime_sequential(
+    beamtime_dir: &Path,
+    header_items: &[String],
+    incremental: bool,
+    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+) -> Result<PathBuf> {
+    let db_path = super::resolve_catalog_path(beamtime_dir);
     let conn = open_or_create_db(beamtime_dir)?;
+    let beamtime_id = ensure_bt_beamtime(&conn, beamtime_dir)?;
     let discovered = super::discover_fits_paths(beamtime_dir)?;
     let path_to_mtime: HashMap<String, i64> = discovered
         .iter()
@@ -37,20 +151,37 @@ pub fn ingest_beamtime(
         .collect();
     let paths: Vec<PathBuf> = discovered.into_iter().map(|(p, _)| p).collect();
 
+    let use_normalized_only = super::is_new_catalog_layout(beamtime_dir);
     let to_ingest: Vec<PathBuf> = if incremental {
-        let existing: HashMap<String, i64> = conn
-            .prepare("SELECT path, mtime FROM files")?
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
-            .filter_map(|r| r.ok())
-            .collect();
-        paths
-            .into_iter()
-            .filter(|p| {
-                let key = p.to_string_lossy().to_string();
-                let mtime = path_to_mtime.get(&key).copied().unwrap_or(0);
-                existing.get(&key).is_none_or(|&stored| mtime > stored)
-            })
-            .collect()
+        if use_normalized_only {
+            let existing: HashMap<String, i64> = conn
+                .prepare("SELECT source_path, source_mtime FROM bt_scan_points WHERE source_path IS NOT NULL")?
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1).unwrap_or(0))))?
+                .filter_map(|r| r.ok())
+                .collect();
+            paths
+                .into_iter()
+                .filter(|p| {
+                    let key = p.to_string_lossy().to_string();
+                    let mtime = path_to_mtime.get(&key).copied().unwrap_or(0);
+                    existing.get(&key).is_none_or(|&stored| stored == 0 || mtime > stored)
+                })
+                .collect()
+        } else {
+            let existing: HashMap<String, i64> = conn
+                .prepare("SELECT path, mtime FROM files")?
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            paths
+                .into_iter()
+                .filter(|p| {
+                    let key = p.to_string_lossy().to_string();
+                    let mtime = path_to_mtime.get(&key).copied().unwrap_or(0);
+                    existing.get(&key).is_none_or(|&stored| mtime > stored)
+                })
+                .collect()
+        }
     } else {
         paths
     };
@@ -65,7 +196,10 @@ pub fn ingest_beamtime(
     for chunk in to_ingest.chunks(BATCH_SIZE) {
         let chunk_vec: Vec<PathBuf> = chunk.to_vec();
         let df = read_fits_metadata_batch(chunk_vec, &opts)?;
-        upsert_files_batch(&conn, &df, &path_to_mtime)?;
+        if !use_normalized_only {
+            upsert_files_batch(&conn, &df, &path_to_mtime)?;
+        }
+        upsert_bt_batch(&conn, beamtime_id, &df, &path_to_mtime)?;
         processed = (processed as usize + chunk.len()).min(to_ingest.len()) as u32;
         if let Some(ref tx) = progress_tx {
             let _ = tx.send((processed, total));
@@ -73,12 +207,15 @@ pub fn ingest_beamtime(
     }
 
     let path_list: Vec<&str> = path_to_mtime.keys().map(|s| s.as_str()).collect();
-    prune_missing_files(&conn, &path_list)?;
+    if !use_normalized_only {
+        prune_missing_files(&conn, &path_list)?;
+    }
+    prune_bt_scan_points(&conn, &path_list)?;
 
     Ok(db_path)
 }
 
-fn upsert_files_batch(
+pub(crate) fn upsert_files_batch(
     conn: &rusqlite::Connection,
     df: &DataFrame,
     path_to_mtime: &HashMap<String, i64>,
@@ -160,7 +297,29 @@ fn upsert_files_batch(
         )"#,
     )?;
 
+    let mut canonical_cache: HashMap<(String, Option<String>), (String, Option<String>)> =
+        HashMap::new();
     for i in 0..n {
+        let sn = sample_name
+            .get(i)
+            .cloned()
+            .flatten()
+            .unwrap_or_default();
+        let t = tag.get(i).cloned().flatten();
+        let key = (sn.clone(), t.clone());
+        let (canonical_sn, canonical_t) = if let Some(cached) = canonical_cache.get(&key) {
+            cached.clone()
+        } else {
+            let cs = resolve_sample(conn, &sn)?;
+            let ct = t
+                .as_ref()
+                .map(|x| x.as_str())
+                .and_then(|x| resolve_tag(conn, x).ok().flatten());
+            ensure_sample_tag(conn, &cs, ct.as_deref())?;
+            canonical_cache.insert(key, (cs.clone(), ct.clone()));
+            (cs, ct)
+        };
+
         let path_str = file_path_col.get(i).unwrap_or("").to_string();
         let mtime = path_to_mtime.get(&path_str).copied().unwrap_or(0);
         stmt.execute(rusqlite::params![
@@ -174,8 +333,8 @@ fn upsert_files_batch(
             bzero.get(i).copied().flatten().unwrap_or(0),
             data_size.get(i).copied().flatten().unwrap_or(0),
             file_name.get(i).cloned().unwrap_or_default(),
-            sample_name.get(i).cloned().unwrap_or_default(),
-            tag.get(i).clone(),
+            canonical_sn,
+            canonical_t,
             scan_number.get(i).copied().flatten().unwrap_or(0),
             frame_number.get(i).copied().flatten().unwrap_or(0),
             date.get(i).clone(),
@@ -194,7 +353,7 @@ fn upsert_files_batch(
     Ok(())
 }
 
-fn prune_missing_files(conn: &rusqlite::Connection, known_paths: &[&str]) -> Result<()> {
+pub(crate) fn prune_missing_files(conn: &rusqlite::Connection, known_paths: &[&str]) -> Result<()> {
     if known_paths.is_empty() {
         conn.execute("DELETE FROM files", [])?;
         return Ok(());
@@ -207,5 +366,297 @@ fn prune_missing_files(conn: &rusqlite::Connection, known_paths: &[&str]) -> Res
         .join(",");
     let sql = format!("DELETE FROM files WHERE path NOT IN ({})", placeholders);
     conn.execute(&sql, rusqlite::params_from_iter(known_paths.iter()))?;
+    Ok(())
+}
+
+pub(crate) fn ensure_bt_beamtime(conn: &rusqlite::Connection, beamtime_dir: &Path) -> Result<i64> {
+    let path_str = beamtime_dir.to_string_lossy().to_string();
+    conn.execute(
+        "INSERT OR IGNORE INTO bt_beamtimes (beamtime_path) VALUES (?1)",
+        rusqlite::params![path_str],
+    )?;
+    let id: i64 = conn.query_row(
+        "SELECT id FROM bt_beamtimes WHERE beamtime_path = ?1",
+        rusqlite::params![path_str],
+        |r| r.get(0),
+    )?;
+    Ok(id)
+}
+
+fn ensure_bt_sample(
+    conn: &rusqlite::Connection,
+    beamtime_id: i64,
+    name: &str,
+    tag: Option<&str>,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT OR IGNORE INTO bt_samples (beamtime_id, name, tag) VALUES (?1, ?2, ?3)",
+        rusqlite::params![beamtime_id, name, tag],
+    )?;
+    let id: i64 = conn.query_row(
+        "SELECT id FROM bt_samples WHERE beamtime_id = ?1 AND name = ?2 AND (tag IS ?3 OR (tag IS NULL AND ?3 IS NULL))",
+        rusqlite::params![beamtime_id, name, tag],
+        |r| r.get(0),
+    )?;
+    Ok(id)
+}
+
+fn ensure_bt_scan(
+    conn: &rusqlite::Connection,
+    beamtime_id: i64,
+    sample_id: i64,
+    scan_number: i64,
+) -> Result<String> {
+    let uid = format!("s_{}_{}", beamtime_id, scan_number);
+    conn.execute(
+        "INSERT OR REPLACE INTO bt_scans (uid, beamtime_id, sample_id) VALUES (?1, ?2, ?3)",
+        rusqlite::params![uid, beamtime_id, sample_id],
+    )?;
+    Ok(uid)
+}
+
+fn ensure_bt_stream(
+    conn: &rusqlite::Connection,
+    beamtime_id: i64,
+    scan_number: i64,
+) -> Result<String> {
+    let scan_uid = format!("s_{}_{}", beamtime_id, scan_number);
+    let stream_uid = format!("st_{}_{}", beamtime_id, scan_number);
+    conn.execute(
+        "INSERT OR IGNORE INTO bt_streams (uid, scan_uid, name) VALUES (?1, ?2, 'primary')",
+        rusqlite::params![stream_uid, scan_uid],
+    )?;
+    Ok(stream_uid)
+}
+
+pub(crate) fn upsert_bt_batch(
+    conn: &rusqlite::Connection,
+    beamtime_id: i64,
+    df: &DataFrame,
+    path_to_mtime: &HashMap<String, i64>,
+) -> Result<()> {
+    let n = df.height();
+    if n == 0 {
+        return Ok(());
+    }
+    let file_path_col = df
+        .column("file_path")
+        .map_err(|e| CatalogError::Validation(e.to_string()))?
+        .str()
+        .map_err(|e| CatalogError::Validation(e.to_string()))?;
+    let get_str = |name: &str| -> Result<Vec<Option<String>>> {
+        match df.column(name) {
+            Ok(c) => Ok(c
+                .str()
+                .map_err(|e| CatalogError::Validation(e.to_string()))?
+                .iter()
+                .map(|s| s.map(|v| v.to_string()))
+                .collect()),
+            _ => Ok(std::iter::repeat_n(None, n).collect()),
+        }
+    };
+    let get_i64 = |name: &str| -> Result<Vec<Option<i64>>> {
+        match df.column(name) {
+            Ok(c) => Ok(c
+                .i64()
+                .map_err(|e| CatalogError::Validation(e.to_string()))?
+                .iter()
+                .collect()),
+            _ => Ok(std::iter::repeat_n(None, n).collect()),
+        }
+    };
+    let get_f64 = |name: &str| -> Result<Vec<Option<f64>>> {
+        match df.column(name) {
+            Ok(c) => Ok(c
+                .f64()
+                .map_err(|e| CatalogError::Validation(e.to_string()))?
+                .iter()
+                .collect()),
+            _ => Ok(std::iter::repeat_n(None, n).collect()),
+        }
+    };
+
+    let data_offset = get_i64("data_offset")?;
+    let naxis1 = get_i64("naxis1")?;
+    let naxis2 = get_i64("naxis2")?;
+    let bitpix = get_i64("bitpix")?;
+    let bzero = get_i64("bzero")?;
+    let _file_name = get_str("file_name")?;
+    let sample_name = get_str("sample_name")?;
+    let tag = get_str("tag")?;
+    let scan_number = get_i64("scan_number")?;
+    let frame_number = get_i64("frame_number")?;
+    let beamline_energy = get_f64("Beamline Energy")?;
+    let sample_theta = get_f64("Sample Theta")?;
+    let ccd_theta = get_f64("CCD Theta")?;
+    let epu = get_f64("EPU Polarization")?;
+    let exposure = get_f64("EXPOSURE")?;
+
+    let mut stmt = conn.prepare_cached(
+        r#"
+        INSERT OR REPLACE INTO bt_scan_points (
+            uid, stream_uid, scan_uid, sample_id, seq_index, time,
+            exposure, beamline_energy, epu_polarization, sample_theta, ccd_theta,
+            source_path, source_data_offset, source_naxis1, source_naxis2,
+            source_bitpix, source_bzero, source_mtime, beam_row, beam_col, beam_sigma
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, 0,
+            ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+        )"#,
+    )?;
+
+    let mut canonical_cache: HashMap<(String, Option<String>), i64> = HashMap::new();
+    for i in 0..n {
+        let sn = sample_name
+            .get(i)
+            .cloned()
+            .flatten()
+            .unwrap_or_default();
+        let t = tag.get(i).cloned().flatten();
+        let key = (sn.clone(), t.clone());
+        let sample_id = if let Some(&sid) = canonical_cache.get(&key) {
+            sid
+        } else {
+            let cs = resolve_sample(conn, &sn)?;
+            let ct = t
+                .as_ref()
+                .map(|x| x.as_str())
+                .and_then(|x| resolve_tag(conn, x).ok().flatten());
+            ensure_sample_tag(conn, &cs, ct.as_deref())?;
+            let sid = ensure_bt_sample(conn, beamtime_id, &cs, ct.as_deref())?;
+            canonical_cache.insert(key, sid);
+            sid
+        };
+
+        let scan_no = scan_number.get(i).copied().flatten().unwrap_or(0);
+        let frame_no = frame_number.get(i).copied().flatten().unwrap_or(0);
+        let scan_uid = format!("s_{}_{}", beamtime_id, scan_no);
+        let stream_uid = format!("st_{}_{}", beamtime_id, scan_no);
+        let point_uid = format!("sp_{}_{}_{}", beamtime_id, scan_no, frame_no);
+
+        let _ = ensure_bt_scan(conn, beamtime_id, sample_id, scan_no)?;
+        let _ = ensure_bt_stream(conn, beamtime_id, scan_no)?;
+
+        let path_str = file_path_col.get(i).unwrap_or("").to_string();
+        let mtime = path_to_mtime.get(&path_str).copied().unwrap_or(0);
+
+        stmt.execute(rusqlite::params![
+            point_uid,
+            stream_uid,
+            scan_uid,
+            sample_id,
+            frame_no,
+            exposure.get(i).copied().flatten(),
+            beamline_energy.get(i).copied().flatten(),
+            epu.get(i).copied().flatten(),
+            sample_theta.get(i).copied().flatten(),
+            ccd_theta.get(i).copied().flatten(),
+            path_str,
+            data_offset.get(i).copied().flatten().unwrap_or(0),
+            naxis1.get(i).copied().flatten().unwrap_or(0),
+            naxis2.get(i).copied().flatten().unwrap_or(0),
+            bitpix.get(i).copied().flatten().unwrap_or(0),
+            bzero.get(i).copied().flatten().unwrap_or(0),
+            mtime,
+            Option::<i64>::None,
+            Option::<i64>::None,
+            Option::<f64>::None,
+        ])?;
+    }
+    Ok(())
+}
+
+pub(crate) fn upsert_bt_batch_rows(
+    conn: &rusqlite::Connection,
+    beamtime_id: i64,
+    rows: &[BtIngestRow],
+    path_to_mtime: &HashMap<String, i64>,
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare_cached(
+        r#"
+        INSERT OR REPLACE INTO bt_scan_points (
+            uid, stream_uid, scan_uid, sample_id, seq_index, time,
+            exposure, beamline_energy, epu_polarization, sample_theta, ccd_theta,
+            source_path, source_data_offset, source_naxis1, source_naxis2,
+            source_bitpix, source_bzero, source_mtime, beam_row, beam_col, beam_sigma
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, 0,
+            ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+        )"#,
+    )?;
+    let mut canonical_cache: HashMap<(String, Option<String>), i64> = HashMap::new();
+    for row in rows {
+        let sn = row.sample_name.as_str();
+        let t = row.tag.clone();
+        let key = (sn.to_string(), t.clone());
+        let sample_id = if let Some(&sid) = canonical_cache.get(&key) {
+            sid
+        } else {
+            let cs = resolve_sample(conn, sn)?;
+            let ct = t
+                .as_ref()
+                .map(|x| x.as_str())
+                .and_then(|x| resolve_tag(conn, x).ok().flatten());
+            ensure_sample_tag(conn, &cs, ct.as_deref())?;
+            let sid = ensure_bt_sample(conn, beamtime_id, &cs, ct.as_deref())?;
+            canonical_cache.insert(key, sid);
+            sid
+        };
+        let scan_no = row.scan_number;
+        let frame_no = row.frame_number;
+        let scan_uid = format!("s_{}_{}", beamtime_id, scan_no);
+        let stream_uid = format!("st_{}_{}", beamtime_id, scan_no);
+        let point_uid = format!("sp_{}_{}_{}", beamtime_id, scan_no, frame_no);
+        let _ = ensure_bt_scan(conn, beamtime_id, sample_id, scan_no)?;
+        let _ = ensure_bt_stream(conn, beamtime_id, scan_no)?;
+        let path_str = row.file_path.clone();
+        let mtime = path_to_mtime.get(&path_str).copied().unwrap_or(0);
+        stmt.execute(rusqlite::params![
+            point_uid,
+            stream_uid,
+            scan_uid,
+            sample_id,
+            frame_no,
+            row.exposure,
+            row.beamline_energy,
+            row.epu_polarization,
+            row.sample_theta,
+            row.ccd_theta,
+            path_str,
+            row.data_offset,
+            row.naxis1,
+            row.naxis2,
+            row.bitpix,
+            row.bzero,
+            mtime,
+            Option::<i64>::None,
+            Option::<i64>::None,
+            Option::<f64>::None,
+        ])?;
+    }
+    Ok(())
+}
+
+pub(crate) fn prune_bt_scan_points(conn: &rusqlite::Connection, known_source_paths: &[&str]) -> Result<()> {
+    if known_source_paths.is_empty() {
+        conn.execute("DELETE FROM bt_scan_points", [])?;
+        return Ok(());
+    }
+    let placeholders = known_source_paths
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "DELETE FROM bt_scan_points WHERE source_path IS NOT NULL AND source_path NOT IN ({})",
+        placeholders
+    );
+    conn.execute(&sql, rusqlite::params_from_iter(known_source_paths.iter()))?;
     Ok(())
 }

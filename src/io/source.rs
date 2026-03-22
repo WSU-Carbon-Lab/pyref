@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::FitsError;
 
 #[cfg(feature = "catalog")]
-use crate::catalog::{discover_fits_paths, CATALOG_DB_NAME};
+use crate::catalog::{discover_fits_paths, resolve_catalog_path as catalog_resolve_path, CATALOG_DB_NAME};
 
 /// When the source could be satisfied from catalog or disk (e.g. beamtime dir with `.pyref_catalog.db`),
 /// this selects which to use.
@@ -73,7 +73,7 @@ impl FitsSource {
 
 #[cfg(feature = "catalog")]
 fn resolve_dir(dir: PathBuf, preference: ResolvePreference) -> Result<ResolvedSource, FitsError> {
-    let catalog_db = dir.join(CATALOG_DB_NAME);
+    let catalog_db = catalog_resolve_path(&dir);
     let use_catalog = match preference {
         ResolvePreference::FromDisk => false,
         ResolvePreference::PreferDisk => false,
@@ -131,7 +131,7 @@ fn resolve_catalog_path(
         }
         path
     } else if path.is_dir() {
-        path.join(CATALOG_DB_NAME)
+        catalog_resolve_path(&path)
     } else {
         return Err(
             FitsError::not_found(format!("path does not exist: {}", path.display()))

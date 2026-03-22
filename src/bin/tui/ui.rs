@@ -54,6 +54,32 @@ fn layout_constraints(app: &App) -> [Constraint; 2] {
     }
 }
 
+const MIN_LIST_HEIGHT: u16 = 3;
+const SIDEBAR_GAPS: u16 = 2;
+
+fn left_sidebar_list_heights(
+    left_area_height: u16,
+    n_sample: usize,
+    n_tag: usize,
+    n_scan: usize,
+) -> (u16, u16, u16) {
+    let available = left_area_height.saturating_sub(SIDEBAR_GAPS);
+    let p_s = (n_sample as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    let p_t = (n_tag as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    let p_sc = (n_scan as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    if p_s.saturating_add(p_t).saturating_add(p_sc) <= available {
+        (p_s, p_t, p_sc)
+    } else {
+        let base = available / 3;
+        let third = available.saturating_sub(2 * base);
+        (
+            base.max(MIN_LIST_HEIGHT),
+            base.max(MIN_LIST_HEIGHT),
+            third.max(MIN_LIST_HEIGHT),
+        )
+    }
+}
+
 #[allow(dead_code)]
 pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::BeamtimeBodyRects> {
     if !app.has_catalog {
@@ -66,14 +92,20 @@ pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::Bea
         .split(body_area);
     let left_area = body_chunks[0];
     let right_area = body_chunks[2];
+    let (s_h, t_h, sc_h) = left_sidebar_list_heights(
+        left_area.height,
+        app.samples.len(),
+        app.tags.len(),
+        app.scans.len(),
+    );
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(s_h),
             Constraint::Length(1),
-            Constraint::Length(4),
+            Constraint::Length(t_h),
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Length(sc_h),
         ])
         .split(left_area);
     let right_block = Block::bordered().title(BROWSE_TITLE);
@@ -221,8 +253,8 @@ const OPEN_DIR_TITLE_EDIT: &str = " [EDIT] type path  Enter apply  Esc back ";
 
 #[cfg(feature = "catalog")]
 fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
-    let w = area.width.min(70).max(40);
-    let h = area.height.min(25).max(10);
+    let w = area.width.clamp(40, 70);
+    let h = area.height.clamp(10, 25);
     let x = area.x + area.width.saturating_sub(w) / 2;
     let y = area.y + area.height.saturating_sub(h) / 2;
     let modal = Rect::new(x, y, w, h);
@@ -492,14 +524,20 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let left_area = body_chunks[0];
     let right_area = body_chunks[2];
 
+    let (s_h, t_h, sc_h) = left_sidebar_list_heights(
+        left_area.height,
+        app.samples.len(),
+        app.tags.len(),
+        app.scans.len(),
+    );
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(s_h),
             Constraint::Length(1),
-            Constraint::Length(4),
+            Constraint::Length(t_h),
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Length(sc_h),
         ])
         .split(left_area);
     let sample_scrollbar = render_sample_list(frame, app, left_chunks[0], theme);
@@ -807,9 +845,7 @@ fn render_expanded_file_list(
     theme: ThemeMode,
     app: &mut super::app::App,
 ) -> Option<Rect> {
-    let Some(i) = app.expanded_table_row else {
-        return None;
-    };
+    let i = app.expanded_table_row?;
     let file_count = app
         .group_at_display_index(i)
         .map(|g| g.file_rows.len())
@@ -825,10 +861,7 @@ fn render_expanded_file_list(
     if app.expanded_files_scroll_offset > max_offset {
         app.expanded_files_scroll_offset = max_offset;
     }
-    let group = match app.group_at_display_index(i) {
-        Some(g) => g,
-        None => return None,
-    };
+    let group = app.group_at_display_index(i)?;
     let file_rows = &group.file_rows;
     let display_order = app.expanded_files_display_order(group);
     let offset = app.expanded_files_scroll_offset;
@@ -867,7 +900,8 @@ fn render_expanded_file_list(
         table_header_cell("E (eV)", sort_col, sort_ord, 3),
         table_header_cell("\u{03B8} (\u{00B0})", sort_col, sort_ord, 4),
         table_header_cell("Beamspot", sort_col, sort_ord, 5),
-        table_header_cell("Status", sort_col, sort_ord, 6),
+        table_header_cell("\u{03C3}", sort_col, sort_ord, 6),
+        table_header_cell("Status", sort_col, sort_ord, 7),
     ])
     .style(header_style)
     .bottom_margin(1);
@@ -896,6 +930,10 @@ fn render_expanded_file_list(
                 (Some(row), Some(col)) => format!("{},{}", row, col),
                 _ => "-".to_string(),
             };
+            let sigma = r
+                .beam_sigma
+                .map(|s| format!("{:.2}", s))
+                .unwrap_or_else(|| "-".to_string());
             let status = super::beamspot::beamspot_status(
                 r.beam_row,
                 r.beam_col,
@@ -920,6 +958,7 @@ fn render_expanded_file_list(
                 Cell::from(energy),
                 Cell::from(theta),
                 Cell::from(beamspot),
+                Cell::from(sigma),
                 Cell::from(Span::styled(status, status_style)),
             ])
             .style(row_style)
@@ -932,6 +971,7 @@ fn render_expanded_file_list(
         Constraint::Length(8),
         Constraint::Length(8),
         Constraint::Length(10),
+        Constraint::Length(7),
         Constraint::Length(8),
     ];
     let table = Table::new(rows, widths).header(header).column_spacing(1);

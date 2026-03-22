@@ -62,8 +62,9 @@ Background correction uses edge-based subtraction: per-row (left/right) and per-
 
 Image processing reduces 2D detector images to reflectivity values:
 
-**Rust implementation** (`src/io.rs`):
-- `subtract_background()`: Row-by-row background subtraction
+**Rust implementation** (`src/io/mod.rs`):
+- Raw preview pipeline: trim edges (remove detector nonlinearity), then row-by-row background (10-pixel left/right strips, colder side per row), then cold-side dark subtraction (top vs bottom, single scalar). Used by TUI preview and `materialize_image`.
+- `subtract_background()`: Legacy row-by-row background subtraction (full-size output; interior only corrected).
 - `simple_reflectivity()`: Calculates beam signal vs background using ROI
 - `process_image()`: Main image processing pipeline
 
@@ -116,7 +117,15 @@ Uncertainty propagation implemented as Polars plugins:
 
 ### 6. Catalog (beamtime index)
 
-One SQLite database per beamtime directory (`.pyref_catalog.db`) caches FITS metadata and supports overrides so scans avoid repeated header I/O.
+One SQLite database per beamtime directory (`.pyref_catalog.db`) caches FITS metadata and supports overrides so scans avoid repeated header I/O. A **new layout** uses a single catalog per parent directory.
+
+**Catalog layout (legacy vs new):**
+- Legacy: DB at beamtime_dir/.pyref_catalog.db; schema uses files table + overrides.
+- New: DB at parent/.pyref/catalog.db for multiple beamtimes; schema uses normalized bt_* tables only (bt_beamtimes, bt_samples, bt_scans, bt_streams, bt_scan_points, etc.). Ingest writes only to bt_* for new layout (no files table).
+- resolve_catalog_path(beamtime_dir) returns new path if it exists, else legacy path; new path is chosen when parent exists and is not root.
+- Beamtimes list: launcher uses ~/.pyref/beamtime_index.sqlite3; list_beamtimes_from_catalog(db_path) returns beamtimes from a given catalog (bt_beamtimes) for the new layout.
+- Zarr store: same location as catalog (parent/.pyref/zarr/<beamtime_key>/); one subdir per beamtime.
+- FITS discovery: case-insensitive .fits extension; failed FITS reads are not silently dropped during ingest (first error returned with path).
 
 **Source resolution in `scan_experiment(source)`** (Python `python/pyref/io/readers.py`):
 - If `source` is a directory and `path / ".pyref_catalog.db"` exists, the scan is served from the catalog (Rust `scan_from_catalog`); no FITS I/O.
@@ -139,7 +148,13 @@ Catalog is built by default (feature `catalog`); the TUI feature includes catalo
 
 **TUI (pyref-tui)**: Startup: with no CLI argument, the TUI shows the launcher (list of indexed beamtimes from `~/.pyref/beamtime_index.sqlite3`, most recent first). Enter opens the selected beamtime; [o] opens the "Open directory" dialog. With a CLI argument, the TUI opens that beamtime directly. Open directory: hybrid dialog with path input (Tab autocomplete) and scrollable folder list (.. and subdirs); Enter on a valid path runs ingest, registers the beamtime in the central index, and opens that beamtime. While ingesting (from launcher or from beamtime view), the nav line shows "Ingesting N/M...". If there is no catalog in the opened directory, the TUI shows an empty state and the message to run "Ingest directory" (key [i]) or `pyref.io.ingest_beamtime(path)` from Python. The beamtime browse panel lists **reflectivity profiles**: one row per experiment (scan) for a given sample, tag, and polarization. Two scan modes are supported: **fixed-energy (theta scan)** where sample theta varies and energy is fixed, and **fixed-angle (energy scan)** where energy varies and theta is fixed or limited to a few angles. The table shows Emin (eV), Emax (eV), Type (theta-scan / E-scan), theta min/max, frame count, and duration. Scan type is inferred from the data using energy/theta range tolerances, distinct-value counts, and an Izero heuristic (many points at theta near zero indicate a theta scan). Each row is a single reflectivity profile; Enter expands it to show the underlying FITS files in a table (Scan, Frame, pol, E (eV), sample theta). When expanded, j/k scroll the file list; Enter collapses. Rename/Retag write catalog overrides via `set_override` and the table reloads. On exit, the TUI saves config to `PYREF_TUI_CONFIG` or `~/.config/pyref/tui.toml`, including `last_root`, `selected_samples`, `selected_tags`, and `selected_scan_numbers` (when on beamtime view). Scripts can read that config and use `scan_experiment(last_root).filter(...)` with the same sample/tag/scan filters to match the TUI view.
 
-**FITS Preview (three-panel, marquee)**: When a FITS file is selected in the TUI, a preview window shows one figure with three panels (non-macOS: egui; macOS: single composite PNG). Left panel: raw background-subtracted image. Middle panel: Gaussian-filtered image. Right panel: 4-sigma crop around the fitted beam center with 1/2/3/4-sigma Gaussian fit contours overlaid. Sigma for the filter is derived from the 2D Gaussian fit (average of row/col sigma, clamped to 0.5--20.0); if the fit fails, a default sigma (2.0) is used and the right panel shows a center crop. On non-macOS, the user can optionally draw a marquee (drag a rectangle) on the left or middle panel; on mouse release the ROI is stored for that path and the fit is re-run inside the ROI, updating all three panels and contours. ROI is per-path and in-memory for the session.
+**Parallel ingest (feature `parallel_ingest`, enabled by default)**: Enables `crossbeam-channel` and a pipelined ingest path. The TUI/browser is built with `--features tui`, which includes `parallel_ingest`, so `ingest_beamtime` uses the pipelined path and partitioned discovery when applicable. Discovery can use partitioned parallel walks over top-level subdirs (`discover_fits_paths_parallel`) when multiple subdirs exist; results are merged and sorted by path. A single thread holds the SQLite connection; a reader thread sends bounded batches (sync channel capacity 2) so FITS reads overlap with batched commits. For the new catalog layout only (`is_new_catalog_layout`), the hot path can use row structs (`BtIngestRow` from `build_bt_ingest_row` / `read_multiple_fits_headers_only_rows`) and `upsert_bt_batch_rows` instead of building Polars DataFrames per batch. The DataFrame path (`read_fits_metadata_batch`, `upsert_bt_batch`) remains for Python and legacy layout. Build without Python: `cargo check --no-default-features --features catalog,parallel_ingest`.
+
+**Deferred work (calculated columns, beam spot, zarr)**: Catalog ingest stores header fields and source path/mtime in `bt_scan_points`. Calculated columns (e.g. Q, Lambda) can be deferred to export (Parquet/HDF5) rather than computed during ingest. Beam spot columns in `bt_scan_points` stay NULL until a processing stage updates them. Zarr materialization (`materialize_beamtime`) is an explicit stage that re-reads FITS from paths recorded in the catalog; a single combined pass (one read for catalog row plus zarr chunk) is optional and not the default, so back-to-back full-tree reread for catalog then zarr implies two NAS reads unless data is copied local first.
+
+**NAS usage**: Prefer one open/read per file for catalog metadata ingest. Parallel discovery reduces wall time on wide trees; batch transactions on the single writer reduce fsync churn. For repeated materialize runs, copy beamtime tree to local storage then run zarr materialize to avoid hammering NAS.
+
+**FITS Preview (three-panel, marquee)**: When a FITS file is selected in the TUI, a preview window shows one figure with three panels (non-macOS: egui; macOS: single composite PNG). Left panel: Raw image (trimmed, then row-by-row background with 10-pixel strips, then cold-side dark subtraction). Middle panel: Gaussian-filtered image. Right panel: 4-sigma crop around the fitted beam center with 1/2/3/4-sigma Gaussian fit contours overlaid. Sigma for the filter is derived from the 2D Gaussian fit (average of row/col sigma, clamped to 0.5--20.0); if the fit fails, a default sigma (2.0) is used and the right panel shows a center crop. On non-macOS, the user can optionally draw a marquee (drag a rectangle) on the left or middle panel; on mouse release the ROI is stored for that path and the fit is re-run inside the ROI, updating all three panels and contours. ROI is per-path and in-memory for the session.
 
 ### 7. Data Stitching (Conceptual)
 

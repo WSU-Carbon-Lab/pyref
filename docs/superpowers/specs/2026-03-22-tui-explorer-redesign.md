@@ -141,6 +141,8 @@ impl CatalogHandle {
 
 If `DATA/.pyref/catalog.db` does not exist, all read methods return empty results; the file is created on first ingest.
 
+**Thread safety:** `CatalogHandle` is used exclusively from the main event-loop thread. Background ingest threads open their own direct `rusqlite::Connection` via `open_catalog_db()` — they do not go through `CatalogHandle`. This avoids shared-connection races without introducing `Arc<Mutex<>>`. The SQLite WAL mode (already set by `open_catalog_db`) allows concurrent reads during an active write.
+
 ---
 
 ## 6. Explorer Screen
@@ -202,7 +204,7 @@ pub enum ExptResolution { Resolved, NeedsResolution, Ignored }
 | `r` | Resolve selected experimentalist |
 | `x` | Toggle ignore on selected folder |
 | `i` | Ingest selected beamtime |
-| `I` | Ingest all not-yet-indexed beamtimes |
+| `I` | Ingest all not-yet-indexed beamtimes _(deferred — future work, see §13)_ |
 | `/` | Filter entries |
 | `s` | Compute disk size for selection |
 | `q` | Quit |
@@ -240,7 +242,9 @@ On Explorer startup, `detect_policy(data_root)` performs a shallow scan (top 2 l
 (?i)beamtime                                                   // contains "beamtime"
 ```
 
-If ≥50% of depth-2 folders under a given experimentalist match any pattern, that experimentalist is marked `ExptPolicy::Auto` (resolved). Below 50% → `ExptResolution::NeedsResolution` (flagged with `⚑`).
+If **(≥50% of depth-2 folders match any pattern) AND (at least 2 folders exist at depth 2)**, the experimentalist is marked `ExptPolicy::Auto` (resolved). Otherwise → `ExptResolution::NeedsResolution` (flagged with `⚑`).
+
+The `≥2` floor prevents a single folder named `run001` from auto-resolving with a pattern it happened to match — a lab with only one beamtime so far should still go through the modal so the user consciously confirms the layout. Experimentalists with zero depth-2 subdirectories are always flagged.
 
 Folders at depth 1 whose names start with `.` are silently excluded and never shown.
 
@@ -304,7 +308,11 @@ When the user enters a beamtime with `CatalogStatus::NotIndexed` or `CatalogStat
 4. On completion:
    - `Ok(())` → `BeamtimeState::reload_from_catalog()` queries the DATA catalog. A lightweight message is sent back to the underlying `ExplorerState` to update the status cell to `Indexed`.
    - `Err(e)` → error modal shown; `←` returns to Explorer.
-5. **Esc during ingest** sets the cancel `AtomicBool`, waits for the thread to drain, pops the `BeamtimeState`, and returns to the Explorer. Partial writes remain in the catalog and are resumed on next entry.
+5. **Esc during ingest** sets the cancel `AtomicBool` to `true`. The ingest thread checks it between files and exits its loop. The `BeamtimeState` is popped immediately (the thread is not joined — it exits naturally). Partial writes remain in the catalog; on next entry `incremental: true` skips already-indexed files, so the ingest resumes from where it stopped.
+
+**Concurrency:** Only one ingest thread per `BeamtimeState`. Because each `BeamtimeState` is an independent entry on the Navigator stack, navigating back to the Explorer and then into a different beamtime creates a fresh `BeamtimeState` with its own ingest thread. The abandoned thread from the previous `BeamtimeState` completes or cancels independently. Multiple simultaneous ingests are therefore possible but each targets its own beamtime path — no coordination is needed beyond SQLite WAL serialisation at the write layer.
+
+**Partial write visibility:** `BeamtimeState` only calls `reload_from_catalog()` once the ingest thread sends `Ok(())`. Profiles are not shown incrementally during ingest — the spinner + progress bar are the only UI during that phase.
 
 **Stale** beamtimes use the same path as `NotIndexed`. Staleness is determined by comparing the directory's most recent file `mtime` against `bt_beamtimes.last_indexed_at`.
 
@@ -320,13 +328,13 @@ pub fn ingest_beamtime(
     data_root:       Option<&Path>,       // NEW — None = legacy behaviour
     experimentalist: Option<&str>,        // NEW — None = legacy behaviour
     header_items:    &[String],
-    force:           bool,
+    incremental:     bool,                // unchanged semantics: true = skip already-indexed files
     progress_tx:     Option<Sender<(u32, u32)>>,
-    cancel:          Option<Arc<AtomicBool>>,  // NEW
-) -> Result<IngestSummary>
+    cancel:          Option<Arc<AtomicBool>>,  // NEW — None = no cancellation
+) -> Result<PathBuf>                      // return type unchanged
 ```
 
-`data_root: None` and `experimentalist: None` reproduce the current behaviour exactly — the catalog is opened at the beamtime directory, no new columns are written. All existing callers pass `None` until individually migrated.
+`data_root: None` and `experimentalist: None` reproduce the current behaviour exactly — the catalog is opened at the beamtime directory, no new columns are written. All existing callers pass `None` for the two new parameters and `None` for `cancel` until individually migrated. The `incremental` parameter retains its existing meaning: `true` skips FITS files whose `mtime` has not changed since last ingest.
 
 ### 10.2 Catalog Path Resolution
 

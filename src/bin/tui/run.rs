@@ -26,17 +26,17 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
     }
     if key.code == crossterm::event::KeyCode::Char('e')
         && key.modifiers.is_empty()
-        && app.open_dir_focus == OpenDirFocus::List
+        && app.open_dir_focus() == OpenDirFocus::List
     {
-        app.open_dir_focus = OpenDirFocus::PathInput;
+        app.set_open_dir_focus(OpenDirFocus::PathInput);
         app.needs_redraw = true;
         return false;
     }
     let action = keymap::from_key_event(key, &app.keymap);
     match action {
         Action::Cancel => {
-            if app.open_dir_focus == OpenDirFocus::PathInput {
-                app.open_dir_focus = OpenDirFocus::List;
+            if app.open_dir_focus() == OpenDirFocus::PathInput {
+                app.set_open_dir_focus(OpenDirFocus::List);
                 app.needs_redraw = true;
             } else {
                 app.open_dir_cancel();
@@ -44,9 +44,9 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
             return false;
         }
         Action::Open => {
-            if app.open_dir_focus == OpenDirFocus::PathInput {
+            if app.open_dir_focus() == OpenDirFocus::PathInput {
                 app.refresh_open_dir_entries();
-                app.open_dir_focus = OpenDirFocus::List;
+                app.set_open_dir_focus(OpenDirFocus::List);
             } else {
                 app.open_dir_list_enter();
             }
@@ -63,7 +63,7 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
         _ => {}
     }
     if key.code == crossterm::event::KeyCode::Tab {
-        if app.open_dir_focus == OpenDirFocus::PathInput {
+        if app.open_dir_focus() == OpenDirFocus::PathInput {
             app.open_dir_autocomplete();
         } else {
             app.open_dir_focus_toggle();
@@ -74,7 +74,7 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
         app.open_dir_focus_toggle();
         return false;
     }
-    if app.open_dir_focus == OpenDirFocus::PathInput {
+    if app.open_dir_focus() == OpenDirFocus::PathInput {
         if key.code == crossterm::event::KeyCode::Backspace {
             app.open_dir_path_pop();
         } else if let crossterm::event::KeyCode::Char(c) = key.code {
@@ -162,15 +162,16 @@ fn handle_mouse(
     _width: u16,
     _height: u16,
 ) -> bool {
-    if app.screen != super::app::Screen::Beamtime
-        || app.mode != super::app::AppMode::Normal
-        || app.open_dir_active
+    if app.current_screen() != super::app::Screen::Beamtime
+        || app.mode() != super::app::AppMode::Normal
+        || app.open_dir_active()
     {
         return false;
     }
-    let Some((_, rects)) = app.last_body_rects.as_ref() else {
+    let has_body_rects = app.last_body_rects.is_some();
+    if !has_body_rects {
         return false;
-    };
+    }
     let col = mouse_event.column;
     let row = mouse_event.row;
 
@@ -180,13 +181,15 @@ fn handle_mouse(
         }
     }
 
-    if let Some(drag_target) = app.scrollbar_drag {
+    let rects = match &app.last_body_rects {
+        Some((_, r)) => r.clone(),
+        None => return false,
+    };
+
+    let drag_target_opt = app.scrollbar_drag;
+    if let Some(drag_target) = drag_target_opt {
         if let MouseEventKind::Drag(MouseButton::Left) = mouse_event.kind {
             let (sb_rect, content_len, viewport) = {
-                let rects = match &app.last_body_rects {
-                    Some((_, r)) => r,
-                    None => return false,
-                };
                 match drag_target {
                     ScrollbarDragTarget::SampleList => {
                         let r = match rects.sample_scrollbar {
@@ -548,9 +551,9 @@ fn table_header_column_at(rect: Rect, col: u16) -> Option<usize> {
 }
 
 pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
-    if app.screen == super::app::Screen::Launcher {
+    if app.current_screen() == super::app::Screen::Launcher {
         #[cfg(feature = "catalog")]
-        if app.open_dir_active {
+        if app.open_dir_active() {
             return handle_open_dir_event(app, key);
         }
         let action = keymap::from_key_event(key, &app.keymap);
@@ -578,7 +581,7 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         return quit;
     }
 
-    if app.screen == super::app::Screen::Beamtime && app.mode == super::app::AppMode::Normal {
+    if app.current_screen() == super::app::Screen::Beamtime && app.mode() == super::app::AppMode::Normal {
         let action = keymap::from_key_event(key, &app.keymap);
         if action == Action::Cancel {
             if app.app_error.is_some() {
@@ -603,15 +606,15 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     }
 
     #[cfg(feature = "catalog")]
-    if app.screen == super::app::Screen::Beamtime
-        && app.mode == super::app::AppMode::Normal
+    if app.current_screen() == super::app::Screen::Beamtime
+        && app.mode() == super::app::AppMode::Normal
         && keymap::from_key_event(key, &app.keymap) == Action::Cancel
     {
         app.go_to_launcher();
         return false;
     }
 
-    if app.mode == super::app::AppMode::Search {
+    if app.mode() == super::app::AppMode::Search {
         let action = keymap::from_key_event(key, &app.keymap);
         match action {
             Action::Cancel => {

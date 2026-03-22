@@ -168,19 +168,19 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             eprintln!("{}", err.report());
         }
 
-        if app.screen == tui::Screen::Beamtime && !app.current_root.is_empty() {
-            config.set_last_root(&app.current_root);
+        if app.current_screen() == tui::Screen::Beamtime && !app.current_root().is_empty() {
+            config.set_last_root(app.current_root());
             let scan_str = app.focused_scan().map(|n| n.to_string());
             config.set_last_selection(
                 app.focused_sample().as_deref(),
                 app.focused_tag().as_deref(),
                 scan_str.as_deref(),
             );
-            let mut sel_samples: Vec<String> = app.selected_samples.iter().cloned().collect();
+            let mut sel_samples: Vec<String> = app.selected_samples().iter().cloned().collect();
             sel_samples.sort();
-            let mut sel_tags: Vec<String> = app.selected_tags.iter().cloned().collect();
+            let mut sel_tags: Vec<String> = app.selected_tags().iter().cloned().collect();
             sel_tags.sort();
-            let mut sel_scans: Vec<u32> = app.selected_scans.iter().cloned().collect();
+            let mut sel_scans: Vec<u32> = app.selected_scans().iter().cloned().collect();
             sel_scans.sort();
             config.set_selection_export(&sel_samples, &sel_tags, &sel_scans);
         }

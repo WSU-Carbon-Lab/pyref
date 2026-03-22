@@ -161,13 +161,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let bottom_area = chunks[2];
 
     frame.render_widget(outer_block, area);
-    if app.screen == Screen::Launcher {
+    if app.current_screen() == Screen::Launcher {
         #[cfg(feature = "catalog")]
         render_launcher_nav(frame, nav_area, app, theme);
         render_launcher_body(frame, app, body_area, theme);
         render_launcher_bottom(frame, bottom_area, theme);
         #[cfg(feature = "catalog")]
-        if app.open_dir_active {
+        if app.open_dir_active() {
             render_open_dir_modal(frame, app, inner, theme);
         }
     } else {
@@ -212,7 +212,7 @@ fn render_launcher_nav(frame: &mut Frame, area: Rect, app: &App, theme: ThemeMod
 
 #[cfg(feature = "catalog")]
 fn render_launcher_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
-    let state = match &mut app.launcher_state {
+    let state = match app.launcher_state_mut() {
         Some(s) => s,
         None => return,
     };
@@ -259,7 +259,7 @@ fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: Th
     let y = area.y + area.height.saturating_sub(h) / 2;
     let modal = Rect::new(x, y, w, h);
     let border_style = ratatui::style::Style::default();
-    let title = if app.open_dir_focus == OpenDirFocus::PathInput {
+    let title = if app.open_dir_focus() == OpenDirFocus::PathInput {
         OPEN_DIR_TITLE_EDIT
     } else {
         OPEN_DIR_TITLE
@@ -271,28 +271,32 @@ fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: Th
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(3)])
         .split(inner);
-    let path_style = if app.open_dir_focus == OpenDirFocus::PathInput {
+    let path_style = if app.open_dir_focus() == OpenDirFocus::PathInput {
         super::theme::focus_border_style(theme)
     } else {
         ratatui::style::Style::default()
     };
-    let path_spans: Vec<Span> = if app.open_dir_focus == OpenDirFocus::PathInput {
+    let path_spans: Vec<Span> = if app.open_dir_focus() == OpenDirFocus::PathInput {
         vec![
-            Span::styled(app.open_dir_path.as_str(), path_style),
+            Span::styled(app.open_dir_path(), path_style),
             Span::styled("_", super::theme::spinner_style(theme)),
         ]
     } else {
-        vec![Span::styled(app.open_dir_path.as_str(), path_style)]
+        vec![Span::styled(app.open_dir_path(), path_style)]
     };
     let path_line = Line::from(path_spans);
     let path_para = Paragraph::new(path_line);
     frame.render_widget(path_para, chunks[0]);
     let mut items: Vec<ListItem> = vec![ListItem::new("..")];
-    for p in &app.open_dir_entries {
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-        items.push(ListItem::new(name));
+    let entry_names: Vec<String> = app
+        .open_dir_entries()
+        .iter()
+        .map(|p| p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string())
+        .collect();
+    for name in &entry_names {
+        items.push(ListItem::new(name.clone()));
     }
-    let list_border = if app.open_dir_focus == OpenDirFocus::List {
+    let list_border = if app.open_dir_focus() == OpenDirFocus::List {
         super::theme::focus_border_style(theme)
     } else {
         ratatui::style::Style::default()
@@ -301,7 +305,7 @@ fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: Th
         .block(Block::bordered().border_style(list_border))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
-    frame.render_stateful_widget(list, chunks[1], &mut app.open_dir_list_state);
+    frame.render_stateful_widget(list, chunks[1], app.open_dir_list_state_mut());
 }
 
 const SPINNER_FRAMES: &str = "\u{2801}\u{2801}\u{2809}\u{2819}\u{281a}\u{2812}\u{2802}\u{2802}\u{2812}\u{2832}\u{2834}\u{2824}\u{2804}\u{2804}\u{2824}\u{2820}\u{2820}\u{2824}\u{2826}\u{2816}\u{2812}\u{2810}\u{2810}\u{2812}\u{2813}\u{280b}\u{2809}\u{2808}\u{2808}";
@@ -1077,11 +1081,12 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
 
     let order = app.compute_display_order();
     let expanded = app.expanded_table_row;
+    let filtered_groups = app.filtered_groups.clone();
     let rows: Vec<Row> = order
         .iter()
         .enumerate()
         .map(|(disp_idx, &orig_idx)| {
-            let r = &app.filtered_groups[orig_idx];
+            let r = &filtered_groups[orig_idx];
             let caret = if expanded == Some(disp_idx) { "v" } else { ">" };
             let mut cells = vec![Cell::from(caret)];
             cells.extend(grouped_row_to_cells(r));

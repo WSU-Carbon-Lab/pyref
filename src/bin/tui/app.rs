@@ -96,6 +96,7 @@ pub enum LoadingState {
 pub enum Screen {
     Launcher,
     Beamtime,
+    Explorer,
 }
 
 #[cfg(feature = "catalog")]
@@ -1033,6 +1034,96 @@ impl App {
                 open_dir_focus: OpenDirFocus::PathInput,
             },
         ));
+
+        App {
+            navigator,
+            preview_tx: None,
+            #[cfg(feature = "catalog")]
+            beamspot_rx: None,
+            #[cfg(feature = "catalog")]
+            preview_cmd_rx: None,
+            layout,
+            keymap,
+            theme,
+            needs_redraw: true,
+        }
+    }
+
+    pub fn new_for_explorer(
+        data_root: PathBuf,
+        layout: String,
+        keymap: String,
+        keybind_bar_lines: u8,
+        theme: String,
+    ) -> Self {
+        let explorer_state = super::explorer::ExplorerState::new(data_root);
+
+        let beamtime_state = super::navigator::BeamtimeState {
+            all_groups: vec![],
+            filtered_groups: vec![],
+            samples: vec![],
+            tags: vec![],
+            scans: vec![],
+            selected_samples: HashSet::new(),
+            selected_tags: HashSet::new(),
+            selected_scans: HashSet::new(),
+            sample_state: ListState::default(),
+            tag_state: ListState::default(),
+            scan_list_state: ListState::default(),
+            table_state: TableState::default(),
+            sample_scroll_state: ScrollbarState::default(),
+            tag_scroll_state: ScrollbarState::default(),
+            scan_scroll_state: ScrollbarState::default(),
+            table_scroll_state: ScrollbarState::default(),
+            expanded_files_scroll_state: ScrollbarState::default(),
+            table_sort_column: None,
+            table_sort_ordering: None,
+            expanded_table_row: None,
+            expanded_selected_file_index: None,
+            expanded_files_scroll_offset: 0,
+            expanded_files_sort_column: Some(1),
+            expanded_files_sort_ordering: Some(cmp::Ordering::Less),
+            last_expanded_files_visible: 5,
+            focus: Focus::SampleList,
+            mode: AppMode::Normal,
+            current_root: String::new(),
+            search_query: String::new(),
+            has_catalog: false,
+            loading_state: LoadingState::Idle,
+            spinner_frame: 0,
+            ingest_rx: None,
+            #[cfg(feature = "catalog")]
+            ingest_progress: None,
+            #[cfg(feature = "catalog")]
+            ingest_progress_rx: None,
+            #[cfg(feature = "catalog")]
+            pending_ingest_path: None,
+            back_stack: vec![],
+            forward_stack: vec![],
+            rename_retag_buffer: String::new(),
+            status_message: None,
+            status_message_set_at: None,
+            #[cfg(feature = "watch")]
+            catalog_watcher: None,
+            #[cfg(feature = "watch")]
+            watcher_events_rx: None,
+            last_body_rects: None,
+            scrollbar_drag: None,
+            app_error: None,
+            app_warning: None,
+            keybind_bar_lines,
+            data_root: None,
+            experimentalist: None,
+            beamtime_path: PathBuf::new(),
+        };
+
+        let mut navigator = super::navigator::Navigator::new(
+            beamtime_state,
+            super::catalog_handle::CatalogHandle {
+                db_path: PathBuf::new(),
+            },
+        );
+        navigator.stack.push(super::navigator::ScreenState::Explorer(explorer_state));
 
         App {
             navigator,
@@ -3037,6 +3128,83 @@ impl App {
             _ => {}
         }
         self.needs_redraw = true;
+    }
+
+    // ---- Explorer helper methods ----
+
+    pub fn explorer_state(&self) -> Option<&super::explorer::ExplorerState> {
+        match self.navigator.stack.last() {
+            Some(super::navigator::ScreenState::Explorer(state)) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn explorer_state_mut(&mut self) -> Option<&mut super::explorer::ExplorerState> {
+        match self.navigator.stack.last_mut() {
+            Some(super::navigator::ScreenState::Explorer(state)) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn modal_state(&self) -> Option<&super::explorer::modal::ModalState> {
+        match self.navigator.stack.last() {
+            Some(super::navigator::ScreenState::ConfigModal(state)) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn modal_state_mut(&mut self) -> Option<&mut super::explorer::modal::ModalState> {
+        match self.navigator.stack.last_mut() {
+            Some(super::navigator::ScreenState::ConfigModal(state)) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn explorer_list_down(&mut self) {
+        if let Some(state) = self.explorer_state_mut() {
+            state.move_down();
+            self.needs_redraw = true;
+        }
+    }
+
+    pub fn explorer_list_up(&mut self) {
+        if let Some(state) = self.explorer_state_mut() {
+            state.move_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    pub fn explorer_enter(&mut self) {
+        if let Some(state) = self.explorer_state_mut() {
+            if let Some(entry) = state.selected_entry() {
+                let path = entry.path.clone();
+                state.navigate_into(path);
+            }
+            self.needs_redraw = true;
+        }
+    }
+
+    pub fn explorer_back(&mut self) {
+        if let Some(state) = self.explorer_state_mut() {
+            state.navigate_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    pub fn explorer_resolve(&mut self) {
+        if let Some(state) = self.explorer_state() {
+            if let Some(entry) = state.selected_entry() {
+                if entry.kind == super::explorer::EntryKind::Experimentalist {
+                    let expt_name = entry.name.clone();
+                    let data_root = state.data_root.clone();
+                    let policy = state.layout_policy.policy_for(&entry.name).clone();
+
+                    let modal = super::explorer::modal::ModalState::new(&expt_name, data_root, &policy);
+                    self.navigator.stack.push(super::navigator::ScreenState::ConfigModal(modal));
+                    self.needs_redraw = true;
+                }
+            }
+        }
     }
 }
 

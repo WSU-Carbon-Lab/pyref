@@ -46,6 +46,23 @@ fn resolve_root(config: &tui::TuiConfig) -> Result<String, String> {
     Ok(canonical.to_string_lossy().into_owned())
 }
 
+/// Detect if a path should be opened in Explorer mode.
+/// Explorer mode: path contains only subdirectories (no .fits files directly inside)
+/// Beamtime mode: path contains .fits files directly inside
+fn should_open_as_explorer(path: &Path) -> bool {
+    use std::fs;
+
+    match fs::read_dir(path) {
+        Ok(entries) => {
+            // If all entries are directories, use Explorer mode
+            entries
+                .filter_map(|e| e.ok())
+                .all(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        }
+        Err(_) => false,
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     env::set_var("POLARS_VERBOSE", "0");
     static NOOP: NoopLogger = NoopLogger;
@@ -106,33 +123,46 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let mut app = match initial_root {
             Some(ref current_root) => {
-                let mut app = tui::App::new(
-                    current_root.clone(),
-                    config.layout.clone(),
-                    config.keymap.clone(),
-                    config.keybind_bar_lines,
-                    config.theme.clone(),
-                );
-                app.set_preview_tx(preview_tx.clone());
-                if let Some(s) = config.last_sample.as_ref() {
-                    if let Some(i) = app.samples.iter().position(|x| x == s) {
-                        app.sample_state.select(Some(i));
-                    }
-                }
-                if let Some(t) = config.last_tag.as_ref() {
-                    if let Some(i) = app.tags.iter().position(|x| x == t) {
-                        app.tag_state.select(Some(i));
-                    }
-                }
-                if let Some(e) = config.last_scan.as_ref() {
-                    if let Ok(n) = e.parse::<u32>() {
-                        if let Some(i) = app.scans.iter().position(|(x, _)| *x == n) {
-                            app.scan_list_state.select(Some(i));
+                let path = Path::new(current_root);
+                if should_open_as_explorer(path) {
+                    // Open in Explorer mode
+                    tui::App::new_for_explorer(
+                        path.to_path_buf(),
+                        config.layout.clone(),
+                        config.keymap.clone(),
+                        config.keybind_bar_lines,
+                        config.theme.clone(),
+                    )
+                } else {
+                    // Open in Beamtime mode (original behavior)
+                    let mut app = tui::App::new(
+                        current_root.clone(),
+                        config.layout.clone(),
+                        config.keymap.clone(),
+                        config.keybind_bar_lines,
+                        config.theme.clone(),
+                    );
+                    app.set_preview_tx(preview_tx.clone());
+                    if let Some(s) = config.last_sample.as_ref() {
+                        if let Some(i) = app.samples.iter().position(|x| x == s) {
+                            app.sample_state.select(Some(i));
                         }
                     }
+                    if let Some(t) = config.last_tag.as_ref() {
+                        if let Some(i) = app.tags.iter().position(|x| x == t) {
+                            app.tag_state.select(Some(i));
+                        }
+                    }
+                    if let Some(e) = config.last_scan.as_ref() {
+                        if let Ok(n) = e.parse::<u32>() {
+                            if let Some(i) = app.scans.iter().position(|(x, _)| *x == n) {
+                                app.scan_list_state.select(Some(i));
+                            }
+                        }
+                    }
+                    app.refresh_filtered();
+                    app
                 }
-                app.refresh_filtered();
-                app
             }
             None => {
                 #[cfg(feature = "catalog")]

@@ -170,6 +170,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         if app.open_dir_active() {
             render_open_dir_modal(frame, app, inner, theme);
         }
+    } else if app.current_screen() == Screen::Explorer {
+        render_explorer_nav(frame, nav_area, app, theme);
+        render_explorer(frame, app, body_area, theme);
+        render_explorer_bottom(frame, bottom_area, theme);
+        // Check if ConfigModal is on the stack
+        if let Some(modal_state) = app.modal_state() {
+            super::explorer::modal::render_modal(frame, inner, modal_state, &app.theme);
+        }
     } else {
         render_nav(frame, app, nav_area, theme);
         render_body(frame, app, body_area, theme);
@@ -1159,4 +1167,90 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
     } else {
         None
     }
+}
+
+// ---- Explorer rendering functions ----
+
+fn render_explorer_nav(frame: &mut Frame, area: Rect, app: &App, theme: ThemeMode) {
+    let explorer_state = match app.explorer_state() {
+        Some(state) => state,
+        None => return,
+    };
+
+    let breadcrumb = format!("pyref browser  {}", explorer_state.current_dir.display());
+    let path_display = truncate_path(&breadcrumb, NAV_PATH_TRUNCATE);
+
+    let line = Line::from(ratatui::text::Span::styled(
+        path_display,
+        super::theme::header_style(theme),
+    ));
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+    let explorer_state = match app.explorer_state() {
+        Some(state) => state,
+        None => return,
+    };
+
+    // Build list of entries with highlights
+    let items: Vec<ListItem> = explorer_state
+        .entries
+        .iter()
+        .map(|entry| {
+            let kind_str = match entry.kind {
+                super::explorer::EntryKind::DataRoot => "DATA",
+                super::explorer::EntryKind::Experimentalist => {
+                    if entry.expt_resolution == Some(super::explorer::ExptResolution::NeedsResolution) {
+                        "Expt ⚑"
+                    } else {
+                        "Expt"
+                    }
+                }
+                super::explorer::EntryKind::Beamtime => "Beamtime",
+                super::explorer::EntryKind::Directory => "Dir",
+            };
+            let modified_str = entry
+                .modified
+                .and_then(|st| {
+                    if let Ok(duration) = st.elapsed() {
+                        Some(format!("{:.0}d ago", duration.as_secs() as f64 / 86400.0))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "--".to_string());
+            let fits_str = entry
+                .fits_count
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "--".to_string());
+            let status_str = match entry.catalog_status {
+                super::explorer::CatalogStatus::Indexed => "✓",
+                super::explorer::CatalogStatus::Stale => "~",
+                super::explorer::CatalogStatus::NotIndexed => "✗",
+                super::explorer::CatalogStatus::NotApplicable => "--",
+            };
+
+            let line = format!(
+                "{:<35} {:<12} {:<15} {:<8} {}",
+                entry.name, kind_str, modified_str, fits_str, status_str
+            );
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::bordered().title(" Files "))
+        .highlight_style(list_style(true, theme))
+        .highlight_symbol("  ");
+
+    frame.render_stateful_widget(list, area, &mut app.explorer_state_mut().unwrap().list_state);
+}
+
+fn render_explorer_bottom(frame: &mut Frame, area: Rect, theme: ThemeMode) {
+    let style = super::theme::keybind_bar_style(theme);
+    let hints = " ↑↓ select  → enter  ← back  r resolve  x ignore  / search  q quit ";
+    let line = Line::from(ratatui::text::Span::styled(hints, style));
+    let para = Paragraph::new(line).alignment(Alignment::Center);
+    frame.render_widget(para, area);
 }

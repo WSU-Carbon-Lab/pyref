@@ -96,6 +96,10 @@ pub enum ScreenState {
     Beamtime(BeamtimeState),
     #[cfg(feature = "catalog")]
     Launcher(LauncherScreenState),
+    #[cfg(feature = "tui")]
+    Explorer(super::explorer::ExplorerState),
+    #[cfg(feature = "tui")]
+    ConfigModal(super::explorer::modal::ModalState),
 }
 
 /// Navigation stack and catalog handle.

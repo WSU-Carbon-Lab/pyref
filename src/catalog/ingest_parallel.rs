@@ -323,6 +323,13 @@ pub fn ingest_beamtime_pipelined_with_context(
 
     let mut processed: u32 = 0;
     loop {
+        // Check cancel token before processing each batch
+        if let Some(ref cancel) = cancel {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+        }
+
         match rx.recv() {
             Ok(PipelineMsg::Rows(rows)) => {
                 if !rows.is_empty() {

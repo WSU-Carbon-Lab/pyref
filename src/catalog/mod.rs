@@ -3,6 +3,7 @@ mod ingest;
 #[cfg(feature = "parallel_ingest")]
 mod ingest_parallel;
 mod query;
+mod explorer_query;
 
 #[cfg(feature = "zarr")]
 mod materialize;
@@ -29,6 +30,10 @@ pub use query::{
     list_beamtime_entries_v2, list_beamtimes_from_catalog, query_files, query_scan_points,
     rename_file_in_catalog, scan_from_catalog, set_override, update_beamspot, update_beamspot_scan_point,
     BeamtimeEntries, CatalogFilter, FileRow,
+};
+pub use explorer_query::{
+    list_experimentalists, list_beamtimes_for_expt, catalog_status_for_path,
+    ExptMeta, BeamtimeMeta, DbCatalogStatus,
 };
 
 #[cfg(feature = "zarr")]
@@ -182,7 +187,10 @@ CREATE TABLE IF NOT EXISTS bt_beamtimes (
     year INTEGER NOT NULL DEFAULT 0,
     month INTEGER NOT NULL DEFAULT 1,
     esaf_number TEXT NOT NULL DEFAULT '',
-    label TEXT
+    label TEXT,
+    experimentalist TEXT NOT NULL DEFAULT '',
+    data_root TEXT NOT NULL DEFAULT '',
+    last_indexed_at INTEGER
 )"#;
 
 const BT_MOTOR_NAMES_TABLE: &str = r#"
@@ -483,6 +491,36 @@ fn migrate_add_beam_sigma_column(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_add_experimentalist_and_data_root(conn: &Connection) -> Result<()> {
+    let has_experimentalist: bool = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_beamtimes') WHERE name = 'experimentalist'",
+        [],
+        |r| r.get(0),
+    )?;
+    let has_data_root: bool = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_beamtimes') WHERE name = 'data_root'",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_experimentalist {
+        let _ = conn.execute(
+            "ALTER TABLE bt_beamtimes ADD COLUMN experimentalist TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+    }
+    if !has_data_root {
+        let _ = conn.execute(
+            "ALTER TABLE bt_beamtimes ADD COLUMN data_root TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+    }
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bt_experimentalist ON bt_beamtimes(data_root, experimentalist)",
+        [],
+    );
+    Ok(())
+}
+
 pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
     conn.execute_batch(FILES_TABLE)?;
@@ -513,6 +551,7 @@ pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(BT_INDEX_SCAN_POINTS_SCAN)?;
     conn.execute_batch(BT_INDEX_SCAN_POINTS_SOURCE)?;
     conn.execute_batch(BT_INDEX_IMAGE_REFS_POINT)?;
+    migrate_add_experimentalist_and_data_root(&conn)?;
     Ok(conn)
 }
 

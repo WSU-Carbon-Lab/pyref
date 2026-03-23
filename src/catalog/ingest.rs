@@ -119,31 +119,50 @@ pub fn ingest_beamtime(
     incremental: bool,
     progress_tx: Option<mpsc::Sender<(u32, u32)>>,
 ) -> Result<PathBuf> {
+    ingest_beamtime_with_context(beamtime_dir, None, None, header_items, incremental, progress_tx, None)
+}
+
+pub fn ingest_beamtime_with_context(
+    beamtime_dir: &Path,
+    data_root: Option<&Path>,
+    experimentalist: Option<&str>,
+    header_items: &[String],
+    incremental: bool,
+    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<PathBuf> {
     #[cfg(feature = "parallel_ingest")]
     {
-        return super::ingest_parallel::ingest_beamtime_pipelined(
+        return super::ingest_parallel::ingest_beamtime_pipelined_with_context(
             beamtime_dir,
+            data_root,
+            experimentalist,
             header_items,
             incremental,
             progress_tx,
+            cancel,
         );
     }
     #[cfg(not(feature = "parallel_ingest"))]
     {
-        ingest_beamtime_sequential(beamtime_dir, header_items, incremental, progress_tx)
+        ingest_beamtime_sequential(beamtime_dir, data_root, experimentalist, header_items, incremental, progress_tx, cancel)
     }
 }
 
 #[cfg(not(feature = "parallel_ingest"))]
 fn ingest_beamtime_sequential(
     beamtime_dir: &Path,
+    data_root: Option<&Path>,
+    experimentalist: Option<&str>,
     header_items: &[String],
     incremental: bool,
     progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
-    let db_path = super::resolve_catalog_path(beamtime_dir);
+    let db_path = resolve_ingest_target(beamtime_dir, data_root);
     let conn = open_or_create_db(beamtime_dir)?;
     let beamtime_id = ensure_bt_beamtime(&conn, beamtime_dir)?;
+    upsert_beamtime_record(&conn, beamtime_dir, data_root, experimentalist)?;
     let discovered = super::discover_fits_paths(beamtime_dir)?;
     let path_to_mtime: HashMap<String, i64> = discovered
         .iter()
@@ -194,6 +213,9 @@ fn ingest_beamtime_sequential(
         ..ReadFitsOptions::default()
     };
     for chunk in to_ingest.chunks(BATCH_SIZE) {
+        if cancel.as_ref().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(false) {
+            break;
+        }
         let chunk_vec: Vec<PathBuf> = chunk.to_vec();
         let df = read_fits_metadata_batch(chunk_vec, &opts)?;
         if !use_normalized_only {
@@ -366,6 +388,34 @@ pub(crate) fn prune_missing_files(conn: &rusqlite::Connection, known_paths: &[&s
         .join(",");
     let sql = format!("DELETE FROM files WHERE path NOT IN ({})", placeholders);
     conn.execute(&sql, rusqlite::params_from_iter(known_paths.iter()))?;
+    Ok(())
+}
+
+pub fn resolve_ingest_target(beamtime_dir: &Path, data_root: Option<&Path>) -> PathBuf {
+    match data_root {
+        Some(root) => root.join(".pyref").join("catalog.db"),
+        None => super::resolve_catalog_path(beamtime_dir),
+    }
+}
+
+pub(crate) fn upsert_beamtime_record(
+    conn: &rusqlite::Connection,
+    beamtime_dir: &Path,
+    data_root: Option<&Path>,
+    experimentalist: Option<&str>,
+) -> Result<()> {
+    let path_str = beamtime_dir.to_string_lossy().to_string();
+    let data_root_str = data_root.and_then(|p| p.to_str()).unwrap_or("");
+    let expt_str = experimentalist.unwrap_or("");
+    conn.execute(
+        "INSERT INTO bt_beamtimes (beamtime_path, data_root, experimentalist, last_indexed_at)
+         VALUES (?1, ?2, ?3, strftime('%s','now'))
+         ON CONFLICT(beamtime_path) DO UPDATE SET
+             data_root = excluded.data_root,
+             experimentalist = excluded.experimentalist,
+             last_indexed_at = excluded.last_indexed_at",
+        rusqlite::params![path_str, data_root_str, expt_str],
+    )?;
     Ok(())
 }
 

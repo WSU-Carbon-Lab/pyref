@@ -730,6 +730,10 @@ impl App {
         match self.navigator.stack.last() {
             #[cfg(feature = "catalog")]
             Some(super::navigator::ScreenState::Launcher(_)) => Screen::Launcher,
+            #[cfg(feature = "tui")]
+            Some(super::navigator::ScreenState::Explorer(_)) => Screen::Explorer,
+            #[cfg(feature = "tui")]
+            Some(super::navigator::ScreenState::ConfigModal(_)) => Screen::Explorer,
             _ => Screen::Beamtime,
         }
     }

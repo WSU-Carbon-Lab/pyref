@@ -711,6 +711,19 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.clear_app_warning();
                 return false;
             }
+            // Phase 4: Cancel ingest if in progress
+            #[cfg(feature = "catalog")]
+            if let Some(super::navigator::ScreenState::Beamtime(bt)) = app.navigator.stack.last_mut() {
+                if bt.loading_state == super::app::LoadingState::IngestingDirectory {
+                    if let Some(ref flag) = bt.cancel_flag {
+                        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // Pop the beamtime state to return to explorer
+                    app.navigator.stack.pop();
+                    app.needs_redraw = true;
+                    return false;
+                }
+            }
         }
         if let Some(ref e) = app.app_error {
             #[cfg(feature = "catalog")]
@@ -729,7 +742,19 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         && app.mode() == super::app::AppMode::Normal
         && keymap::from_key_event(key, &app.keymap) == Action::Cancel
     {
-        app.go_to_launcher();
+        // Phase 4: Pop BeamtimeState if it came from Explorer (has data_root set)
+        if let Some(super::navigator::ScreenState::Beamtime(bt)) = app.navigator.stack.last() {
+            if bt.data_root.is_some() && bt.loading_state == super::app::LoadingState::Idle {
+                app.navigator.stack.pop();
+                app.needs_redraw = true;
+                return false;
+            }
+        }
+        // Otherwise go to launcher (if launcher still exists)
+        #[cfg(not(feature = "tui"))]
+        {
+            app.go_to_launcher();
+        }
         return false;
     }
 

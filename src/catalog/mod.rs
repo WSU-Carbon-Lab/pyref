@@ -22,7 +22,7 @@ use walkdir::WalkDir;
 
 pub const CATALOG_DB_NAME: &str = ".pyref_catalog.db";
 
-pub use ingest::{ingest_beamtime, DEFAULT_INGEST_HEADER_ITEMS};
+pub use ingest::{ingest_beamtime, ingest_beamtime_with_context, DEFAULT_INGEST_HEADER_ITEMS};
 #[cfg(feature = "parallel_ingest")]
 pub use ingest_parallel::ingest_beamtime_pipelined;
 pub use query::{

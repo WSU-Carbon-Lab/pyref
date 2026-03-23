@@ -9,8 +9,12 @@ use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::thread;
 use std::time::Instant;
+
+use super::catalog_handle::CatalogHandle;
 
 #[cfg(feature = "catalog")]
 use super::scan_type::{classify_scan_type, ReflectivityScanType};
@@ -18,9 +22,9 @@ use super::scan_type::{classify_scan_type, ReflectivityScanType};
 use pyref::build_fits_stem;
 #[cfg(feature = "catalog")]
 use pyref::catalog::{
-    catalog_file_count, get_scan_point_uid_by_source_path, list_beamtime_entries,
-    list_beamtime_entries_v2, list_beamtimes, query_files, query_scan_points, register_beamtime,
-    rename_file_in_catalog, update_beamspot, update_beamspot_scan_point, FileRow,
+    catalog_file_count, get_scan_point_uid_by_source_path, ingest_beamtime_with_context,
+    list_beamtime_entries, list_beamtime_entries_v2, list_beamtimes, query_files, query_scan_points,
+    register_beamtime, rename_file_in_catalog, update_beamspot, update_beamspot_scan_point, FileRow,
     DEFAULT_INGEST_HEADER_ITEMS, resolve_catalog_path,
 };
 #[cfg(feature = "watch")]
@@ -925,6 +929,7 @@ impl App {
             data_root: None,
             experimentalist: None,
             beamtime_path: PathBuf::new(),
+            cancel_flag: None,
         };
 
         App {
@@ -1020,6 +1025,7 @@ impl App {
             data_root: None,
             experimentalist: None,
             beamtime_path: PathBuf::new(),
+            cancel_flag: None,
         };
 
         let mut navigator = super::navigator::Navigator::new(
@@ -1119,6 +1125,7 @@ impl App {
             data_root: None,
             experimentalist: None,
             beamtime_path: PathBuf::new(),
+            cancel_flag: None,
         };
 
         let mut navigator = super::navigator::Navigator::new(
@@ -2578,64 +2585,90 @@ impl App {
 
     #[cfg(feature = "catalog")]
     pub fn try_recv_ingest(&mut self) {
-        let mut progress_updates = Vec::new();
-        if let Some(ref progress_rx) = self.ingest_progress_rx {
-            while let Ok((cur, tot)) = progress_rx.try_recv() {
-                progress_updates.push((cur, tot));
-            }
-        }
-        for (cur, tot) in progress_updates {
-            self.ingest_progress = Some((cur, tot));
-        }
-
-        let ingest_result = if let Some(ref rx) = self.ingest_rx {
-            rx.try_recv().ok()
-        } else {
-            None
-        };
-
-        if let Some(result) = ingest_result {
-            self.ingest_rx = None;
-            self.ingest_progress_rx = None;
-            self.ingest_progress = None;
-            self.loading_state = LoadingState::Idle;
-            match result {
-                Ok(()) => {
-                    self.app_error = None;
-                    if let Some(path) = self.pending_ingest_path_mut().take() {
-                        let db_path = resolve_catalog_path(&path);
-                        let file_count = catalog_file_count(&db_path, Some(&path)).ok();
-                        let _ = register_beamtime(&path, file_count);
-                        if self.current_screen() == Screen::Launcher {
-                            let beamtimes = list_beamtimes().unwrap_or_default();
-                            let mut list_state = ListState::default();
-                            if !beamtimes.is_empty() {
-                                list_state.select(Some(0));
-                            }
-                            if let Some(s) = self.launcher_state_mut() {
-                                s.beamtimes = beamtimes;
-                                s.list_state = list_state;
-                            }
-                        }
-                        let root_str = path.to_string_lossy().into_owned();
-                        if self.set_root(root_str) {
-                            self.navigator.stack.pop();
-                        }
-                        self.set_status("Catalog indexed.".to_string(), false);
-                    } else {
-                        self.reload_from_catalog(false);
-                        let db_path = resolve_catalog_path(Path::new(&self.current_root));
-                        let file_count = catalog_file_count(&db_path, Some(Path::new(&self.current_root))).ok();
-                        let _ = register_beamtime(Path::new(&self.current_root), file_count);
-                        self.set_status("Catalog indexed.".to_string(), false);
+        // Handle ingest for top BeamtimeState on stack (including ingest-in-progress from Explorer)
+        // Extract what we need from the mutable state first
+        let (ingest_result, bt_path_cloned, data_root_cloned) = {
+            if let Some(super::navigator::ScreenState::Beamtime(bt_state)) = self.navigator.stack.last_mut() {
+                let mut progress_updates = Vec::new();
+                if let Some(ref progress_rx) = bt_state.ingest_progress_rx {
+                    while let Ok((cur, tot)) = progress_rx.try_recv() {
+                        progress_updates.push((cur, tot));
                     }
                 }
+                for (cur, tot) in progress_updates {
+                    bt_state.ingest_progress = Some((cur, tot));
+                }
+
+                let ingest_result = if let Some(ref rx) = bt_state.ingest_rx {
+                    rx.try_recv().ok()
+                } else {
+                    None
+                };
+
+                let (result, bt_path, data_root) = if let Some(result) = ingest_result {
+                    bt_state.ingest_rx = None;
+                    bt_state.ingest_progress_rx = None;
+                    bt_state.ingest_progress = None;
+                    bt_state.loading_state = LoadingState::Idle;
+                    (Some(result), bt_state.beamtime_path.clone(), bt_state.data_root.clone())
+                } else {
+                    (None, PathBuf::new(), None)
+                };
+
+                (result, bt_path, data_root)
+            } else {
+                (None, PathBuf::new(), None)
+            }
+        };
+
+        // Now handle the result without holding the mutable borrow
+        if let Some(result) = ingest_result {
+            match result {
+                Ok(()) => {
+                    // Register beamtime
+                    let db_path = resolve_catalog_path(&bt_path_cloned);
+                    let file_count = catalog_file_count(&db_path, Some(&bt_path_cloned)).ok();
+                    let _ = register_beamtime(&bt_path_cloned, file_count);
+
+                    // Reload from DATA catalog and apply it
+                    if let Some((groups, samples, tags, scans)) =
+                        self.load_beamtime_from_catalog(&bt_path_cloned, data_root_cloned.as_ref(), &self.navigator.catalog)
+                    {
+                        if let Some(super::navigator::ScreenState::Beamtime(bt_state)) = self.navigator.stack.last_mut() {
+                            bt_state.all_groups = groups;
+                            bt_state.samples = samples;
+                            bt_state.tags = tags;
+                            bt_state.scans = scans;
+                            bt_state.has_catalog = true;
+                            bt_state.sample_state.select(if !bt_state.samples.is_empty() { Some(0) } else { None });
+                            bt_state.tag_state.select(if !bt_state.tags.is_empty() { Some(0) } else { None });
+                            bt_state.scan_list_state.select(if !bt_state.scans.is_empty() { Some(0) } else { None });
+                            // Inline refresh to avoid self borrow conflict
+                            bt_state.filtered_groups = Self::filter_groups(
+                                &bt_state.all_groups,
+                                &bt_state.selected_samples,
+                                &bt_state.selected_tags,
+                                &bt_state.selected_scans,
+                                &bt_state.search_query,
+                            );
+                            if !bt_state.filtered_groups.is_empty() {
+                                bt_state.table_state.select(Some(0));
+                            }
+                            bt_state.set_status("Catalog indexed.".to_string(), false);
+                        }
+                    }
+
+                    // Update Explorer status if it's on the stack below
+                    self.update_explorer_beamtime_status(&bt_path_cloned);
+                }
                 Err(e) => {
-                    let path = self
-                        .pending_ingest_path
-                        .take()
-                        .unwrap_or_else(|| PathBuf::from(&self.current_root));
-                    self.set_app_error(super::error::TuiError::ingest_failed(path, e, None));
+                    if let Some(super::navigator::ScreenState::Beamtime(bt_state)) = self.navigator.stack.last_mut() {
+                        let path = bt_state
+                            .pending_ingest_path
+                            .take()
+                            .unwrap_or_else(|| bt_state.beamtime_path.clone());
+                        bt_state.set_app_error(super::error::TuiError::ingest_failed(path, e, None));
+                    }
                 }
             }
             self.needs_redraw = true;
@@ -3181,8 +3214,25 @@ impl App {
     pub fn explorer_enter(&mut self) {
         if let Some(state) = self.explorer_state_mut() {
             if let Some(entry) = state.selected_entry() {
-                let path = entry.path.clone();
-                state.navigate_into(path);
+                // Check if this is a Beamtime entry that needs indexing
+                if entry.kind == super::explorer::EntryKind::Beamtime
+                    && (entry.catalog_status == super::explorer::CatalogStatus::NotIndexed
+                        || entry.catalog_status == super::explorer::CatalogStatus::Stale)
+                {
+                    let bt_path = entry.path.clone();
+                    let data_root = state.data_root.clone();
+                    // Get experimentalist name from parent directory name
+                    let experimentalist = bt_path.parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_string());
+
+                    self.start_beamtime_ingest(bt_path, Some(data_root), experimentalist);
+                } else {
+                    // Normal navigation
+                    let path = entry.path.clone();
+                    state.navigate_into(path);
+                }
             }
             self.needs_redraw = true;
         }
@@ -3207,6 +3257,168 @@ impl App {
                     self.navigator.stack.push(super::navigator::ScreenState::ConfigModal(modal));
                     self.needs_redraw = true;
                 }
+            }
+        }
+    }
+
+    /// Phase 4: Start auto-ingest of a beamtime directory.
+    /// Spawns background ingest thread and pushes BeamtimeState with ingest in progress.
+    #[cfg(feature = "catalog")]
+    fn start_beamtime_ingest(&mut self, bt_path: PathBuf, data_root: Option<PathBuf>, experimentalist: Option<String>) {
+        use std::sync::atomic::Ordering;
+
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let (progress_tx, progress_rx) = mpsc::channel::<(u32, u32)>();
+        let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
+
+        let bt_dir = bt_path.clone();
+        let data_root_clone = data_root.clone();
+        let experimentalist_clone = experimentalist.clone();
+        let cancel_clone = Arc::clone(&cancel_flag);
+        let default_headers: Vec<String> = pyref::catalog::DEFAULT_INGEST_HEADER_ITEMS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        thread::spawn(move || {
+            let result = pyref::catalog::ingest_beamtime_with_context(
+                &bt_dir,
+                data_root_clone.as_deref(),
+                experimentalist_clone.as_deref(),
+                &default_headers,
+                true, // incremental
+                Some(progress_tx),
+                Some(cancel_clone),
+            );
+            let _ = done_tx.send(result.map(|_| ()).map_err(|e| e.to_string()));
+        });
+
+        // Create BeamtimeState for the ingest-in-progress screen
+        let mut bt_state = super::navigator::BeamtimeState {
+            all_groups: Vec::new(),
+            filtered_groups: Vec::new(),
+            samples: Vec::new(),
+            tags: Vec::new(),
+            scans: Vec::new(),
+            selected_samples: HashSet::new(),
+            selected_tags: HashSet::new(),
+            selected_scans: HashSet::new(),
+            sample_state: ListState::default(),
+            tag_state: ListState::default(),
+            scan_list_state: ListState::default(),
+            table_state: TableState::default(),
+            sample_scroll_state: ScrollbarState::new(0),
+            tag_scroll_state: ScrollbarState::new(0),
+            scan_scroll_state: ScrollbarState::new(0),
+            table_scroll_state: ScrollbarState::new(0),
+            expanded_files_scroll_state: ScrollbarState::new(0),
+            table_sort_column: None,
+            table_sort_ordering: None,
+            expanded_table_row: None,
+            expanded_selected_file_index: None,
+            expanded_files_scroll_offset: 0,
+            expanded_files_sort_column: None,
+            expanded_files_sort_ordering: None,
+            last_expanded_files_visible: 5,
+            focus: Focus::Nav,
+            mode: AppMode::Normal,
+            current_root: bt_path.to_string_lossy().into_owned(),
+            search_query: String::new(),
+            has_catalog: false,
+            loading_state: LoadingState::IngestingDirectory,
+            spinner_frame: 0,
+            ingest_rx: Some(done_rx),
+            ingest_progress: None,
+            ingest_progress_rx: Some(progress_rx),
+            pending_ingest_path: Some(bt_path.clone()),
+            back_stack: vec![],
+            forward_stack: vec![],
+            rename_retag_buffer: String::new(),
+            status_message: None,
+            status_message_set_at: None,
+            #[cfg(feature = "watch")]
+            catalog_watcher: None,
+            #[cfg(feature = "watch")]
+            watcher_events_rx: None,
+            last_body_rects: None,
+            scrollbar_drag: None,
+            app_error: None,
+            app_warning: None,
+            keybind_bar_lines: 0,
+            data_root: data_root.clone(),
+            experimentalist: experimentalist.clone(),
+            beamtime_path: bt_path,
+            cancel_flag: Some(cancel_flag),
+        };
+
+        // If data_root is present, try to load from DATA catalog immediately
+        if let Some(ref root) = data_root {
+            if let Some((groups, samples, tags, scans)) =
+                self.load_beamtime_from_catalog(&bt_state.beamtime_path, Some(root), &self.navigator.catalog)
+            {
+                bt_state.all_groups = groups;
+                bt_state.samples = samples;
+                bt_state.tags = tags;
+                bt_state.scans = scans;
+                bt_state.has_catalog = true;
+                bt_state.sample_state.select(if !bt_state.samples.is_empty() { Some(0) } else { None });
+                bt_state.tag_state.select(if !bt_state.tags.is_empty() { Some(0) } else { None });
+                bt_state.scan_list_state.select(if !bt_state.scans.is_empty() { Some(0) } else { None });
+                self.refresh_filtered_beamtime(&mut bt_state);
+            }
+        }
+
+        self.navigator.stack.push(super::navigator::ScreenState::Beamtime(bt_state));
+        self.needs_redraw = true;
+    }
+
+    /// Load beamtime data from DATA-level catalog using CatalogHandle.
+    #[cfg(feature = "catalog")]
+    fn load_beamtime_from_catalog(
+        &self,
+        beamtime_path: &PathBuf,
+        data_root: Option<&PathBuf>,
+        catalog: &CatalogHandle,
+    ) -> Option<(Vec<GroupedProfileRow>, Vec<String>, Vec<String>, Vec<(u32, String)>)> {
+        if data_root.is_none() {
+            return None;
+        }
+        let entries = catalog.list_beamtime_entries_v2(beamtime_path)?;
+        let rows = catalog.query_scan_points(beamtime_path, None);
+        let groups = build_groups_from_files(rows);
+        let scans: Vec<(u32, String)> = entries
+            .scans
+            .into_iter()
+            .map(|(n, s)| (n as u32, s))
+            .collect();
+        Some((groups, entries.samples, entries.tags, scans))
+    }
+
+    /// Helper to refresh filtered groups for a BeamtimeState (used during ingest).
+    fn refresh_filtered_beamtime(&self, state: &mut super::navigator::BeamtimeState) {
+        state.filtered_groups = Self::filter_groups(
+            &state.all_groups,
+            &state.selected_samples,
+            &state.selected_tags,
+            &state.selected_scans,
+            &state.search_query,
+        );
+        if !state.filtered_groups.is_empty() {
+            state.table_state.select(Some(0));
+        }
+    }
+
+    /// Update Explorer status when beamtime ingest completes (direct stack mutation).
+    fn update_explorer_beamtime_status(&mut self, bt_path: &PathBuf) {
+        // Find the Explorer state in the stack and update it
+        for state in self.navigator.stack.iter_mut() {
+            if let super::navigator::ScreenState::Explorer(ref mut explorer) = state {
+                for entry in explorer.entries.iter_mut() {
+                    if entry.path == *bt_path {
+                        entry.catalog_status = super::explorer::CatalogStatus::Indexed;
+                    }
+                }
+                break;
             }
         }
     }

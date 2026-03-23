@@ -7,6 +7,8 @@ use std::cmp;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Instant;
 use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, ScrollbarState, TableState};
@@ -73,10 +75,11 @@ pub struct BeamtimeState {
     #[allow(dead_code)]
     pub keybind_bar_lines: u8,
 
-    // Context fields for future phases
+    // Context fields for Phase 4
     pub data_root: Option<PathBuf>,
     pub experimentalist: Option<String>,
     pub beamtime_path: PathBuf,
+    pub cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Phase 1 transitional launcher screen state — removed in Phase 4
@@ -107,6 +110,21 @@ pub struct Navigator {
     pub stack: Vec<ScreenState>,
     pub forward: Vec<ScreenState>,
     pub catalog: CatalogHandle,
+}
+
+impl BeamtimeState {
+    pub fn set_status(&mut self, msg: String, is_error: bool) {
+        self.status_message = Some((msg, is_error));
+        self.status_message_set_at = Some(Instant::now());
+    }
+
+    pub fn set_app_error(&mut self, e: super::error::TuiError) {
+        self.app_error = Some(e);
+    }
+
+    pub fn clear_app_error(&mut self) {
+        self.app_error = None;
+    }
 }
 
 impl Navigator {

@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import polars as pl
 
+from pyref.io.catalog_path import (
+    CATALOG_DB_NAME,
+    NEW_CATALOG_DB_NAME,
+    resolve_catalog_path,
+)
+
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -106,9 +112,6 @@ def _scan_schema(header_items: list[str]) -> dict[str, Any]:
     return schema
 
 
-CATALOG_DB_NAME = ".pyref_catalog.db"
-
-
 def scan_experiment(
     source: FilePath | FilePathList,
     header_items: list[str] | None = None,
@@ -118,20 +121,24 @@ def scan_experiment(
     keys = header_items if header_items is not None else []
     if not isinstance(source, (list, tuple)):
         path = Path(source).resolve()
-        if path.is_file() and path.name == CATALOG_DB_NAME:
+        if path.is_file() and (
+            path.name == CATALOG_DB_NAME or path.name == NEW_CATALOG_DB_NAME
+        ):
             try:
                 from pyref.pyref import py_scan_from_catalog
                 df = py_scan_from_catalog(str(path), None)
                 return df.lazy()
             except (ImportError, AttributeError):
                 pass
-        if path.is_dir() and (path / CATALOG_DB_NAME).exists():
-            try:
-                from pyref.pyref import py_scan_from_catalog
-                df = py_scan_from_catalog(str(path / CATALOG_DB_NAME), None)
-                return df.lazy()
-            except (ImportError, AttributeError):
-                pass
+        if path.is_dir():
+            db = resolve_catalog_path(path)
+            if db.is_file():
+                try:
+                    from pyref.pyref import py_scan_from_catalog
+                    df = py_scan_from_catalog(str(db), None)
+                    return df.lazy()
+                except (ImportError, AttributeError):
+                    pass
     paths = resolve_fits_paths(source)
     if not paths:
         return pl.DataFrame(schema=pl.Schema(_scan_schema(keys))).lazy()

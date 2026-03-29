@@ -30,6 +30,8 @@ Experiment catalog and discovery
 See the specific function documentation for more details on usage and parameters.
 """
 
+from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
+from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.experiment_names import (
     ParsedFitsName,
     build_catalog,
@@ -39,7 +41,6 @@ from pyref.io.experiment_names import (
     parse_fits_stem,
     scan_view,
 )
-from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
 from pyref.io.readers import (
     get_image,
     get_image_corrected,
@@ -71,6 +72,7 @@ __all__ = [
     "query_catalog",
     "read_experiment",
     "read_fits",
+    "resolve_catalog_path",
     "resolve_fits_paths",
     "scan_experiment",
     "scan_view",

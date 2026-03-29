@@ -20,6 +20,7 @@ FITS Files
 
 Experiment catalog and discovery
 -------------------------------
+- :func:`~pyref.io.resolve_catalog_path`: Beamtime catalog database path (Rust-aligned).
 - :func:`~pyref.io.discover_fits`: Discover FITS files under a root path (flat or recursive).
 - :func:`~pyref.io.parse_fits_stem`: Parse a FITS filename stem into sample_name, tag, scan_number, frame_number.
 - :func:`~pyref.io.build_catalog`: Build a per-file catalog DataFrame (names-only or with headers).

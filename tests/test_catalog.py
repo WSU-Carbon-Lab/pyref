@@ -44,6 +44,14 @@ def test_resolve_catalog_path_new_wins_when_both_exist(tmp_path: Path) -> None:
     assert resolve_catalog_path(beamtime).resolve() == new_db.resolve()
 
 
+def test_resolve_catalog_path_defaults_to_new_when_neither_exists(tmp_path: Path) -> None:
+    beamtime = tmp_path / "beam"
+    beamtime.mkdir()
+    expected = (tmp_path / ".pyref" / "catalog.db").resolve()
+    assert resolve_catalog_path(beamtime).resolve() == expected
+    assert not expected.exists()
+
+
 def test_ingest_beamtime_empty_dir(tmp_path: Path) -> None:
     db = ingest_beamtime(tmp_path, incremental=True)
     assert db == resolve_catalog_path(tmp_path)

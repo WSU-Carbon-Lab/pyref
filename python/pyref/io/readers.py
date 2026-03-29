@@ -116,6 +116,34 @@ def scan_experiment(
     source: FilePath | FilePathList,
     header_items: list[str] | None = None,
 ) -> pl.LazyFrame:
+    """
+    Lazy Polars metadata from a SQLite catalog or from FITS headers.
+
+    When ``source`` is a **single** path (not a list or tuple):
+
+    - File named ``.pyref_catalog.db`` or ``catalog.db``: load via
+      :func:`pyref.pyref.py_scan_from_catalog`.
+    - Directory: resolve DB with :func:`pyref.io.catalog_path.resolve_catalog_path`;
+      if it exists, load with ``py_scan_from_catalog`` (Rust-aligned layouts).
+    - Else: discover ``.fits`` and stream header reads.
+
+    For a **list or tuple** ``source``, call :func:`resolve_fits_paths` only. Pass one
+    directory path to use catalog auto-resolution.
+
+    Missing ``py_scan_from_catalog`` falls through to FITS discovery without raising.
+
+    Parameters
+    ----------
+    source : str, pathlib.Path, or list thereof
+        Beamtime directory, catalog ``.db`` file, glob-like path, or FITS path list.
+    header_items : list of str, optional
+        Extra FITS header keys for disk reads (unused for pure catalog loads).
+
+    Returns
+    -------
+    polars.LazyFrame
+        Schema compatible with :data:`REQUIRED_SCAN_COLUMNS` and catalog scans.
+    """
     from pyref.pyref import py_read_multiple_fits_headers_only
 
     keys = header_items if header_items is not None else []

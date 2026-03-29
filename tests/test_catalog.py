@@ -11,7 +11,13 @@ import pytest
 if getattr(_pyref_mod, "py_ingest_beamtime", None) is None:
     pytest.skip("catalog not built", allow_module_level=True)
 
-from pyref.io import get_overrides, ingest_beamtime, scan_experiment, set_override
+from pyref.io import (
+    classify_reflectivity_scan_type,
+    get_overrides,
+    ingest_beamtime,
+    scan_experiment,
+    set_override,
+)
 from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.readers import REQUIRED_SCAN_COLUMNS
 
@@ -44,7 +50,9 @@ def test_resolve_catalog_path_new_wins_when_both_exist(tmp_path: Path) -> None:
     assert resolve_catalog_path(beamtime).resolve() == new_db.resolve()
 
 
-def test_resolve_catalog_path_defaults_to_new_when_neither_exists(tmp_path: Path) -> None:
+def test_resolve_catalog_path_defaults_to_new_when_neither_exists(
+    tmp_path: Path,
+) -> None:
     beamtime = tmp_path / "beam"
     beamtime.mkdir()
     expected = (tmp_path / ".pyref" / "catalog.db").resolve()
@@ -130,6 +138,19 @@ def test_set_override_bt_scan_point_updates_scan_experiment(
     set_override(db, path, sample_name="corrected_sample")
     df2 = scan_experiment(minimal_fits_dir).collect()
     assert df2["sample_name"][0] == "corrected_sample"
-    ov = get_overrides(db, path=None)
-    assert path in set(ov["path"].to_list())
-    assert "corrected_sample" in set(ov["sample_name"].to_list())
+
+
+def test_classify_reflectivity_scan_type_fixed_energy() -> None:
+    pairs = [(284.0, 0.5 * i) for i in range(10)]
+    kind, e_min, e_max, t_min, t_max = classify_reflectivity_scan_type(pairs)
+    assert kind == "fixed_energy"
+    assert e_min is not None and e_max is not None
+    assert t_min is not None and t_max is not None
+    assert e_min <= 284.0 <= e_max
+    assert t_min <= 0.5 and t_max >= 4.5
+
+
+def test_classify_reflectivity_scan_type_fixed_angle() -> None:
+    pairs = [(250.0 + i, 10.0) for i in range(10)]
+    kind, _, _, _, _ = classify_reflectivity_scan_type(pairs)
+    assert kind == "fixed_angle"

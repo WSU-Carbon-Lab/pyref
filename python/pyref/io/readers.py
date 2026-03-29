@@ -154,6 +154,7 @@ def scan_experiment(
         ):
             try:
                 from pyref.pyref import py_scan_from_catalog
+
                 df = py_scan_from_catalog(str(path), None)
                 return df.lazy()
             except (ImportError, AttributeError):
@@ -163,6 +164,7 @@ def scan_experiment(
             if db.is_file():
                 try:
                     from pyref.pyref import py_scan_from_catalog
+
                     df = py_scan_from_catalog(str(db), None)
                     return df.lazy()
                 except (ImportError, AttributeError):
@@ -291,6 +293,33 @@ def set_override(
         tag,
         notes,
     )
+
+
+def classify_reflectivity_scan_type(
+    pairs: list[tuple[float | None, float | None]],
+) -> tuple[str, float | None, float | None, float | None, float | None]:
+    """
+    Classify a reflectivity acquisition from (beamline energy eV, sample theta deg) pairs.
+
+    Wraps the Rust catalog classifier used by the TUI. ``scan_kind`` is one of
+    ``\"fixed_energy\"`` (theta scan at nearly fixed energy), ``\"fixed_angle\"``
+    (energy scan at nearly fixed theta), or ``\"single_point\"``.
+
+    Parameters
+    ----------
+    pairs : list of (float or None, float or None)
+        One tuple per frame or scan point. Either coordinate may be omitted.
+
+    Returns
+    -------
+    scan_kind : str
+        ``fixed_energy``, ``fixed_angle``, or ``single_point``.
+    e_min, e_max, t_min, t_max : float or None
+        Extrema over finite samples; ``None`` when an axis has no data.
+    """
+    from pyref.pyref import py_classify_scan_type
+
+    return py_classify_scan_type(pairs)
 
 
 def query_catalog(

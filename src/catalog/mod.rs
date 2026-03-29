@@ -4,6 +4,7 @@ mod ingest;
 mod ingest_parallel;
 mod query;
 mod explorer_query;
+mod reflectivity_profile;
 
 #[cfg(feature = "zarr")]
 mod materialize;
@@ -35,6 +36,7 @@ pub use explorer_query::{
     list_experimentalists, list_beamtimes_for_expt, catalog_status_for_path,
     ExptMeta, BeamtimeMeta, DbCatalogStatus,
 };
+pub use reflectivity_profile::{classify_scan_type, ReflectivityScanType};
 
 #[cfg(feature = "zarr")]
 pub use materialize::materialize_beamtime;

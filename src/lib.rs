@@ -45,7 +45,8 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     use crate::catalog::{
-        get_overrides, ingest_beamtime, scan_from_catalog, set_override, CatalogFilter,
+        classify_scan_type, get_overrides, ingest_beamtime, scan_from_catalog, set_override,
+        CatalogFilter, ReflectivityScanType,
     };
 
     #[global_allocator]
@@ -437,6 +438,36 @@ mod extension {
         }
     }
 
+    #[cfg(feature = "catalog")]
+    fn reflectivity_scan_type_id(st: ReflectivityScanType) -> &'static str {
+        match st {
+            ReflectivityScanType::FixedEnergy => "fixed_energy",
+            ReflectivityScanType::FixedAngle => "fixed_angle",
+            ReflectivityScanType::SinglePoint => "single_point",
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_classify_scan_type")]
+    #[pyo3(
+        signature = (pairs),
+        text_signature = "(pairs)"
+    )]
+    /// Classify scan type from a list of ``(beamline_energy_eV, sample_theta_deg)`` pairs.
+    pub fn py_classify_scan_type(
+        pairs: Vec<(Option<f64>, Option<f64>)>,
+    ) -> PyResult<(String, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> {
+        let (st, e_min, e_max, t_min, t_max) = classify_scan_type(&pairs);
+        Ok((
+            reflectivity_scan_type_id(st).to_string(),
+            e_min,
+            e_max,
+            t_min,
+            t_max,
+        ))
+    }
+
     #[pymodule]
     #[pyo3(name = "pyref")]
     pub fn pyref(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -460,6 +491,7 @@ mod extension {
             m.add_function(pyo3::wrap_pyfunction!(py_scan_from_catalog, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_get_overrides, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_set_override, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_classify_scan_type, m)?)?;
         }
         Ok(())
     }

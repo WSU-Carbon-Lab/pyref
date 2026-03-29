@@ -115,3 +115,21 @@ def test_fits_accessor_from_catalog(minimal_fits_dir: Path | None) -> None:
     if len(df) == 0:
         pytest.skip("no rows in catalog")
     _ = df.fits.img[0]
+
+
+def test_set_override_bt_scan_point_updates_scan_experiment(
+    minimal_fits_dir: Path | None,
+) -> None:
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    db = ingest_beamtime(minimal_fits_dir, incremental=False)
+    df = scan_experiment(minimal_fits_dir).collect()
+    if len(df) == 0:
+        pytest.skip("no rows in catalog")
+    path = str(df["file_path"][0])
+    set_override(db, path, sample_name="corrected_sample")
+    df2 = scan_experiment(minimal_fits_dir).collect()
+    assert df2["sample_name"][0] == "corrected_sample"
+    ov = get_overrides(db, path=None)
+    assert path in set(ov["path"].to_list())
+    assert "corrected_sample" in set(ov["sample_name"].to_list())

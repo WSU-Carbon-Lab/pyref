@@ -325,6 +325,14 @@ const BT_INDEX_SCAN_POINTS_SOURCE: &str =
 const BT_INDEX_IMAGE_REFS_POINT: &str =
     "CREATE INDEX IF NOT EXISTS idx_bt_image_refs_scan_point ON bt_image_refs(scan_point_uid)";
 
+const BT_FILE_OVERRIDES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bt_file_overrides (
+    source_path TEXT PRIMARY KEY,
+    sample_name TEXT,
+    tag TEXT,
+    notes TEXT
+)"#;
+
 pub fn is_skippable_stem(stem: &str) -> bool {
     stem.is_empty() || stem.starts_with('_')
 }
@@ -525,6 +533,29 @@ fn migrate_add_experimentalist_and_data_root(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_add_last_indexed_at_column(conn: &Connection) -> Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='bt_beamtimes'",
+        [],
+        |r| r.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let has_col: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_beamtimes') WHERE name = 'last_indexed_at'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_col == 0 {
+        conn.execute(
+            "ALTER TABLE bt_beamtimes ADD COLUMN last_indexed_at INTEGER",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
     conn.execute_batch(FILES_TABLE)?;
@@ -555,7 +586,9 @@ pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(BT_INDEX_SCAN_POINTS_SCAN)?;
     conn.execute_batch(BT_INDEX_SCAN_POINTS_SOURCE)?;
     conn.execute_batch(BT_INDEX_IMAGE_REFS_POINT)?;
+    conn.execute_batch(BT_FILE_OVERRIDES_TABLE)?;
     migrate_add_experimentalist_and_data_root(&conn)?;
+    migrate_add_last_indexed_at_column(&conn)?;
     Ok(conn)
 }
 
@@ -593,6 +626,7 @@ fn migrate_experiment_number_to_scan_number(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
     use tempfile::TempDir;
 
     #[test]
@@ -639,6 +673,31 @@ mod tests {
         let has: i64 = conn
             .query_row(
                 "SELECT COUNT(1) FROM pragma_table_info('files') WHERE name = 'beam_sigma'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has, 1);
+    }
+
+    #[test]
+    fn test_migrate_restores_last_indexed_at_on_bt_beamtimes() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("catalog.db");
+        {
+            let _ = open_catalog_db(&db_path).unwrap();
+        }
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            let _ = conn.execute(
+                "ALTER TABLE bt_beamtimes DROP COLUMN last_indexed_at",
+                [],
+            );
+        }
+        let conn = open_catalog_db(&db_path).unwrap();
+        let has: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM pragma_table_info('bt_beamtimes') WHERE name = 'last_indexed_at'",
                 [],
                 |r| r.get(0),
             )

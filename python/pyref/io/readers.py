@@ -219,6 +219,29 @@ def get_overrides(
     catalog_path: FilePath,
     path: str | None = None,
 ) -> pl.DataFrame:
+    """
+    Read user metadata overrides from the catalog database.
+
+    Merges rows from the legacy ``overrides`` table (keys are ``files.path``) and
+    from ``bt_file_overrides`` (keys match ``bt_scan_points.source_path`` when
+    ingest used the normalized bt_* layout without ``files`` rows). The result
+    always exposes columns ``path``, ``sample_name``, ``tag``, and ``notes``; for
+    bt-only overrides, ``path`` is the FITS filesystem path.
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Resolved path to the SQLite catalog (for example the return value of
+        :func:`ingest_beamtime`).
+    path : str, optional
+        When given, return only overrides for this exact path (looked up in both
+        tables). When omitted, return all rows from both sources in sequence.
+
+    Returns
+    -------
+    polars.DataFrame
+        Zero or more override rows with consistent column names.
+    """
     from pyref.pyref import py_get_overrides
 
     return py_get_overrides(str(Path(catalog_path).resolve()), path)
@@ -231,6 +254,34 @@ def set_override(
     tag: str | None = None,
     notes: str | None = None,
 ) -> None:
+    """
+    Upsert sample name, tag, or notes for a catalog-backed file path.
+
+    If ``path`` equals ``files.path``, updates the legacy ``overrides`` table.
+    Otherwise, if ``path`` equals ``bt_scan_points.source_path`` (typical when
+    the catalog holds bt_* scan points but no ``files`` row for that path),
+    updates ``bt_file_overrides``. Scans from the catalog resolve display fields
+    with ``COALESCE(override, ingested)`` for sample name and tag.
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Path to the catalog SQLite database.
+    path : str
+        Must match an existing ``files.path`` or ``bt_scan_points.source_path``
+        string exactly (use paths from the scan metadata frame when unsure).
+    sample_name : str, optional
+        Override sample name, or ``None`` to clear that field on upsert.
+    tag : str, optional
+        Override tag, or ``None`` to clear that field on upsert.
+    notes : str, optional
+        Free-form notes, or ``None`` to clear that field on upsert.
+
+    Raises
+    ------
+    RuntimeError
+        When ``path`` is not present in either ``files`` or ``bt_scan_points``.
+    """
     from pyref.pyref import py_set_override
 
     py_set_override(

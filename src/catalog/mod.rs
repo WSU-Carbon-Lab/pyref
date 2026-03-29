@@ -93,6 +93,10 @@ pub fn catalog_path_new(beamtime_dir: &Path) -> PathBuf {
     beamtime_dir.join(PYREF_CATALOG_DIR).join(NEW_CATALOG_DB_NAME)
 }
 
+pub fn data_root_catalog_path(data_root: &Path) -> PathBuf {
+    data_root.join(PYREF_CATALOG_DIR).join(NEW_CATALOG_DB_NAME)
+}
+
 pub fn resolve_catalog_path(beamtime_dir: &Path) -> PathBuf {
     let new_path = catalog_path_new(beamtime_dir);
     let legacy_path = catalog_path(beamtime_dir);

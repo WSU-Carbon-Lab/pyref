@@ -45,6 +45,7 @@ pub struct DirEntry {
     pub kind: EntryKind,
     pub modified: Option<SystemTime>,
     pub size_bytes: Option<u64>,
+    pub beamtime_count: Option<u32>,
     pub fits_count: Option<u32>,
     pub catalog_status: CatalogStatus,
     pub expt_resolution: Option<ExptResolution>,
@@ -125,9 +126,15 @@ impl ExplorerState {
                             name: name_str,
                             kind,
                             modified: metadata.modified().ok(),
-                            size_bytes: None, // Deferred to Phase 3
+                            size_bytes: None,
+                            beamtime_count: None,
                             fits_count: None,
-                            catalog_status: CatalogStatus::NotApplicable,
+                            catalog_status: match kind {
+                                EntryKind::Experimentalist | EntryKind::Beamtime => {
+                                    CatalogStatus::NotIndexed
+                                }
+                                _ => CatalogStatus::NotApplicable,
+                            },
                             expt_resolution,
                         });
                     }
@@ -206,7 +213,7 @@ impl ExplorerState {
         }
     }
 
-    fn apply_sort(&mut self) {
+    pub fn apply_sort(&mut self) {
         self.entries.sort_by(|a, b| {
             let cmp = match self.sort_col {
                 ExplorerSort::Name => a.name.cmp(&b.name),

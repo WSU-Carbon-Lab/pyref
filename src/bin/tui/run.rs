@@ -102,10 +102,12 @@ fn handle_modal_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 if let Some(explorer) = app.explorer_state_mut() {
                     explorer.layout_policy.set_policy(expt_name, policy);
                     let _ = explorer.layout_policy.save(&data_root);
-                    // Reload current directory to update expt_resolution flags
                     let current_dir = explorer.current_dir.clone();
                     explorer.load_dir(current_dir);
                 }
+
+                #[cfg(feature = "catalog")]
+                app.explorer_after_nav();
 
                 app.needs_redraw = true;
             }
@@ -203,6 +205,8 @@ pub fn run<B: Backend>(
 ) -> io::Result<()> {
     loop {
         app.try_recv_ingest();
+        #[cfg(feature = "catalog")]
+        app.try_recv_explorer_fs_updates();
         app.try_recv_watcher();
         #[cfg(feature = "catalog")]
         app.try_recv_beamspot_updates();

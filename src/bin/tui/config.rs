@@ -22,6 +22,8 @@ pub struct TuiConfig {
     #[serde(default)]
     pub last_root: Option<String>,
     #[serde(default)]
+    pub data_root: Option<String>,
+    #[serde(default)]
     pub recent_roots: Vec<String>,
     #[serde(default)]
     pub last_sample: Option<String>,
@@ -66,6 +68,7 @@ impl Default for TuiConfig {
     fn default() -> Self {
         Self {
             last_root: None,
+            data_root: None,
             recent_roots: Vec::new(),
             last_sample: None,
             last_tag: None,

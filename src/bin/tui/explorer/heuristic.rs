@@ -2,6 +2,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use walkdir::WalkDir;
 
 use super::EntryKind;
 
@@ -233,6 +234,49 @@ pub fn needs_resolution(experimentalist: &str, layout: &NasLayout) -> bool {
             ..
         }
     )
+}
+
+pub fn scan_experimentalist_subtree(
+    expt_path: &Path,
+    data_root: &Path,
+    layout: &NasLayout,
+) -> (u32, u32) {
+    let mut beamtime_dirs = 0u32;
+    if let Ok(rd) = std::fs::read_dir(expt_path) {
+        for e in rd.flatten() {
+            if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let p = e.path();
+            if classify_entry(&p, data_root, layout) == EntryKind::Beamtime {
+                beamtime_dirs = beamtime_dirs.saturating_add(1);
+            }
+        }
+    }
+    let mut fits = 0u32;
+    for w in WalkDir::new(expt_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|x| x.ok())
+    {
+        let p = w.path();
+        if !p.is_file() {
+            continue;
+        }
+        if p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("fits"))
+            != Some(true)
+        {
+            continue;
+        }
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if pyref::catalog::is_skippable_stem(stem) {
+            continue;
+        }
+        fits = fits.saturating_add(1);
+    }
+    (beamtime_dirs, fits)
 }
 
 #[cfg(test)]

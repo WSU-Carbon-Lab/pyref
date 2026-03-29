@@ -22,12 +22,7 @@ impl Log for NoopLogger {
     fn flush(&self) {}
 }
 
-fn resolve_root(config: &tui::TuiConfig) -> Result<String, String> {
-    let raw = env::args()
-        .nth(1)
-        .or_else(|| config.last_root.clone())
-        .unwrap_or_else(|| "/path/to/experiments".to_string());
-    let path = Path::new(&raw);
+fn resolve_existing_dir(path: &Path) -> Result<String, String> {
     if !path.exists() {
         return Err(format!(
             "Path does not exist: {}. Check the path or create the directory.",
@@ -36,7 +31,7 @@ fn resolve_root(config: &tui::TuiConfig) -> Result<String, String> {
     }
     if !path.is_dir() {
         return Err(format!(
-            "Path is not a directory: {}. Point pyref-tui at a beamtime directory.",
+            "Path is not a directory: {}.",
             path.display()
         ));
     }
@@ -44,6 +39,48 @@ fn resolve_root(config: &tui::TuiConfig) -> Result<String, String> {
         .canonicalize()
         .map_err(|e| format!("Failed to resolve path {}: {}", path.display(), e))?;
     Ok(canonical.to_string_lossy().into_owned())
+}
+
+#[cfg(feature = "catalog")]
+fn pick_startup_root(config: &tui::TuiConfig) -> Result<Option<String>, String> {
+    if let Some(arg) = env::args().nth(1) {
+        return Ok(Some(resolve_existing_dir(Path::new(&arg))?));
+    }
+    if let Ok(v) = env::var("PYREF_DATA_ROOT") {
+        let p = Path::new(v.trim());
+        if p.is_dir() {
+            return Ok(Some(resolve_existing_dir(p)?));
+        }
+    }
+    if let Some(ref dr) = config.data_root {
+        let p = Path::new(dr);
+        if p.is_dir() {
+            return Ok(Some(resolve_existing_dir(p)?));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let p = Path::new("/Volumes/DATA");
+        if p.is_dir() {
+            return Ok(Some(resolve_existing_dir(p)?));
+        }
+    }
+    if let Some(ref lr) = config.last_root {
+        let p = Path::new(lr);
+        if p.is_dir() {
+            return Ok(Some(resolve_existing_dir(p)?));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(not(feature = "catalog"))]
+fn resolve_root_fallback(config: &tui::TuiConfig) -> Result<String, String> {
+    let raw = env::args()
+        .nth(1)
+        .or_else(|| config.last_root.clone())
+        .unwrap_or_else(|| "/path/to/experiments".to_string());
+    resolve_existing_dir(Path::new(&raw))
 }
 
 /// Detect if a path should be opened in Explorer mode.
@@ -73,20 +110,16 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut config = tui::TuiConfig::load_or_default();
 
     #[cfg(feature = "catalog")]
-    let initial_root = if env::args().nth(1).is_some() {
-        Some(match resolve_root(&config) {
-            Ok(s) => s,
-            Err(msg) => {
-                eprintln!("{}", msg);
-                std::process::exit(1);
-            }
-        })
-    } else {
-        None
+    let initial_root = match pick_startup_root(&config) {
+        Ok(o) => o,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            std::process::exit(1);
+        }
     };
 
     #[cfg(not(feature = "catalog"))]
-    let initial_root = Some(match resolve_root(&config) {
+    let initial_root = Some(match resolve_root_fallback(&config) {
         Ok(s) => s,
         Err(msg) => {
             eprintln!("{}", msg);
@@ -198,6 +231,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             eprintln!("{}", err.report());
         }
 
+        if app.current_screen() == tui::Screen::Explorer {
+            if let Some(ex) = app.explorer_state() {
+                let root = ex.data_root.to_string_lossy().into_owned();
+                config.set_last_root(&root);
+                config.data_root = Some(root);
+            }
+        }
         if app.current_screen() == tui::Screen::Beamtime && !app.current_root().is_empty() {
             config.set_last_root(app.current_root());
             let scan_str = app.focused_scan().map(|n| n.to_string());

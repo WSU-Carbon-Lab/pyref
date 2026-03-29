@@ -1220,6 +1220,10 @@ fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
                     }
                 })
                 .unwrap_or_else(|| "--".to_string());
+            let bt_str = entry
+                .beamtime_count
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "--".to_string());
             let fits_str = entry
                 .fits_count
                 .map(|c| c.to_string())
@@ -1232,15 +1236,15 @@ fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
             };
 
             let line = format!(
-                "{:<35} {:<12} {:<15} {:<8} {}",
-                entry.name, kind_str, modified_str, fits_str, status_str
+                "{:<28} {:<10} {:<10} {:<8} {:<8} {}",
+                entry.name, kind_str, bt_str, fits_str, modified_str, status_str
             );
             ListItem::new(line)
         })
         .collect();
 
     let list = List::new(items)
-        .block(Block::bordered().title(" Files "))
+        .block(Block::bordered().title(" Name  Kind  Bt  Fits  Age  Cat "))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
 

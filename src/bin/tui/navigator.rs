@@ -7,16 +7,12 @@ use std::cmp;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use std::time::Instant;
 use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, ScrollbarState, TableState};
 
 #[cfg(feature = "watch")]
 use pyref::catalog::WatchHandle;
-
-type BeamspotUpdate = (PathBuf, i64, i64, Option<f64>);
 
 /// All beamtime screen state. Moved out of App in Phase 1.
 pub struct BeamtimeState {

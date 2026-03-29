@@ -52,6 +52,10 @@ dependencies = [
     "scienceplots>=2.2.1",
     "datasets>=4.6.0",
     "huggingface-hub>=1.5.0",
+    "tiled>=0.2.8",
+    "ipyaggrid>=0.5.4",
+    "altair>=6.0.0",
+    "panel>=1.8.5",
 ]
 
 [tool.maturin]
@@ -181,6 +185,12 @@ jupyter = [
     "ipywidgets>=8.1.7",
     "panel>=1.6.3",
     "watchfiles>=1.0.5",
+]
+nsls = [
+    "dask>=2026.3.0",
+    "pyhyperscattering[bluesky]>=0.2.10",
+    "pyopencl>=2026.1.2",
+    "zarr>=3.1.6",
 ]
 torch = [
     "torch>=2.7.0",

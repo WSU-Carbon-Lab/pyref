@@ -22,7 +22,7 @@ use super::scan_type::{classify_scan_type, ReflectivityScanType};
 use pyref::build_fits_stem;
 #[cfg(feature = "catalog")]
 use pyref::catalog::{
-    catalog_file_count, get_scan_point_uid_by_source_path, ingest_beamtime_with_context,
+    catalog_file_count, get_scan_point_uid_by_source_path,
     list_beamtime_entries, list_beamtime_entries_v2, list_beamtimes, query_files, query_scan_points,
     register_beamtime, rename_file_in_catalog, update_beamspot, update_beamspot_scan_point, FileRow,
     DEFAULT_INGEST_HEADER_ITEMS, resolve_catalog_path,
@@ -140,6 +140,13 @@ pub enum ScrollbarDragTarget {
     ExpandedFiles,
 }
 
+#[cfg(feature = "catalog")]
+pub struct ExplorerFsUpdate {
+    pub path: PathBuf,
+    pub beamtime_count: u32,
+    pub fits_count: u32,
+}
+
 pub struct App {
     pub navigator: super::navigator::Navigator,
     pub preview_tx: Option<mpsc::Sender<(PathBuf, Option<f64>)>>,
@@ -147,6 +154,8 @@ pub struct App {
     pub beamspot_rx: Option<mpsc::Receiver<BeamspotUpdate>>,
     #[cfg(feature = "catalog")]
     pub preview_cmd_rx: Option<mpsc::Receiver<super::preview::PreviewCommand>>,
+    #[cfg(feature = "catalog")]
+    explorer_fs_rx: Option<mpsc::Receiver<ExplorerFsUpdate>>,
     pub layout: String,
     pub keymap: String,
     pub theme: String,
@@ -423,17 +432,21 @@ fn catalog_to_profiles(
 
 impl App {
     fn beamtime_state(&self) -> &super::navigator::BeamtimeState {
-        match self.navigator.stack.last() {
-            Some(super::navigator::ScreenState::Beamtime(s)) => s,
-            _ => panic!("no beamtime state on stack"),
+        for state in self.navigator.stack.iter().rev() {
+            if let super::navigator::ScreenState::Beamtime(s) = state {
+                return s;
+            }
         }
+        panic!("no beamtime state on stack");
     }
 
     fn beamtime_state_mut(&mut self) -> &mut super::navigator::BeamtimeState {
-        match self.navigator.stack.last_mut() {
-            Some(super::navigator::ScreenState::Beamtime(s)) => s,
-            _ => panic!("no beamtime state on stack"),
+        for state in self.navigator.stack.iter_mut().rev() {
+            if let super::navigator::ScreenState::Beamtime(s) = state {
+                return s;
+            }
         }
+        panic!("no beamtime state on stack");
     }
 
     // Pass-through getters for backward compatibility
@@ -944,6 +957,8 @@ impl App {
             beamspot_rx: None,
             #[cfg(feature = "catalog")]
             preview_cmd_rx: None,
+            #[cfg(feature = "catalog")]
+            explorer_fs_rx: None,
             layout,
             keymap,
             theme,
@@ -1052,6 +1067,8 @@ impl App {
             beamspot_rx: None,
             #[cfg(feature = "catalog")]
             preview_cmd_rx: None,
+            #[cfg(feature = "catalog")]
+            explorer_fs_rx: None,
             layout,
             keymap,
             theme,
@@ -1066,6 +1083,7 @@ impl App {
         keybind_bar_lines: u8,
         theme: String,
     ) -> Self {
+        let catalog_db = pyref::catalog::data_root_catalog_path(&data_root);
         let explorer_state = super::explorer::ExplorerState::new(data_root);
 
         let beamtime_state = super::navigator::BeamtimeState {
@@ -1130,24 +1148,30 @@ impl App {
 
         let mut navigator = super::navigator::Navigator::new(
             beamtime_state,
-            super::catalog_handle::CatalogHandle {
-                db_path: PathBuf::new(),
-            },
+            super::catalog_handle::CatalogHandle::new(catalog_db),
         );
         navigator.stack.push(super::navigator::ScreenState::Explorer(explorer_state));
 
-        App {
+        let mut app = App {
             navigator,
             preview_tx: None,
             #[cfg(feature = "catalog")]
             beamspot_rx: None,
             #[cfg(feature = "catalog")]
             preview_cmd_rx: None,
+            #[cfg(feature = "catalog")]
+            explorer_fs_rx: None,
             layout,
             keymap,
             theme,
             needs_redraw: true,
+        };
+        #[cfg(feature = "catalog")]
+        {
+            app.sync_explorer_catalog_columns();
+            app.restart_explorer_fs_scan();
         }
+        app
     }
 
     pub fn set_app_error(&mut self, e: super::error::TuiError) {
@@ -2658,8 +2682,8 @@ impl App {
                         }
                     }
 
-                    // Update Explorer status if it's on the stack below
                     self.update_explorer_beamtime_status(&bt_path_cloned);
+                    self.sync_explorer_catalog_columns();
                 }
                 Err(e) => {
                     if let Some(super::navigator::ScreenState::Beamtime(bt_state)) = self.navigator.stack.last_mut() {
@@ -3183,6 +3207,16 @@ impl App {
         }
     }
 
+    fn explorer_layer_mut(&mut self) -> Option<&mut super::explorer::ExplorerState> {
+        self.navigator.stack.iter_mut().find_map(|s| {
+            if let super::navigator::ScreenState::Explorer(e) = s {
+                Some(e)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn modal_state(&self) -> Option<&super::explorer::modal::ModalState> {
         match self.navigator.stack.last() {
             Some(super::navigator::ScreenState::ConfigModal(state)) => Some(state),
@@ -3229,12 +3263,17 @@ impl App {
 
                     self.start_beamtime_ingest(bt_path, Some(data_root), experimentalist);
                 } else {
-                    // Normal navigation
                     let path = entry.path.clone();
                     state.navigate_into(path);
                 }
             }
             self.needs_redraw = true;
+        }
+        #[cfg(feature = "catalog")]
+        {
+            if self.explorer_state().is_some() {
+                self.explorer_after_nav();
+            }
         }
     }
 
@@ -3243,6 +3282,8 @@ impl App {
             state.navigate_up();
             self.needs_redraw = true;
         }
+        #[cfg(feature = "catalog")]
+        self.explorer_after_nav();
     }
 
     pub fn explorer_resolve(&mut self) {
@@ -3265,8 +3306,6 @@ impl App {
     /// Spawns background ingest thread and pushes BeamtimeState with ingest in progress.
     #[cfg(feature = "catalog")]
     fn start_beamtime_ingest(&mut self, bt_path: PathBuf, data_root: Option<PathBuf>, experimentalist: Option<String>) {
-        use std::sync::atomic::Ordering;
-
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let (progress_tx, progress_rx) = mpsc::channel::<(u32, u32)>();
         let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
@@ -3406,6 +3445,150 @@ impl App {
         if !state.filtered_groups.is_empty() {
             state.table_state.select(Some(0));
         }
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn sync_explorer_catalog_columns(&mut self) {
+        let db_path = self.navigator.catalog.db_path.clone();
+        let handle = CatalogHandle::new(db_path);
+        let Some(ex) = self.explorer_layer_mut() else {
+            return;
+        };
+        let data_root = ex.data_root.clone();
+        let current = ex.current_dir.clone();
+        if current == data_root {
+            let metas = handle.list_experimentalists(&data_root);
+            let map: HashMap<String, pyref::catalog::ExptMeta> =
+                metas.into_iter().map(|m| (m.name.clone(), m)).collect();
+            for e in &mut ex.entries {
+                if e.kind != super::explorer::EntryKind::Experimentalist {
+                    continue;
+                }
+                if let Some(meta) = map.get(&e.name) {
+                    e.beamtime_count = Some(meta.beamtime_count);
+                    let db_fits = meta.fits_count;
+                    e.fits_count = Some(e.fits_count.unwrap_or(0).max(db_fits));
+                    e.catalog_status = if meta.beamtime_count > 0 || db_fits > 0 {
+                        super::explorer::CatalogStatus::Indexed
+                    } else {
+                        super::explorer::CatalogStatus::NotIndexed
+                    };
+                }
+            }
+        } else if current
+            .parent()
+            .map(|p| p == data_root.as_path())
+            .unwrap_or(false)
+        {
+            let Some(expt_name) = current.file_name().and_then(|n| n.to_str()) else {
+                ex.apply_sort();
+                self.needs_redraw = true;
+                return;
+            };
+            let metas = handle.list_beamtimes(&data_root, expt_name);
+            let map: HashMap<PathBuf, pyref::catalog::BeamtimeMeta> =
+                metas.into_iter().map(|m| (m.path.clone(), m)).collect();
+            for e in &mut ex.entries {
+                if e.kind != super::explorer::EntryKind::Beamtime {
+                    continue;
+                }
+                if let Some(meta) = map.get(&e.path) {
+                    e.fits_count = meta.fits_count.or(e.fits_count);
+                }
+                let st = handle.catalog_status(&e.path);
+                e.catalog_status = match st {
+                    pyref::catalog::DbCatalogStatus::Indexed => super::explorer::CatalogStatus::Indexed,
+                    pyref::catalog::DbCatalogStatus::Stale => super::explorer::CatalogStatus::Stale,
+                    pyref::catalog::DbCatalogStatus::NotIndexed => super::explorer::CatalogStatus::NotIndexed,
+                };
+            }
+        }
+        ex.apply_sort();
+        self.needs_redraw = true;
+    }
+
+    #[cfg(feature = "catalog")]
+    fn restart_explorer_fs_scan(&mut self) {
+        let snapshot = self.navigator.stack.iter().find_map(|s| {
+            if let super::navigator::ScreenState::Explorer(ex) = s {
+                Some(ex)
+            } else {
+                None
+            }
+        }).map(|ex| {
+            let at_root = ex.current_dir == ex.data_root;
+            let paths: Vec<PathBuf> = ex
+                .entries
+                .iter()
+                .filter(|e| e.kind == super::explorer::EntryKind::Experimentalist)
+                .map(|e| e.path.clone())
+                .collect();
+            (
+                at_root,
+                ex.data_root.clone(),
+                ex.layout_policy.clone(),
+                paths,
+            )
+        });
+        let Some((at_root, data_root, layout, paths)) = snapshot else {
+            self.explorer_fs_rx = None;
+            return;
+        };
+        if !at_root || paths.is_empty() {
+            self.explorer_fs_rx = None;
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.explorer_fs_rx = Some(rx);
+        thread::spawn(move || {
+            for path in paths {
+                let (bt, fits) = super::explorer::heuristic::scan_experimentalist_subtree(
+                    &path,
+                    &data_root,
+                    &layout,
+                );
+                let _ = tx.send(ExplorerFsUpdate {
+                    path,
+                    beamtime_count: bt,
+                    fits_count: fits,
+                });
+            }
+        });
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn try_recv_explorer_fs_updates(&mut self) {
+        let Some(rx) = self.explorer_fs_rx.as_ref() else {
+            return;
+        };
+        let mut batch = Vec::new();
+        while let Ok(u) = rx.try_recv() {
+            batch.push(u);
+        }
+        if batch.is_empty() {
+            return;
+        }
+        let Some(ex) = self.explorer_layer_mut() else {
+            return;
+        };
+        if ex.current_dir != ex.data_root {
+            return;
+        }
+        for u in batch {
+            if let Some(e) = ex.entries.iter_mut().find(|e| e.path == u.path) {
+                e.beamtime_count = Some(u.beamtime_count);
+                let prev = e.fits_count.unwrap_or(0);
+                e.fits_count = Some(prev.max(u.fits_count));
+            }
+        }
+        ex.apply_sort();
+        self.needs_redraw = true;
+    }
+
+    #[cfg(feature = "catalog")]
+    pub fn explorer_after_nav(&mut self) {
+        self.sync_explorer_catalog_columns();
+        self.restart_explorer_fs_scan();
     }
 
     /// Update Explorer status when beamtime ingest completes (direct stack mutation).

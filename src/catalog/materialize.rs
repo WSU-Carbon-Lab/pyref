@@ -149,3 +149,18 @@ pub fn materialize_beamtime(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::materialize_beamtime;
+    use crate::catalog::Result;
+    use std::path::Path;
+    use std::sync::mpsc::Sender;
+
+    #[test]
+    fn test_materialize_symbol_is_feature_enabled() {
+        let function_ptr: fn(&Path, Option<&[String]>, Option<Sender<(String, u32, u32)>>) -> Result<()>
+            = materialize_beamtime;
+        let _ = function_ptr;
+    }
+}

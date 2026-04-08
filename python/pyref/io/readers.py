@@ -10,11 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import polars as pl
 
-from pyref.io.catalog_path import (
-    CATALOG_DB_NAME,
-    NEW_CATALOG_DB_NAME,
-    resolve_catalog_path,
-)
+from pyref.io.catalog_path import NEW_CATALOG_DB_NAME, resolve_catalog_path
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -121,7 +117,7 @@ def scan_experiment(
 
     When ``source`` is a **single** path (not a list or tuple):
 
-    - File named ``.pyref_catalog.db`` or ``catalog.db``: load via
+    - File named ``catalog.db`` (typically under ``.pyref``): load via
       :func:`pyref.pyref.py_scan_from_catalog`.
     - Directory: resolve DB with :func:`pyref.io.catalog_path.resolve_catalog_path`;
       if it exists, load with ``py_scan_from_catalog`` (Rust-aligned layouts).
@@ -149,9 +145,7 @@ def scan_experiment(
     keys = header_items if header_items is not None else []
     if not isinstance(source, (list, tuple)):
         path = Path(source).resolve()
-        if path.is_file() and (
-            path.name == CATALOG_DB_NAME or path.name == NEW_CATALOG_DB_NAME
-        ):
+        if path.is_file() and path.name == NEW_CATALOG_DB_NAME:
             try:
                 from pyref.pyref import py_scan_from_catalog
 

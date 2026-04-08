@@ -25,7 +25,9 @@
 
 The IO module is responsible for ingesting raw FITS files, cataloging their contents into a structured SQLite database, and exposing the resulting data through a lazy interface that returns pandas or polars DataFrames on demand. By default, the module expects the FITS file conventions and directory structures produced by ALS Beamline 11.0.1.2. New beamline formats can be added by extending the IO layer.
 
-All performance-critical IO operations are implemented in Rust and exposed to Python via PyO3 bindings. Rust is responsible for parallel FITS file reading, header card extraction, image data loading, filename parsing, directory traversal, SQLite catalog construction, and zarr archive management. Python is responsible for the user-facing query interface, DataFrame construction from catalog results, and any logic that does not require parallel throughput. This boundary is a design constraint, not a guideline: do not implement parallelism in Python and do not implement user-facing query logic in Rust.
+All performance-critical IO operations are implemented in Rust and exposed to Python via PyO3 bindings. Rust is responsible for parallel FITS file reading, header card extraction, image data loading, filename parsing, directory traversal, Diesel-managed SQLite catalog construction, and zarr archive management. Python is responsible for the user-facing query interface, DataFrame construction from catalog results, and any logic that does not require parallel throughput. This boundary is a design constraint, not a guideline: do not implement parallelism in Python and do not implement user-facing query logic in Rust.
+
+The catalog database is managed by [Diesel](https://diesel.rs) with the SQLite backend. The schema is defined in `src/schema.rs` and all database interactions must go through Diesel's type-checked query builder. Raw SQL is prohibited except inside Diesel migration files. SQLite foreign key enforcement is off by default; the Rust connection initializer must execute `PRAGMA foreign_keys = ON` on every new connection before any other statement.
 
 The IO module is accessed via `pyref.io` and the cataloging subsystem via `pyref.io.catalog`.
 
@@ -122,52 +124,71 @@ Connecting individual frames back to their originating sample, scan, and beamtim
 
 ### Cataloging System
 
-The cataloging system ingests a beamtime directory and populates a SQLite database that serves as the structural backbone for all downstream reduction and fitting workflows. Its primary purpose is to resolve individual FITS frames back to their originating sample, scan, and beamtime, and to expose this hierarchy as a queryable, lazily accessible interface. The most common access pattern is retrieving all frames associated with a given sample and tag combination, grouped by energy or angle, for reduction into a stitched reflectivity profile.
+The cataloging system ingests a beamtime directory and populates a Diesel-managed SQLite database that serves as the structural backbone for all downstream reduction and fitting workflows. Its primary purpose is to resolve individual FITS frames back to their originating sample, scan, and beamtime, and to expose this hierarchy as a queryable, lazily accessible interface. The schema is defined in `src/schema.rs` and must be kept in sync with the Diesel migration files under `migrations/`. The most common access pattern is retrieving all frames associated with a given sample and tag combination, grouped by energy or angle, for assembly into a stitched reflectivity profile.
 
-Importantly, some of this catalog tablular logic will not be filled out initially by the catalog ingestion. In particular, the BeamFinding, StitchCorrection, and Reflectivity tables will be empty untill we actually sit down and process the data in python from a jupyter notebook.
+The `profiles` table is the primary user-facing entry point. Users browse profiles, not scans. Scans are administrative provenance; profiles are the scientific deliverable.
 
-#### Beamtime Table
-Stores the top-level metadata for a given beamtime, specifically the path to the beamtime root directory and the date. All other tables carry a foreign key to this table, making it the root of the catalog hierarchy. The path stored here is also used to resolve the location of the monolithic beamtime zarr archive.
+#### Header Card Tiering
 
-#### Sample Table
-Stores metadata for each physical sample identified during cataloging. Each sample has a name, a representative sample-x and sample-y stage position extracted from the FITS headers, and a foreign key to the Beamtime Table. Stage positions are treated as nominally fixed per sample. During cataloging, if frames attributed to the same sample name exhibit large positional drift beyond a configurable tolerance, those frames are flagged as likely mislabeled rather than treated as a distinct sample position. Small sub-decimal drift is acceptable and ignored.
+The 115 FITS primary HDU cards per frame are split into two tiers at ingestion time. Eleven cards that directly drive scan classification, beamspot localization, normalization, and profile identity are promoted to first-class typed columns on the `frames` table: `sample_x`, `sample_y`, `sample_z`, `sample_theta`, `ccd_theta`, `beamline_energy`, `epu_polarization`, `exposure`, `ring_current`, `ai3_izero`, and `beam_current`. All remaining cards are stored in the `frame_header_values` EAV table, keyed through the `header_cards` registry. The `header_cards` table is populated automatically on first ingestion from whatever cards are present in the FITS files; subsequent beamtimes with new or renamed channels append rows to this table without requiring a schema migration. If a card that was previously treated as non-critical needs to be queried as a first-class column, the correct remedy is a Diesel migration that adds the column to `frames` and backfills it from `frame_header_values`, not a workaround join.
 
-#### Tag Table
-Stores the individual tag slugs parsed from FITS filenames. Tags carry no intrinsic meaning to the catalog; they are user-defined labels encoding experimental series membership or preparation conditions. Tags are scan-specific, not sample-specific. The association between tags and files is resolved through a join table linking the Tag Table and the File Table, allowing many tags to map to many files without duplication.
+#### `beamtimes`
+Root of the catalog hierarchy. Stores the absolute path to the beamtime root directory and the date parsed from the directory name. The `path` column is also used to resolve the monolithic zarr archive at `<path>/beamtime.zarr`. All other tables carry a foreign key to this table.
 
-#### File Table
-Stores the fully specified path, filename, frame number, scan number, sample ID, and beamtime ID for each FITS file ingested. This table is the canonical reference for raw file locations and serves as the join target for tag resolution. Image data is not retrieved through this table directly; it is accessed via the zarr group key and frame index recorded in the Data Table.
+#### `samples`
+One row per unique sample name within a beamtime. Stores the sample name and the median `sample_x`, `sample_y`, and `sample_z` stage positions computed across all frames attributed to that name. Stage positions are nominally fixed per sample; frames that deviate beyond a configurable tolerance are flagged `mislabeled_sample` in `frames.quality_flag` rather than creating a second sample row.
 
-#### Scan Table
-Stores metadata for each scan, including scan number, scan type (fixed energy or fixed angle), start and stop timestamps, sample ID, and beamtime ID. Scan type is determined during cataloging from the motor trajectory analysis described above and is recorded here as a first-class attribute to avoid recomputing it downstream.
+#### `tags`
+One row per unique tag slug parsed from FITS filenames. Tags carry no intrinsic meaning to the catalog. The many-to-many relationship between tags and files is resolved through the `file_tags` junction table.
 
-#### Data Table
-Stores one row per frame per scan, containing all header card values extracted from the FITS file along with the scan-group key and frame index needed to retrieve the corresponding 2D detector image from the beamtime zarr archive. Image data for the entire beamtime is stored in a single monolithic zarr archive located at the beamtime root, organized hierarchically with scan number as the group key and frame number as the dataset index within that group. Each scan group stores two datasets per frame: the raw detector image as extracted from the FITS file, and the post-processed image produced after edge artifact removal, row-wise and column-wise background subtraction, and Gaussian filtering. Both datasets share the same frame index, allowing the user to retrieve either the unmodified or the processed image for any given frame without reprocessing. The archive path is resolved through the foreign key to the Beamtime Table, avoiding redundant path storage at the frame level while keeping retrieval efficient and unambiguous. Each row additionally carries a foreign key to the File Table and the Scan Table, providing the full provenance chain from pixel to beamtime.
+#### `file_tags`
+Junction table linking `files` to `tags`. Allows many tags to map to many files without duplication.
 
-#### BeamFinding Table
-Stores the per-frame outputs of the beamspot localization pipeline. This includes the pre-processing steps applied prior to peak fitting (edge artifact removal flag, row-wise and column-wise background subtraction parameters, and Gaussian filter kernel size), the peak fitting result (fitted centroid row and column, integrated ROI intensity, and fit standard deviation), the background intensity extracted from the dark region of the detector, and a flag indicating whether the detection succeeded or failed. Each row carries a foreign key to the Data Table.
+#### `files`
+One row per FITS file ingested. Stores the absolute path, bare filename, scan number, frame number, sample ID, and beamtime ID. This is the canonical provenance reference for raw file locations and the join target for tag resolution. Image data is not retrieved through this table; it is accessed via the zarr keys on `frames`.
 
-#### StitchCorrection Table
-Stores the per-stitch correction factors computed during the stitching and normalization pipeline. This includes the energy-dependent Fano Factor used to rescale photon-counting uncertainties away from the pure Poisson limit, the weighted-mean overlap scaling factor applied at each stitch boundary, the I0 normalization value and its source (either direct beam frames within the scan or a foreign key to an external scan for fixed-angle profiles where I0 is sourced separately), and the frame-type classification for each frame (I0, Stitch, Overlap). Each row carries a foreign key to the Scan Table.
+#### `scans`
+One row per scan. Stores the scan number, scan type (`fixed_energy` or `fixed_angle`), start and end timestamps, sample ID, and beamtime ID. Scan type is determined during ingestion from the motor trajectory analysis and recorded here as a first-class attribute so downstream reduction does not recompute it.
 
-#### Reflectivity Table
-Stores the frame-level reduced reflectivity data produced after normalization and stitching. Each row represents a single reduced frame and contains the theta, energy, and Q values, the normalized reflectivity intensity and its propagated uncertainty, the frame-type classification (I0, Stitch, Overlap), and a foreign key to the BeamFinding Table. Stitched profile construction and export are handled outside the catalog by a packaging utility that queries the Reflectivity and StitchCorrection tables and writes the assembled profile to a flat parquet file.
+#### `header_cards`
+Registry of FITS header card names discovered during ingestion. One row per unique card name. Each row stores the raw card name as it appears in the FITS header, a human-readable display name, and a category label (`motor`, `ai`, `camera`, or `metadata`). This table is the lookup key for the `frame_header_values` EAV table. Agents must not hard-code card name strings outside of this table and the first-class column definitions on `frames`.
+
+#### `frames`
+One row per frame per scan. Stores the eleven first-class header card values as typed `Double` columns, plus the zarr retrieval keys (`zarr_group_key` and `zarr_frame_index`) needed to fetch the detector image. The monolithic zarr archive at `<beamtime.path>/beamtime.zarr` is organized hierarchically: scan number is the group key, frame number is the dataset index within that group, and each group stores two datasets per frame named `raw` and `processed`. The `raw` dataset is the image as extracted from the FITS file; the `processed` dataset is the image after edge artifact removal, row-wise and column-wise background subtraction, and Gaussian filtering. Both share the same frame index. The archive path is resolved through the FK to `beamtimes`, avoiding redundant path storage at the frame level. Each row also carries FKs to `files` and `scans`, providing the full provenance chain from pixel to beamtime.
+
+#### `frame_header_values`
+EAV store for all FITS header cards not promoted to first-class columns on `frames`. All values are stored as `Double`. The card name is resolved through `header_cards`. This table is append-only after initial ingestion; values are never updated in place.
+
+#### `profiles`
+The primary user-facing table. One row per reduced reflectivity profile, where a profile is a single continuous 1D curve assembled from one or more stitches. Multi-profile scans produce multiple rows sharing the same `scan_id`, distinguished by `profile_index`. Each row stores the profile type (`fixed_energy` or `fixed_angle`), the value of the fixed parameter (energy in eV for fixed-angle profiles, theta in degrees for fixed-energy profiles), `epu_polarization`, and the median stage position (`sample_x`, `sample_y`, `sample_z`) over all member frames. The stage position columns here are denormalized from `frames` for query convenience; the authoritative per-frame positions remain in `frames`.
+
+#### `profile_frames`
+Junction table mapping profiles to their constituent frames, with a `frame_role` column classifying each frame's function in the reduction pipeline. Valid roles are `i0`, `stitch`, `overlap`, and `reflectivity`. I0 frames appear here multiple times when they serve as the normalization reference for more than one profile in a multi-profile scan; this is by design and is the correct resolution of the shared-I0 problem. Agents must not attempt to enforce uniqueness on `frame_id` in this table.
+
+#### `beam_finding`
+Per-frame output of the beamspot localization pipeline. Stores the preprocessing parameters applied (edge removal flag, dark column and row counts for background subtraction, Gaussian kernel sigma), the peak fitting result (centroid row and column, ROI intensity, fit standard deviation), the dark region statistics (mean and standard deviation), and a `detection_flag` with values `ok`, `beam_detection_failed`, or `beam_drift_anomaly`. Each row carries a FK to `frames`. Frames with `detection_flag = beam_detection_failed` must not appear in `reflectivity`.
+
+#### `stitch_corrections`
+Per-stitch correction factors computed during the normalization and stitching pipeline. One row per stitch segment within a profile. Stores the `fano_factor` (always non-null; 1.0 when no Fano correction was applied), the `overlap_scale_factor` (null for the first stitch, which has no preceding stitch), the `i0_normalization_value`, and `i0_source_scan_id` (null when I0 comes from frames within the current profile; set to the external scan's ID for fixed-angle profiles that borrow I0 from a separate scan). Each row carries a FK to `profiles`.
+
+#### `reflectivity`
+Frame-level reduced reflectivity data after normalization and stitching. One row per reduced frame. Stores Q (inverse angstroms), theta (degrees), energy (eV), normalized intensity, propagated one-sigma uncertainty, and `frame_type` (`i0`, `stitch`, `overlap`, or `reflectivity`). Carries FKs to `profiles`, `frames`, and `beam_finding`. Frames flagged `beam_detection_failed` must not appear here. Stitched profile assembly and parquet export are performed by the packaging utility in `pyref.reduction`, which joins this table against `stitch_corrections` filtered by `profile_id`.
 
 ## Data Quality Flagging
 
-Several conditions arising during cataloging and reduction require flagging rather than silent failure or hard error. The following flags are first-class catalog attributes, not log messages, and must be queryable from the DataFrame interface.
+Several conditions arising during cataloging and reduction require flagging rather than silent failure or hard error. The following flags are first-class catalog attributes stored in typed text columns, not log messages, and must be queryable from the DataFrame interface. Flag values use lowercase snake_case to match the string literals defined in `schema.rs`.
 
-Frames attributed to a sample name whose inferred stage position deviates from the representative position for that sample by more than a configurable threshold are flagged as `MISLABELED_SAMPLE`. The threshold is configurable per beamtime but should default to a value that tolerates sub-millimeter drift while rejecting stage position changes consistent with a deliberate sample move.
+Frames attributed to a sample name whose inferred stage position deviates from the representative position for that sample by more than a configurable threshold are flagged `mislabeled_sample` in `frames.quality_flag`. The threshold is configurable per beamtime but should default to a value that tolerates sub-millimeter drift while rejecting stage position changes consistent with a deliberate sample move.
 
-Frames for which the beamspot localization algorithm fails to identify a credible peak are flagged as `BEAM_DETECTION_FAILED`. These frames must not contribute to the Reflectivity Table and must not be silently zeroed or filled.
+Frames for which the beamspot localization algorithm fails to identify a credible peak are flagged `beam_detection_failed` in `beam_finding.detection_flag`. These frames must not appear in `reflectivity` and must not be silently zeroed or filled.
 
-Frames whose fitted beamspot centroid deviates from the linear trend model across the scan by more than a configurable multiple of the fit residual standard deviation are flagged as `BEAM_DRIFT_ANOMALY`. These frames may still contribute to the Reflectivity Table but should be treated with caution and are surfaced to the user for manual inspection.
+Frames whose fitted beamspot centroid deviates from the linear trend model across the scan by more than a configurable multiple of the fit residual standard deviation are flagged `beam_drift_anomaly` in `beam_finding.detection_flag`. These frames may still appear in `reflectivity` but are surfaced to the user for manual inspection before the packaging utility includes them in a parquet export.
 
-Files that fail the filename parser are flagged as `PARSE_FAILURE` in the File Table. Files whose directory layout does not match either supported pattern are flagged at the beamtime level.
+Files that fail the filename parser are flagged `parse_failure` in `files.parse_flag`. Files whose directory layout does not match either supported pattern are flagged at the beamtime level via a structured error returned to the caller rather than a catalog row.
 
 ## Profile Packaging Utility
 
-The packaging utility assembles a stitched reflectivity profile from the Reflectivity and StitchCorrection tables and exports it as a flat parquet file. It is not part of the catalog; it is a standalone tool in `pyref.reduction` that operates on catalog query results. The output parquet file contains one row per reduced frame with the following columns at minimum: Q (inverse angstroms), theta (degrees), energy (eV), reflectivity intensity (normalized), propagated uncertainty, frame-type classification, scan number, sample name, and the applied stitch scaling factor. The packaging utility must reject frames flagged as `BEAM_DETECTION_FAILED` and must surface `BEAM_DRIFT_ANOMALY` frames to the user with a warning before including them. The output schema is fixed; agents must not add or remove columns without updating this specification.
+The packaging utility assembles a stitched reflectivity profile from the `reflectivity` and `stitch_corrections` tables and exports it as a flat parquet file. It is a standalone tool in `pyref.reduction` that operates on catalog query results and is not part of the catalog itself. The primary input is a `profile_id`; the utility joins `reflectivity` against `stitch_corrections` filtered by that ID to assemble the full stitched curve. The output parquet schema is fixed and contains one row per reduced frame with the following columns at minimum: `q` (inverse angstroms), `theta` (degrees), `energy` (eV), `intensity` (normalized, dimensionless), `uncertainty` (one-sigma), `frame_type`, `scan_number`, `sample_name`, and `overlap_scale_factor`. The utility must reject frames with `beam_finding.detection_flag = beam_detection_failed` and must warn the user before including frames with `beam_drift_anomaly`. Agents must not add or remove columns from the output schema without updating this specification.
 
 ## Fitting Module Architecture
 
@@ -183,9 +204,9 @@ Uncertainty propagation must be exact to first order at every reduction step. An
 
 Silent dtype coercion is prohibited. Operations that would coerce float64 to float32, or integer counts to floating point without explicit intent, must be made explicit or prevented. The catalog and parquet outputs must preserve float64 precision for all physical quantities.
 
-Frame provenance must be preserved end-to-end. Every row in the Reflectivity Table must be traceable back to the originating FITS file and zarr frame index through the foreign key chain. Any reduction step that breaks this chain by aggregating without recording the constituent frame IDs is unacceptable.
+Frame provenance must be preserved end-to-end. Every row in `reflectivity` must be traceable back to the originating FITS file and zarr frame index through the FK chain `reflectivity -> frames -> files`. Any reduction step that aggregates without recording the constituent frame IDs breaks this chain and is unacceptable.
 
-Fano factor computation and application must be documented in the StitchCorrection Table for every scan. A scan processed without a Fano correction must record this explicitly (Fano factor = 1.0) rather than leaving the field null.
+Fano factor computation and application must be documented in `stitch_corrections` for every scan. A scan processed without a Fano correction must record `fano_factor = 1.0` rather than leaving the field null.
 
 <!-- DO NOT EDIT THIS BLOCK IT IS MANAGED BY DOTAGENTS -->
 
@@ -198,8 +219,8 @@ This codebase is maintained by contributors with physics PhDs and extensive back
 ## Operating principles
 
 - Prefer the smallest coherent change set that satisfies the stated specification. Avoid drive-by refactors, unrelated formatting sweeps, and scope expansion.
-- Treat the repository’s existing patterns as the default contract. Match naming, module boundaries, error-handling style, and test layout unless the user explicitly requests a migration.
-- Default to production-grade output: complete, runnable, and reviewable. Do not ship placeholder text such as ellipses, “the rest of the implementation here”, “TODO: implement”, or “fill in later” inside code or patches unless the user explicitly authorizes a stub.
+- Treat the repository's existing patterns as the default contract. Match naming, module boundaries, error-handling style, and test layout unless the user explicitly requests a migration.
+- Default to production-grade output: complete, runnable, and reviewable. Do not ship placeholder text such as ellipses, "the rest of the implementation here", "TODO: implement", or "fill in later" inside code or patches unless the user explicitly authorizes a stub.
 - Remain non-lazy: if a command fails, diagnose, adjust, and retry with a different approach when reasonable. Do not stop after the first error without analysis.
 - Do not use emoji in code, comments, documentation strings, commit messages, or user-facing text unless the user explicitly requests emoji.
 
@@ -213,7 +234,7 @@ This codebase is maintained by contributors with physics PhDs and extensive back
 
 - Every **public** function, method, or type exported from a library module carries documentation appropriate to the language (for example Python docstrings, Rust `///` on public items, TSDoc/JSDoc on exported symbols).
 - Documentation states the **surface**: name, purpose, parameters, return value, and thrown or returned error shapes when that is part of the contract.
-- Prefer **prescriptive** voice that states what the symbol **does** and **means** for callers. Prefer “Maximum `foo` grouped by `bar` using a stable sort on `bar`.” over “Returns the max of foo by bar.” or "Computes the maximum `foo` grouped by `bar` using a stable sort on `bar`." or "Returns the maximum `foo` grouped by `bar` using a stable sort on `bar`."
+- Prefer **prescriptive** voice that states what the symbol **does** and **means** for callers. Prefer "Maximum `foo` grouped by `bar` using a stable sort on `bar`." over "Returns the max of foo by bar." or "Computes the maximum `foo` grouped by `bar` using a stable sort on `bar`." or "Returns the maximum `foo` grouped by `bar` using a stable sort on `bar`."
 - For each parameter: name, type as used in the project, allowed ranges or invariants when non-obvious, and interaction with other parameters.
 - For results: type, semantics, units when relevant, ordering guarantees, and stability promises when they matter for science or reproducibility.
 - Describe **what** the function does at the abstraction level of the API, **how** only when algorithmic choices affect correctness, performance contracts, or numerical stability, and **why** that approach is chosen when trade-offs are non-obvious (for example streaming vs materializing, online vs batch statistics).
@@ -221,7 +242,7 @@ This codebase is maintained by contributors with physics PhDs and extensive back
 
 ## Module and package documentation
 
-- Each library module (or the closest equivalent in the language’s module system) includes a short module-level description of responsibility: what problems it solves, what it explicitly does not handle, and which invariants callers should respect.
+- Each library module (or the closest equivalent in the language's module system) includes a short module-level description of responsibility: what problems it solves, what it explicitly does not handle, and which invariants callers should respect.
 - Module docs are prescriptive about intent and boundaries so new contributors and agents do not duplicate concerns across modules.
 
 ## Tooling, skills, and continued learning
@@ -229,7 +250,7 @@ This codebase is maintained by contributors with physics PhDs and extensive back
 - Use project rules, agent skills, and MCP documentation tools when they apply to the task. Prefer authoritative library and framework documentation over memory when behavior, defaults, or breaking changes matter.
 - When touching unfamiliar APIs, verify signatures, deprecations, and error modes against current docs or source in the dependency before guessing.
 - Prefer file-scoped or package-scoped commands when the repository documents them (typecheck, lint, format, test on a single path) to shorten feedback loops.
-- State permission-sensitive actions clearly (dependency installs, destructive commands, credential access) and follow the user’s safety expectations for the workspace.
+- State permission-sensitive actions clearly (dependency installs, destructive commands, credential access) and follow the user's safety expectations for the workspace.
 
 ## Task shape (goal, context, constraints, completion)
 
@@ -265,7 +286,7 @@ Use **[uv](https://docs.astral.sh/uv/latest/)** for environments, runs, and depe
 - **Dependencies**: add, upgrade, and remove packages with **`uv add`**, **`uv add … --upgrade`**, **`uv remove`**—do **not** hand-edit version pins in `pyproject.toml`.
 - **Environment**: **`uv sync`** after cloning or when the lockfile changes; **`uv run …`** to execute Python, tools, and tests.
 - **Dev tools**: keep **`ruff`** and **`ty`** in the development (or project) dependency group; run **`ruff check`** (and project formatting if applicable) plus **`ty check`** on changed code. **`uvx`** remains an option for one-off tool runs.
-- **pytest**: install via **`uv add --dev pytest`** (or the project’s dev group); run with **`uv run pytest`**.
+- **pytest**: install via **`uv add --dev pytest`** (or the project's dev group); run with **`uv run pytest`**.
 
 If a **`uv`** subcommand differs by version, use **`uv --help`** or the [uv docs](https://docs.astral.sh/uv/latest/).
 
@@ -276,7 +297,7 @@ If a **`uv`** subcommand differs by version, use **`uv --help`** or the [uv docs
 
 ### Cursor: skills
 
-Load these **skills** by **name** when the task matches (each skill’s own `SKILL.md` and references hold the full detail). Installed skills usually live under `.cursor/skills/` (or your editor’s equivalent).
+Load these **skills** by **name** when the task matches (each skill's own `SKILL.md` and references hold the full detail). Installed skills usually live under `.cursor/skills/` (or your editor's equivalent).
 
 | Skill | Use it for |
 |-------|------------|
@@ -289,7 +310,7 @@ Load these **skills** by **name** when the task matches (each skill’s own `SKI
 
 ### Cursor: subagents
 
-Delegate by **subagent name** when a focused pass is better than inline editing. Subagents usually live under `.cursor/agents/` (or your editor’s equivalent).
+Delegate by **subagent name** when a focused pass is better than inline editing. Subagents usually live under `.cursor/agents/` (or your editor's equivalent).
 
 | Subagent | Use it for |
 |----------|------------|
@@ -300,7 +321,7 @@ Delegate by **subagent name** when a focused pass is better than inline editing.
 ### Cursor: rules
 
 - A **Python** Cursor **rule** applies to Python sources (typically `**/*.py` when the rule is configured for those globs). It restates **interpreter preference**, **uv** usage, **ruff** / **ty** expectations, numerics and docstring defaults, and points to **general-python**, domain skills such as **lab-instrumentation** when editing drivers or lab I/O, and the subagents above.
-- **Rule text is authoritative for “always on” editor hints**; **skills** carry the long-form patterns and examples. When the two differ on a detail, follow **this spec** and **`pyproject.toml`**, then the **rule**, then skill nuance.
+- **Rule text is authoritative for "always on" editor hints**; **skills** carry the long-form patterns and examples. When the two differ on a detail, follow **this spec** and **`pyproject.toml`**, then the **rule**, then skill nuance.
 
 ### External references
 

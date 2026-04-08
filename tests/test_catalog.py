@@ -22,6 +22,10 @@ from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.readers import REQUIRED_SCAN_COLUMNS
 
 
+def _ensure_flat_beamtime_layout(beamtime: Path) -> None:
+    (beamtime / "CCD").mkdir(parents=True, exist_ok=True)
+
+
 def test_resolve_catalog_path_prefers_new_layout_when_created(tmp_path: Path) -> None:
     beamtime = tmp_path / "beam"
     beamtime.mkdir()
@@ -31,12 +35,13 @@ def test_resolve_catalog_path_prefers_new_layout_when_created(tmp_path: Path) ->
     assert resolve_catalog_path(beamtime).resolve() == new_db.resolve()
 
 
-def test_resolve_catalog_path_legacy_when_only_legacy_exists(tmp_path: Path) -> None:
+def test_resolve_catalog_path_ignores_legacy_sidecar(tmp_path: Path) -> None:
     beamtime = tmp_path / "beam"
     beamtime.mkdir()
     legacy = beamtime / ".pyref_catalog.db"
     legacy.write_bytes(b"")
-    assert resolve_catalog_path(beamtime).resolve() == legacy.resolve()
+    expected = (tmp_path / ".pyref" / "catalog.db").resolve()
+    assert resolve_catalog_path(beamtime).resolve() == expected
 
 
 def test_resolve_catalog_path_new_wins_when_both_exist(tmp_path: Path) -> None:
@@ -61,12 +66,14 @@ def test_resolve_catalog_path_defaults_to_new_when_neither_exists(
 
 
 def test_ingest_beamtime_empty_dir(tmp_path: Path) -> None:
+    _ensure_flat_beamtime_layout(tmp_path)
     db = ingest_beamtime(tmp_path, incremental=True)
     assert db == resolve_catalog_path(tmp_path)
     assert db.exists()
 
 
 def test_scan_experiment_catalog_dir_empty(tmp_path: Path) -> None:
+    _ensure_flat_beamtime_layout(tmp_path)
     ingest_beamtime(tmp_path, incremental=True)
     lf = scan_experiment(tmp_path)
     assert isinstance(lf, pl.LazyFrame)
@@ -77,6 +84,7 @@ def test_scan_experiment_catalog_dir_empty(tmp_path: Path) -> None:
 
 
 def test_get_overrides_empty(tmp_path: Path) -> None:
+    _ensure_flat_beamtime_layout(tmp_path)
     db = ingest_beamtime(tmp_path, incremental=True)
     df = get_overrides(db, path=None)
     assert isinstance(df, pl.DataFrame)
@@ -85,6 +93,7 @@ def test_get_overrides_empty(tmp_path: Path) -> None:
 
 
 def test_set_override_invalid_path_raises(tmp_path: Path) -> None:
+    _ensure_flat_beamtime_layout(tmp_path)
     db = ingest_beamtime(tmp_path, incremental=True)
     with pytest.raises(Exception):
         set_override(db, "/nonexistent/path.fits", sample_name="x")
@@ -97,7 +106,9 @@ def minimal_fits_dir(tmp_path_factory: pytest.TempPathFactory) -> Path | None:
     if not minimal.is_file():
         return None
     root = tmp_path_factory.mktemp("catalog_fixture")
-    (root / "minimal.fits").write_bytes(minimal.read_bytes())
+    ccd = root / "CCD"
+    ccd.mkdir()
+    (ccd / "minimal.fits").write_bytes(minimal.read_bytes())
     return root
 
 

@@ -1,5 +1,6 @@
 mod beamtime_index;
 mod ingest;
+mod layout;
 #[cfg(feature = "parallel_ingest")]
 mod ingest_parallel;
 mod query;
@@ -21,14 +22,12 @@ pub use beamtime_index::{
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use walkdir::WalkDir;
-
 pub const CATALOG_DB_NAME: &str = ".pyref_catalog.db";
 
 pub use ingest::{
-    ingest_beamtime, ingest_beamtime_with_context, ingest_header_scan, ingest_header_scan_with_context,
-    ingest_sample_scan, ingest_sample_scan_with_context, DEFAULT_INGEST_HEADER_ITEMS,
+    ingest_beamtime, ingest_beamtime_with_context, DEFAULT_INGEST_HEADER_ITEMS,
 };
+pub use layout::{detect_beamtime_layout, discover_fits_for_layout, BeamtimeLayout};
 #[cfg(feature = "parallel_ingest")]
 pub use ingest_parallel::ingest_beamtime_pipelined;
 pub use query::{
@@ -86,9 +85,8 @@ impl CatalogError {
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
 
-fn catalog_path(beamtime_dir: &Path) -> PathBuf {
-    beamtime_dir.join(CATALOG_DB_NAME)
-}
+/// Bit in ``fits_files.file_flags`` when the filename stem did not satisfy the AGENTS parse contract.
+pub const FILE_FLAG_PARSE_FAILURE: i64 = 1;
 
 const PYREF_CATALOG_DIR: &str = ".pyref";
 const NEW_CATALOG_DB_NAME: &str = "catalog.db";
@@ -107,90 +105,86 @@ pub fn data_root_catalog_path(data_root: &Path) -> PathBuf {
     data_root.join(PYREF_CATALOG_DIR).join(NEW_CATALOG_DB_NAME)
 }
 
+/// Resolves the catalog database path for a beamtime directory (AGENTS layout: `parent/.pyref/catalog.db`).
 pub fn resolve_catalog_path(beamtime_dir: &Path) -> PathBuf {
-    let new_path = catalog_path_new(beamtime_dir);
-    let legacy_path = catalog_path(beamtime_dir);
-    if new_path.exists() {
-        new_path
-    } else if legacy_path.exists() {
-        legacy_path
-    } else {
-        new_path
-    }
+    catalog_path_new(beamtime_dir)
 }
 
-pub fn is_new_catalog_layout(beamtime_dir: &Path) -> bool {
-    catalog_path_new(beamtime_dir) != catalog_path(beamtime_dir)
-}
-
-const FILES_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS files (
-    path TEXT PRIMARY KEY,
-    mtime INTEGER NOT NULL,
-    file_path TEXT NOT NULL,
-    data_offset INTEGER NOT NULL,
-    naxis1 INTEGER NOT NULL,
-    naxis2 INTEGER NOT NULL,
-    bitpix INTEGER NOT NULL,
-    bzero INTEGER NOT NULL,
-    data_size INTEGER NOT NULL,
+const FITS_FILES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS fits_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    beamtime_id INTEGER NOT NULL REFERENCES bt_beamtimes(id) ON DELETE CASCADE,
+    sample_id INTEGER REFERENCES bt_samples(id) ON DELETE SET NULL,
+    path TEXT NOT NULL UNIQUE,
     file_name TEXT NOT NULL,
-    sample_name TEXT NOT NULL,
-    tag TEXT,
     scan_number INTEGER NOT NULL,
     frame_number INTEGER NOT NULL,
-    "DATE" TEXT,
-    "Beamline Energy" REAL,
-    "Sample Theta" REAL,
-    "CCD Theta" REAL,
-    "Higher Order Suppressor" REAL,
-    "EPU Polarization" REAL,
-    EXPOSURE REAL,
-    "Sample Name" TEXT,
-    "Scan ID" REAL,
-    Lambda REAL,
-    Q REAL,
-    beam_row INTEGER,
-    beam_col INTEGER,
-    beam_sigma REAL
+    parse_ok INTEGER NOT NULL DEFAULT 0,
+    file_flags INTEGER NOT NULL DEFAULT 0,
+    source_mtime INTEGER NOT NULL DEFAULT 0
 )"#;
 
-const FILES_INDEX_MTIME: &str = "CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime)";
-const FILES_INDEX_SAMPLE: &str =
-    "CREATE INDEX IF NOT EXISTS idx_files_sample_name ON files(sample_name)";
-const FILES_INDEX_TAG: &str = "CREATE INDEX IF NOT EXISTS idx_files_tag ON files(tag)";
-const FILES_INDEX_SCAN: &str =
-    "CREATE INDEX IF NOT EXISTS idx_files_scan_number ON files(scan_number)";
+const FITS_FILES_INDEX_BEAMTIME: &str =
+    "CREATE INDEX IF NOT EXISTS idx_fits_files_beamtime ON fits_files(beamtime_id)";
+const FITS_FILES_INDEX_SCAN: &str =
+    "CREATE INDEX IF NOT EXISTS idx_fits_files_scan ON fits_files(scan_number)";
 
-const SAMPLES_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS samples (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    chemical_formula TEXT,
-    created_at INTEGER,
-    updated_at INTEGER
-)"#;
-
-const TAGS_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS tags (
+const CATALOG_TAGS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS catalog_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    slug TEXT
+    slug TEXT NOT NULL
 )"#;
 
-const SAMPLE_TAGS_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS sample_tags (
-    sample_id INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (sample_id, tag_id)
+const FITS_FILE_TAGS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS fits_file_tags (
+    file_id INTEGER NOT NULL REFERENCES fits_files(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES catalog_tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (file_id, tag_id)
 )"#;
 
-const OVERRIDES_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS overrides (
-    path TEXT PRIMARY KEY REFERENCES files(path) ON DELETE CASCADE,
-    sample_name TEXT,
-    tag TEXT,
-    notes TEXT
+const CATALOG_BEAM_FINDING_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS catalog_beam_finding (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_point_uid TEXT NOT NULL UNIQUE REFERENCES bt_scan_points(uid) ON DELETE CASCADE,
+    edge_trim_applied INTEGER,
+    bg_row_params TEXT,
+    bg_col_params TEXT,
+    gaussian_sigma REAL,
+    centroid_row REAL,
+    centroid_col REAL,
+    roi_intensity REAL,
+    fit_sigma REAL,
+    bg_intensity REAL,
+    bg_intensity_err REAL,
+    detection_ok INTEGER,
+    quality_flags INTEGER NOT NULL DEFAULT 0
+)"#;
+
+const CATALOG_STITCH_CORRECTION_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS catalog_stitch_correction (
+    scan_uid TEXT NOT NULL REFERENCES bt_scans(uid) ON DELETE CASCADE,
+    stitch_index INTEGER NOT NULL,
+    fano_factor REAL,
+    overlap_scale REAL,
+    i0_value REAL,
+    i0_source TEXT,
+    external_i0_scan_uid TEXT,
+    frame_class TEXT,
+    PRIMARY KEY (scan_uid, stitch_index)
+)"#;
+
+const CATALOG_REFLECTIVITY_FRAME_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS catalog_reflectivity_frame (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    beam_finding_id INTEGER NOT NULL REFERENCES catalog_beam_finding(id) ON DELETE CASCADE,
+    theta REAL,
+    energy REAL,
+    q REAL,
+    intensity REAL,
+    intensity_err REAL,
+    frame_class TEXT,
+    quality_flags INTEGER NOT NULL DEFAULT 0
 )"#;
 
 const BT_BEAMTIMES_TABLE: &str = r#"
@@ -224,13 +218,13 @@ CREATE TABLE IF NOT EXISTS bt_samples (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     beamtime_id INTEGER NOT NULL REFERENCES bt_beamtimes(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    tag TEXT,
-    version INTEGER,
+    sample_x REAL,
+    sample_y REAL,
     chemical_formula TEXT,
     serial TEXT,
     beamline_pos TEXT,
     extra TEXT,
-    UNIQUE (beamtime_id, name, tag, version)
+    UNIQUE (beamtime_id, name)
 )"#;
 
 const BT_SCANS_TABLE: &str = r#"
@@ -282,6 +276,7 @@ CREATE TABLE IF NOT EXISTS bt_scan_points (
     beam_row INTEGER,
     beam_col INTEGER,
     beam_sigma REAL,
+    fits_file_id INTEGER REFERENCES fits_files(id) ON DELETE SET NULL,
     UNIQUE (stream_uid, seq_index)
 )"#;
 
@@ -385,25 +380,128 @@ fn migrate_bt_fits_discovery(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Discover FITS paths under ``beamtime_dir`` using the same walk strategy as ingest (parallel when
-/// the ``parallel_ingest`` feature is enabled).
+fn migrate_drop_legacy_denormalized_catalog(conn: &Connection) -> Result<()> {
+    let legacy: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name IN ('files','overrides','sample_tags','samples','tags')",
+        [],
+        |r| r.get(0),
+    )?;
+    if legacy == 0 {
+        return Ok(());
+    }
+    conn.execute_batch(
+        r#"
+        DROP TABLE IF EXISTS overrides;
+        DROP TABLE IF EXISTS sample_tags;
+        DROP TABLE IF EXISTS files;
+        DROP TABLE IF EXISTS tags;
+        DROP TABLE IF EXISTS samples;
+    "#,
+    )?;
+    Ok(())
+}
+
+fn migrate_bt_samples_schema_agents(conn: &Connection) -> Result<()> {
+    let has_table: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='bt_samples'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_table == 0 {
+        return Ok(());
+    }
+    let has_tag: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_samples') WHERE name='tag'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_tag == 0 {
+        return Ok(());
+    }
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys=OFF;
+        DROP TABLE IF EXISTS catalog_reflectivity_frame;
+        DROP TABLE IF EXISTS catalog_stitch_correction;
+        DROP TABLE IF EXISTS catalog_beam_finding;
+        DROP TABLE IF EXISTS bt_image_refs;
+        DROP TABLE IF EXISTS fits_file_tags;
+        DROP TABLE IF EXISTS fits_files;
+        DROP TABLE IF EXISTS bt_scan_points;
+        DROP TABLE IF EXISTS bt_streams;
+        DROP TABLE IF EXISTS bt_scans;
+        DROP TABLE IF EXISTS bt_reflectivity_profiles;
+        DROP TABLE IF EXISTS bt_fits_discovery;
+        DROP TABLE IF EXISTS bt_samples;
+        PRAGMA foreign_keys=ON;
+    "#,
+    )?;
+    Ok(())
+}
+
+fn migrate_bt_beamtimes_catalog_fields(conn: &Connection) -> Result<()> {
+    let has_layout: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_beamtimes') WHERE name='catalog_layout'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_layout == 0 {
+        conn.execute(
+            "ALTER TABLE bt_beamtimes ADD COLUMN catalog_layout TEXT",
+            [],
+        )?;
+    }
+    let has_date: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_beamtimes') WHERE name='beamtime_date'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_date == 0 {
+        conn.execute(
+            "ALTER TABLE bt_beamtimes ADD COLUMN beamtime_date TEXT",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn migrate_bt_scan_points_fits_file_id(conn: &Connection) -> Result<()> {
+    let has_table: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='bt_scan_points'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_table == 0 {
+        return Ok(());
+    }
+    let has_col: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_scan_points') WHERE name='fits_file_id'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_col == 0 {
+        conn.execute(
+            "ALTER TABLE bt_scan_points ADD COLUMN fits_file_id INTEGER REFERENCES fits_files(id) ON DELETE SET NULL",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Discover FITS paths for ingest using AGENTS layout rules under ``beamtime_dir``.
 pub(crate) fn discover_paths_for_catalog_ingest(
     beamtime_dir: &Path,
-) -> Result<Vec<(PathBuf, i64)>> {
-    #[cfg(feature = "parallel_ingest")]
-    {
-        discover_fits_paths_parallel(beamtime_dir)
-    }
-    #[cfg(not(feature = "parallel_ingest"))]
-    {
-        discover_fits_paths(beamtime_dir)
-    }
+) -> Result<(Vec<(PathBuf, i64)>, layout::BeamtimeLayout)> {
+    let layout_kind = layout::detect_beamtime_layout(beamtime_dir)?;
+    let paths = layout::discover_fits_for_layout(beamtime_dir, layout_kind)?;
+    Ok((paths, layout_kind))
 }
 
 pub fn is_skippable_stem(stem: &str) -> bool {
     stem.is_empty() || stem.starts_with('_')
 }
 
+/// Discovers FITS under ``beamtime_dir`` using AGENTS layout rules only (no silent full-tree fallback).
 pub fn discover_fits_paths(beamtime_dir: &Path) -> Result<Vec<(PathBuf, i64)>> {
     if !beamtime_dir.is_dir() {
         return Err(CatalogError::Validation(format!(
@@ -411,163 +509,13 @@ pub fn discover_fits_paths(beamtime_dir: &Path) -> Result<Vec<(PathBuf, i64)>> {
             beamtime_dir.display()
         )));
     }
-    let mut out: Vec<(PathBuf, i64)> = Vec::new();
-    for entry in WalkDir::new(beamtime_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("fits"))
-            != Some(true)
-        {
-            continue;
-        }
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if is_skippable_stem(stem) {
-            continue;
-        }
-        let path_buf = path.canonicalize()?;
-        let mtime = std::fs::metadata(path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .map(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64
-            })
-            .unwrap_or(0);
-        out.push((path_buf, mtime));
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
-}
-
-#[cfg(feature = "parallel_ingest")]
-fn collect_fits_under(root: &Path) -> Result<Vec<(PathBuf, i64)>> {
-    let mut out: Vec<(PathBuf, i64)> = Vec::new();
-    for entry in WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("fits"))
-            != Some(true)
-        {
-            continue;
-        }
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if is_skippable_stem(stem) {
-            continue;
-        }
-        let path_buf = path.canonicalize()?;
-        let mtime = std::fs::metadata(path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .map(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64
-            })
-            .unwrap_or(0);
-        out.push((path_buf, mtime));
-    }
-    Ok(out)
+    let layout = layout::detect_beamtime_layout(beamtime_dir)?;
+    layout::discover_fits_for_layout(beamtime_dir, layout)
 }
 
 #[cfg(feature = "parallel_ingest")]
 pub fn discover_fits_paths_parallel(beamtime_dir: &Path) -> Result<Vec<(PathBuf, i64)>> {
-    if !beamtime_dir.is_dir() {
-        return Err(CatalogError::Validation(format!(
-            "not a directory: {}",
-            beamtime_dir.display()
-        )));
-    }
-    let subdirs: Vec<PathBuf> = std::fs::read_dir(beamtime_dir)
-        .map_err(CatalogError::Io)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.path())
-        .collect();
-    if subdirs.len() <= 1 {
-        return discover_fits_paths(beamtime_dir);
-    }
-    use rayon::prelude::*;
-    let parts: Result<Vec<Vec<(PathBuf, i64)>>> = subdirs
-        .par_iter()
-        .map(|d| collect_fits_under(d.as_path()))
-        .collect();
-    let mut out = parts?;
-    let root_only: Vec<(PathBuf, i64)> = std::fs::read_dir(beamtime_dir)
-        .map_err(CatalogError::Io)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| {
-            let path = e.path();
-            if path.extension()?.to_str()?.eq_ignore_ascii_case("fits") != true {
-                return None;
-            }
-            let stem = path.file_stem()?.to_str()?;
-            if is_skippable_stem(stem) {
-                return None;
-            }
-            let path_buf = path.canonicalize().ok()?;
-            let mtime = std::fs::metadata(&path)
-                .ok()?
-                .modified()
-                .ok()
-                .map(|t| {
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64
-                })
-                .unwrap_or(0);
-            Some((path_buf, mtime))
-        })
-        .collect();
-    out.push(root_only);
-    let mut flat: Vec<(PathBuf, i64)> = out.into_iter().flatten().collect();
-    flat.sort_by(|a, b| a.0.cmp(&b.0));
-    flat.dedup_by(|a, b| a.0 == b.0);
-    Ok(flat)
-}
-
-fn migrate_add_beamspot_columns(conn: &Connection) -> Result<()> {
-    let has_beam_row: bool = conn.query_row(
-        "SELECT COUNT(1) FROM pragma_table_info('files') WHERE name = 'beam_row'",
-        [],
-        |r| r.get(0),
-    )?;
-    if !has_beam_row {
-        conn.execute("ALTER TABLE files ADD COLUMN beam_row INTEGER", [])?;
-        conn.execute("ALTER TABLE files ADD COLUMN beam_col INTEGER", [])?;
-    }
-    Ok(())
-}
-
-fn migrate_add_beam_sigma_column(conn: &Connection) -> Result<()> {
-    let has_beam_sigma: bool = conn.query_row(
-        "SELECT COUNT(1) FROM pragma_table_info('files') WHERE name = 'beam_sigma'",
-        [],
-        |r| r.get(0),
-    )?;
-    if !has_beam_sigma {
-        conn.execute("ALTER TABLE files ADD COLUMN beam_sigma REAL", [])?;
-    }
-    Ok(())
+    discover_fits_paths(beamtime_dir)
 }
 
 fn migrate_add_experimentalist_and_data_root(conn: &Connection) -> Result<()> {
@@ -642,28 +590,30 @@ fn migrate_add_last_indexed_at_column(conn: &Connection) -> Result<()> {
 
 pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
-    conn.execute_batch(FILES_TABLE)?;
-    conn.execute_batch(SAMPLES_TABLE)?;
-    conn.execute_batch(TAGS_TABLE)?;
-    conn.execute_batch(SAMPLE_TAGS_TABLE)?;
-    conn.execute_batch(OVERRIDES_TABLE)?;
-    migrate_experiment_number_to_scan_number(&conn)?;
-    migrate_add_beamspot_columns(&conn)?;
-    migrate_add_beam_sigma_column(&conn)?;
-    conn.execute_batch(FILES_INDEX_MTIME)?;
-    conn.execute_batch(FILES_INDEX_SAMPLE)?;
-    conn.execute_batch(FILES_INDEX_TAG)?;
-    conn.execute_batch(FILES_INDEX_SCAN)?;
+    migrate_drop_legacy_denormalized_catalog(&conn)?;
+    migrate_bt_samples_schema_agents(&conn)?;
     conn.execute_batch(BT_BEAMTIMES_TABLE)?;
+    migrate_bt_beamtimes_catalog_fields(&conn)?;
+    migrate_add_experimentalist_and_data_root(&conn)?;
+    migrate_add_last_indexed_at_column(&conn)?;
     conn.execute_batch(BT_MOTOR_NAMES_TABLE)?;
     conn.execute_batch(BT_AI_CHANNEL_NAMES_TABLE)?;
     conn.execute_batch(BT_SAMPLES_TABLE)?;
+    conn.execute_batch(CATALOG_TAGS_TABLE)?;
+    conn.execute_batch(FITS_FILES_TABLE)?;
+    conn.execute_batch(FITS_FILES_INDEX_BEAMTIME)?;
+    conn.execute_batch(FITS_FILES_INDEX_SCAN)?;
+    conn.execute_batch(FITS_FILE_TAGS_TABLE)?;
     conn.execute_batch(BT_SCANS_TABLE)?;
     conn.execute_batch(BT_STREAMS_TABLE)?;
     conn.execute_batch(BT_SCAN_POINTS_TABLE)?;
+    migrate_bt_scan_points_fits_file_id(&conn)?;
     conn.execute_batch(BT_SCAN_POINT_MOTOR_POSITIONS_TABLE)?;
     conn.execute_batch(BT_SCAN_POINT_AI_TABLE)?;
     conn.execute_batch(BT_SCAN_POINT_AI_READINGS_TABLE)?;
+    conn.execute_batch(CATALOG_BEAM_FINDING_TABLE)?;
+    conn.execute_batch(CATALOG_STITCH_CORRECTION_TABLE)?;
+    conn.execute_batch(CATALOG_REFLECTIVITY_FRAME_TABLE)?;
     conn.execute_batch(BT_IMAGE_REFS_TABLE)?;
     conn.execute_batch(BT_INDEX_BEAMTIMES_PATH)?;
     conn.execute_batch(BT_INDEX_SCANS_BEAMTIME)?;
@@ -671,11 +621,19 @@ pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(BT_INDEX_SCAN_POINTS_SOURCE)?;
     conn.execute_batch(BT_INDEX_IMAGE_REFS_POINT)?;
     conn.execute_batch(BT_FILE_OVERRIDES_TABLE)?;
-    migrate_add_experimentalist_and_data_root(&conn)?;
-    migrate_add_last_indexed_at_column(&conn)?;
     migrate_reflectivity_profiles_schema(&conn)?;
     migrate_bt_fits_discovery(&conn)?;
     Ok(conn)
+}
+
+/// Opens or creates the catalog at ``catalog_db_path`` (creates parent directories when missing).
+pub fn open_or_create_db_at(catalog_db_path: &Path) -> Result<Connection> {
+    if let Some(parent) = catalog_db_path.parent() {
+        if !parent.as_os_str().is_empty() && !catalog_db_path.exists() {
+            std::fs::create_dir_all(parent).map_err(CatalogError::Io)?;
+        }
+    }
+    open_catalog_db(catalog_db_path)
 }
 
 pub fn open_or_create_db(beamtime_dir: &Path) -> Result<Connection> {
@@ -686,27 +644,7 @@ pub fn open_or_create_db(beamtime_dir: &Path) -> Result<Connection> {
         )));
     }
     let db_path = resolve_catalog_path(beamtime_dir);
-    if let Some(parent) = db_path.parent() {
-        if !parent.as_os_str().is_empty() && !db_path.exists() {
-            std::fs::create_dir_all(parent).map_err(CatalogError::Io)?;
-        }
-    }
-    open_catalog_db(&db_path)
-}
-
-fn migrate_experiment_number_to_scan_number(conn: &Connection) -> Result<()> {
-    let has_old: bool = conn.query_row(
-        "SELECT COUNT(1) FROM pragma_table_info('files') WHERE name = 'experiment_number'",
-        [],
-        |r| r.get(0),
-    )?;
-    if has_old {
-        conn.execute(
-            "ALTER TABLE files RENAME COLUMN experiment_number TO scan_number",
-            [],
-        )?;
-    }
-    Ok(())
+    open_or_create_db_at(&db_path)
 }
 
 #[cfg(test)]
@@ -718,15 +656,16 @@ mod tests {
     #[test]
     fn test_open_or_create_db_creates_schema() {
         let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("CCD")).unwrap();
         let conn = open_or_create_db(tmp.path()).unwrap();
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('files','overrides','samples','tags','sample_tags')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('fits_files','catalog_tags','bt_beamtimes','bt_samples')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(count, 4);
     }
 
     #[test]
@@ -739,8 +678,9 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_fits_paths_empty_dir() {
+    fn test_discover_fits_paths_empty_flat_ccd() {
         let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("CCD")).unwrap();
         let paths = discover_fits_paths(tmp.path()).unwrap();
         assert!(paths.is_empty());
     }
@@ -753,12 +693,13 @@ mod tests {
     }
 
     #[test]
-    fn test_open_or_create_db_has_beam_sigma_column() {
+    fn test_open_or_create_db_has_fits_files_parse_ok() {
         let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("CCD")).unwrap();
         let conn = open_or_create_db(tmp.path()).unwrap();
         let has: i64 = conn
             .query_row(
-                "SELECT COUNT(1) FROM pragma_table_info('files') WHERE name = 'beam_sigma'",
+                "SELECT COUNT(1) FROM pragma_table_info('fits_files') WHERE name = 'parse_ok'",
                 [],
                 |r| r.get(0),
             )

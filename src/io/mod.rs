@@ -108,6 +108,7 @@ pub struct ParsedFitsStem {
     pub file_stem: String,
     pub sample_name: String,
     pub tag: Option<String>,
+    pub tags: Vec<String>,
     pub scan_number: i64,
     pub frame_number: i64,
 }
@@ -126,23 +127,40 @@ pub fn parse_fits_stem(stem: &str) -> Option<ParsedFitsStem> {
     let frame_str = cap.get(3)?.as_str();
     let scan_number: i64 = exp_str.parse().ok()?;
     let frame_number: i64 = frame_str.parse().ok()?;
-    let (sample_name, tag) = if base.contains('_') {
+    let mut tags: Vec<String> = Vec::new();
+    let sample_name = if base.contains('_') {
         let parts: Vec<&str> = base.split('_').collect();
-        let (last, rest) = parts.split_last()?;
-        let raw_tag = (*last).to_string();
-        let tag = if is_polarization_tag(&raw_tag) {
-            None
+        if parts.len() >= 2 {
+            let last = parts[parts.len() - 1].to_string();
+            if !is_polarization_tag(&last) {
+                tags.push(last);
+            }
+            parts[..parts.len() - 1].join("_")
         } else {
-            Some(raw_tag)
-        };
-        (rest.join("_"), tag)
+            base.to_string()
+        }
+    } else if base.contains('-') {
+        let parts: Vec<&str> = base.split('-').filter(|s| !s.is_empty()).collect();
+        if parts.len() >= 2 {
+            let rest = &parts[1..];
+            for p in rest {
+                if !is_polarization_tag(p) {
+                    tags.push((*p).to_string());
+                }
+            }
+            parts[0].to_string()
+        } else {
+            base.to_string()
+        }
     } else {
-        (base.to_string(), None)
+        base.to_string()
     };
+    let tag = tags.first().cloned();
     Some(ParsedFitsStem {
         file_stem: stem.to_string(),
         sample_name,
         tag,
+        tags,
         scan_number,
         frame_number,
     })
@@ -553,7 +571,7 @@ pub fn build_bt_ingest_row(
         .to_string();
     let file_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let (sample_name, tag, scan_number, frame_number) = match parse_fits_stem(&file_name) {
-        Some(p) => (p.sample_name, p.tag, p.scan_number, p.frame_number),
+        Some(p) => (p.sample_name, p.tag.clone(), p.scan_number, p.frame_number),
         None => (String::new(), None, 0i64, 0i64),
     };
     let bzero = image_header
@@ -598,7 +616,7 @@ pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
     let mut columns = vec![Column::new("file_name".into(), vec![file_name.to_string()])];
     match parse_fits_stem(file_name) {
         Some(p) => {
-            columns.push(Column::new("sample_name".into(), vec![p.sample_name]));
+            columns.push(Column::new("sample_name".into(), vec![p.sample_name.clone()]));
             let tag_series = Series::from_iter(std::iter::once(p.tag.as_deref()))
                 .with_name("tag".into())
                 .into_column();
@@ -678,6 +696,16 @@ mod tests {
         let p2 = parse_fits_stem("znpc_P 81041-00002").expect("should parse");
         assert_eq!(p2.sample_name, "znpc");
         assert_eq!(p2.tag, None);
+    }
+
+    #[test]
+    fn test_parse_fits_stem_hyphen_separated_tags() {
+        let p = parse_fits_stem("a-b-c-12345-00001").expect("parse");
+        assert_eq!(p.sample_name, "a");
+        assert_eq!(p.tags, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(p.tag.as_deref(), Some("b"));
+        assert_eq!(p.scan_number, 12345);
+        assert_eq!(p.frame_number, 1);
     }
 
     #[test]

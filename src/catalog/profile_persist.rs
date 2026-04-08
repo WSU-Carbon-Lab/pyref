@@ -106,7 +106,7 @@ mod tests {
             )
             .unwrap();
             conn.execute(
-                "INSERT INTO bt_samples (beamtime_id, name, tag) VALUES (1, 's', 't')",
+                "INSERT INTO bt_samples (beamtime_id, name) VALUES (1, 's')",
                 [],
             )
             .unwrap();
@@ -166,7 +166,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO bt_samples (beamtime_id, name, tag) VALUES (1, 's', 't')",
+            "INSERT INTO bt_samples (beamtime_id, name) VALUES (1, 's')",
             [],
         )
         .unwrap();

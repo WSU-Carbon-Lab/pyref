@@ -54,22 +54,19 @@ fn beamtime_id_from_path(conn: &rusqlite::Connection, beamtime_dir: &Path) -> Re
 pub fn catalog_file_count(db_path: &Path, beamtime_dir: Option<&Path>) -> Result<u32> {
     let conn = open_catalog_db(db_path)?;
     let count: i64 = if let Some(dir) = beamtime_dir {
-        if super::is_new_catalog_layout(dir) {
-            let path_str = dir.to_string_lossy().to_string();
-            conn.query_row(
-                "SELECT COUNT(*) FROM bt_scan_points sp
-                 JOIN bt_scans sc ON sp.scan_uid = sc.uid
-                 JOIN bt_beamtimes b ON sc.beamtime_id = b.id
-                 WHERE b.beamtime_path = ?1 AND sp.source_path IS NOT NULL",
-                rusqlite::params![path_str],
-                |r| r.get(0),
-            )
-            .unwrap_or(0)
-        } else {
-            conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0)).unwrap_or(0)
-        }
+        let path_str = dir.to_string_lossy().to_string();
+        conn.query_row(
+            "SELECT COUNT(*) FROM fits_files ff
+             JOIN bt_beamtimes b ON ff.beamtime_id = b.id
+             WHERE b.beamtime_path = ?1",
+            rusqlite::params![path_str],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
     } else {
-        conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0)).unwrap_or(0)
+        conn
+            .query_row("SELECT COUNT(*) FROM fits_files", [], |r| r.get(0))
+            .unwrap_or(0)
     };
     Ok(count as u32)
 }
@@ -90,27 +87,29 @@ pub fn list_beamtime_entries(db_path: &Path) -> Result<BeamtimeEntries> {
     let conn = open_catalog_db(db_path)?;
     let mut samples: Vec<String> = conn
         .prepare(
-            r#"SELECT DISTINCT COALESCE(o.sample_name, f.sample_name) FROM files f
-               LEFT JOIN overrides o ON f.path = o.path
-               WHERE COALESCE(o.sample_name, f.sample_name) != '' ORDER BY 1"#,
+            r#"SELECT DISTINCT COALESCE(o.sample_name, s.name, '')
+               FROM fits_files ff
+               LEFT JOIN bt_samples s ON ff.sample_id = s.id
+               LEFT JOIN bt_file_overrides o ON o.source_path = ff.path
+               WHERE COALESCE(o.sample_name, s.name, '') != ''
+               ORDER BY 1"#,
         )?
         .query_map([], |r| r.get::<_, String>(0))?
         .filter_map(|r| r.ok())
         .collect();
     let mut tags: Vec<String> = conn
         .prepare(
-            r#"SELECT DISTINCT COALESCE(o.tag, f.tag) FROM files f
-               LEFT JOIN overrides o ON f.path = o.path
-               WHERE COALESCE(o.tag, f.tag) IS NOT NULL AND COALESCE(o.tag, f.tag) != ''
-               ORDER BY COALESCE(o.tag, f.tag)"#,
+            r#"SELECT DISTINCT ct.name FROM catalog_tags ct
+               JOIN fits_file_tags fft ON fft.tag_id = ct.id
+               ORDER BY ct.name"#,
         )?
         .query_map([], |r| r.get::<_, String>(0))?
         .filter_map(|r| r.ok())
         .collect();
     let scans: Vec<(i64, String)> = conn
         .prepare(
-            r#"SELECT DISTINCT f.scan_number FROM files f
-               WHERE f.scan_number != 0 ORDER BY f.scan_number"#,
+            r#"SELECT DISTINCT ff.scan_number FROM fits_files ff
+               WHERE ff.scan_number != 0 ORDER BY ff.scan_number"#,
         )?
         .query_map([], |r| {
             let n: i64 = r.get(0)?;
@@ -158,7 +157,11 @@ pub fn list_beamtime_entries_v2(
         .collect();
     let mut tags: Vec<String> = conn
         .prepare(
-            "SELECT DISTINCT tag FROM bt_samples WHERE beamtime_id = ?1 AND tag IS NOT NULL AND tag != '' ORDER BY tag",
+            r#"SELECT DISTINCT ct.name FROM catalog_tags ct
+               JOIN fits_file_tags fft ON fft.tag_id = ct.id
+               JOIN fits_files ff ON ff.id = fft.file_id
+               WHERE ff.beamtime_id = ?1
+               ORDER BY ct.name"#,
         )?
         .query_map(rusqlite::params![beamtime_id], |r| r.get::<_, String>(0))?
         .filter_map(|r| r.ok())
@@ -187,14 +190,22 @@ pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec
         .unwrap_or_else(|| (String::new(), Vec::new()));
     let conn = open_catalog_db(db_path)?;
     let sql = format!(
-        r#"SELECT f.file_path,
-            COALESCE(o.sample_name, f.sample_name),
-            COALESCE(o.tag, f.tag),
-            f.scan_number, f.frame_number,
-            f."Beamline Energy", f."Sample Theta", f."EPU Polarization", f.Q,
-            f."DATE", f.beam_row, f.beam_col, f.beam_sigma
-            FROM files f LEFT JOIN overrides o ON f.path = o.path{}
-            ORDER BY f.scan_number, f.frame_number"#,
+        r#"SELECT ff.path,
+            COALESCE(o.sample_name, s.name, ''),
+            COALESCE(
+                o.tag,
+                (SELECT ct.name FROM fits_file_tags fft
+                 JOIN catalog_tags ct ON fft.tag_id = ct.id
+                 WHERE fft.file_id = ff.id ORDER BY ct.name LIMIT 1)
+            ),
+            ff.scan_number, ff.frame_number,
+            sp.beamline_energy, sp.sample_theta, sp.epu_polarization,
+            NULL, sp.beam_row, sp.beam_col, sp.beam_sigma, sp.uid
+            FROM fits_files ff
+            LEFT JOIN bt_samples s ON ff.sample_id = s.id
+            LEFT JOIN bt_scan_points sp ON sp.fits_file_id = ff.id
+            LEFT JOIN bt_file_overrides o ON o.source_path = ff.path{}
+            ORDER BY ff.scan_number, ff.frame_number"#,
         where_clause
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -213,7 +224,7 @@ pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec
             beam_row: row.get(10)?,
             beam_col: row.get(11)?,
             beam_sigma: row.get(12)?,
-            scan_point_uid: None,
+            scan_point_uid: row.get(13)?,
         })
     };
     let rows = if params.is_empty() {
@@ -232,7 +243,13 @@ SELECT
     sp.source_bitpix, sp.source_bzero, sp.seq_index,
     sp.beamline_energy, sp.sample_theta, sp.epu_polarization, sp.ccd_theta, sp.exposure,
     sp.beam_row, sp.beam_col, sp.beam_sigma,
-    COALESCE(o.sample_name, s.name) AS sample_name, COALESCE(o.tag, s.tag) AS tag,
+    COALESCE(o.sample_name, s.name) AS sample_name,
+    COALESCE(
+      o.tag,
+      (SELECT ct.name FROM fits_file_tags fft
+       JOIN catalog_tags ct ON fft.tag_id = ct.id
+       WHERE fft.file_id = sp.fits_file_id ORDER BY ct.name LIMIT 1)
+    ) AS tag,
     sc.uid AS scan_uid
 FROM bt_scan_points sp
 JOIN bt_samples s ON sp.sample_id = s.id
@@ -259,7 +276,11 @@ fn build_scan_points_where_and_params(
     }
     if let Some(ref t) = filter.tag {
         idx += 1;
-        conditions.push(format!("COALESCE(o.tag, s.tag) = ?{}", idx));
+        conditions.push(format!(
+            "(o.tag = ?{0} OR EXISTS (SELECT 1 FROM fits_file_tags fft JOIN catalog_tags ct ON fft.tag_id = ct.id \
+             WHERE fft.file_id = sp.fits_file_id AND ct.name = ?{0}))",
+            idx
+        ));
         params.push(Box::new(t.clone()));
     }
     if let Some(ref scan_nos) = filter.scan_numbers {
@@ -346,13 +367,13 @@ pub fn update_beamspot(
     match beam_sigma {
         Some(sigma) => {
             conn.execute(
-                "UPDATE files SET beam_row = ?1, beam_col = ?2, beam_sigma = ?3 WHERE path = ?4",
+                "UPDATE bt_scan_points SET beam_row = ?1, beam_col = ?2, beam_sigma = ?3 WHERE source_path = ?4",
                 rusqlite::params![beam_row, beam_col, sigma, file_path],
             )?;
         }
         None => {
             conn.execute(
-                "UPDATE files SET beam_row = ?1, beam_col = ?2 WHERE path = ?3",
+                "UPDATE bt_scan_points SET beam_row = ?1, beam_col = ?2 WHERE source_path = ?3",
                 rusqlite::params![beam_row, beam_col, file_path],
             )?;
         }
@@ -402,31 +423,20 @@ pub fn get_scan_point_uid_by_source_path(
     Ok(uid)
 }
 
-const RESOLVED_QUERY: &str = r#"
-SELECT
-    f.file_path, f.data_offset, f.naxis1, f.naxis2, f.bitpix, f.bzero, f.data_size,
-    f.file_name,
-    COALESCE(o.sample_name, f.sample_name) AS sample_name,
-    COALESCE(o.tag, f.tag) AS tag,
-    f.scan_number, f.frame_number,
-    f."DATE", f."Beamline Energy", f."Sample Theta", f."CCD Theta",
-    f."Higher Order Suppressor", f."EPU Polarization", f.EXPOSURE,
-    f."Sample Name", f."Scan ID", f.Lambda, f.Q,
-    f.beam_row, f.beam_col, f.beam_sigma
-FROM files f
-LEFT JOIN overrides o ON f.path = o.path
-"#;
-
 fn build_where_and_params(filter: &CatalogFilter) -> (String, Vec<Box<dyn rusqlite::ToSql + '_>>) {
     let mut conditions: Vec<String> = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql + '_>> = Vec::new();
     if let Some(ref s) = filter.sample_name {
-        conditions.push("COALESCE(o.sample_name, f.sample_name) = ?1".to_string());
+        conditions.push("COALESCE(o.sample_name, s.name, '') = ?1".to_string());
         params.push(Box::new(s.clone()));
     }
     if let Some(ref t) = filter.tag {
         let idx = params.len() + 1;
-        conditions.push(format!("COALESCE(o.tag, f.tag) = ?{}", idx));
+        conditions.push(format!(
+            "(o.tag = ?{0} OR EXISTS (SELECT 1 FROM fits_file_tags fft JOIN catalog_tags ct ON fft.tag_id = ct.id \
+             WHERE fft.file_id = ff.id AND ct.name = ?{0}))",
+            idx
+        ));
         params.push(Box::new(t.clone()));
     }
     if let Some(ref scan_nos) = filter.scan_numbers {
@@ -434,7 +444,7 @@ fn build_where_and_params(filter: &CatalogFilter) -> (String, Vec<Box<dyn rusqli
             let placeholders: Vec<String> = (0..scan_nos.len())
                 .map(|i| format!("?{}", params.len() + 1 + i))
                 .collect();
-            conditions.push(format!("f.scan_number IN ({})", placeholders.join(",")));
+            conditions.push(format!("ff.scan_number IN ({})", placeholders.join(",")));
             for s in scan_nos {
                 params.push(Box::new(*s));
             }
@@ -442,12 +452,12 @@ fn build_where_and_params(filter: &CatalogFilter) -> (String, Vec<Box<dyn rusqli
     }
     if let Some(em) = filter.energy_min {
         let idx = params.len() + 1;
-        conditions.push(format!(r#"f."Beamline Energy" >= ?{}"#, idx));
+        conditions.push(format!("sp.beamline_energy >= ?{}", idx));
         params.push(Box::new(em));
     }
     if let Some(em) = filter.energy_max {
         let idx = params.len() + 1;
-        conditions.push(format!(r#"f."Beamline Energy" <= ?{}"#, idx));
+        conditions.push(format!("sp.beamline_energy <= ?{}", idx));
         params.push(Box::new(em));
     }
     let where_clause = if conditions.is_empty() {
@@ -464,7 +474,14 @@ SELECT
     sp.source_bitpix, sp.source_bzero,
     (CASE WHEN sp.source_naxis1 IS NOT NULL AND sp.source_naxis2 IS NOT NULL AND sp.source_bitpix IS NOT NULL
       THEN sp.source_naxis1 * sp.source_naxis2 * max(1, abs(sp.source_bitpix) / 8) ELSE 0 END) AS data_size,
-    COALESCE(o.sample_name, s.name) AS sample_name, COALESCE(o.tag, s.tag) AS tag, sc.uid AS scan_uid, sp.seq_index,
+    COALESCE(o.sample_name, s.name) AS sample_name,
+    COALESCE(
+      o.tag,
+      (SELECT ct.name FROM fits_file_tags fft
+       JOIN catalog_tags ct ON fft.tag_id = ct.id
+       WHERE fft.file_id = sp.fits_file_id ORDER BY ct.name LIMIT 1)
+    ) AS tag,
+    sc.uid AS scan_uid, sp.seq_index,
     sp.beamline_energy, sp.sample_theta, sp.ccd_theta, sp.epu_polarization, sp.exposure,
     sp.beam_row, sp.beam_col, sp.beam_sigma,
     sp.reflectivity_profile_index, rp.scan_type AS reflectivity_scan_type
@@ -633,7 +650,11 @@ fn build_bt_df_where_and_params(
     }
     if let Some(ref t) = filter.tag {
         idx += 1;
-        conditions.push(format!("COALESCE(o.tag, s.tag) = ?{}", idx));
+        conditions.push(format!(
+            "(o.tag = ?{0} OR EXISTS (SELECT 1 FROM fits_file_tags fft JOIN catalog_tags ct ON fft.tag_id = ct.id \
+             WHERE fft.file_id = sp.fits_file_id AND ct.name = ?{0}))",
+            idx
+        ));
         params.push(Box::new(t.clone()));
     }
     if let Some(em) = filter.energy_min {
@@ -671,148 +692,7 @@ fn build_bt_df_where_and_params(
 
 pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<DataFrame> {
     let conn = open_catalog_db(db_path)?;
-    let bt_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM bt_scan_points",
-        [],
-        |r| r.get::<_, i64>(0),
-    )?;
-    let files_count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0))?;
-    let use_bt = bt_count > 0 || (bt_count == 0 && files_count == 0);
-    if use_bt {
-        return scan_from_catalog_bt(&conn, filter);
-    }
-    let (where_clause, params) = filter
-        .map(build_where_and_params)
-        .unwrap_or_else(|| (String::new(), Vec::new()));
-    let order_clause = " ORDER BY f.scan_number, f.frame_number";
-    let sql = format!("{}{}{}", RESOLVED_QUERY, where_clause, order_clause);
-
-    let mut stmt = conn.prepare(&sql)?;
-    let row_from_query = |row: &rusqlite::Row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, i64>(5)?,
-            row.get::<_, i64>(6)?,
-            row.get::<_, String>(7)?,
-            row.get::<_, String>(8)?,
-            row.get::<_, Option<String>>(9)?,
-            row.get::<_, i64>(10)?,
-            row.get::<_, i64>(11)?,
-            row.get::<_, Option<String>>(12)?,
-            row.get::<_, Option<f64>>(13)?,
-            row.get::<_, Option<f64>>(14)?,
-            row.get::<_, Option<f64>>(15)?,
-            row.get::<_, Option<f64>>(16)?,
-            row.get::<_, Option<f64>>(17)?,
-            row.get::<_, Option<f64>>(18)?,
-            row.get::<_, Option<f64>>(19)?,
-            row.get::<_, Option<String>>(20)?,
-            row.get::<_, Option<f64>>(21)?,
-            row.get::<_, Option<f64>>(22)?,
-            row.get::<_, Option<i64>>(23)?,
-            row.get::<_, Option<i64>>(24)?,
-            row.get::<_, Option<f64>>(25)?,
-        ))
-    };
-    let rows = if params.is_empty() {
-        stmt.query_map([], row_from_query)?
-    } else {
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        stmt.query_map(rusqlite::params_from_iter(param_refs), row_from_query)?
-    };
-
-    let mut file_path = Vec::new();
-    let mut data_offset = Vec::new();
-    let mut naxis1 = Vec::new();
-    let mut naxis2 = Vec::new();
-    let mut bitpix = Vec::new();
-    let mut bzero = Vec::new();
-    let mut data_size = Vec::new();
-    let mut file_name = Vec::new();
-    let mut sample_name = Vec::new();
-    let mut tag = Vec::new();
-    let mut scan_number = Vec::new();
-    let mut frame_number = Vec::new();
-    let mut date = Vec::new();
-    let mut beamline_energy = Vec::new();
-    let mut sample_theta = Vec::new();
-    let mut ccd_theta = Vec::new();
-    let mut hos = Vec::new();
-    let mut epu = Vec::new();
-    let mut exposure = Vec::new();
-    let mut sample_name_h = Vec::new();
-    let mut scan_id = Vec::new();
-    let mut lambda = Vec::new();
-    let mut q = Vec::new();
-    let mut beam_row = Vec::new();
-    let mut beam_col = Vec::new();
-    let mut beam_sigma = Vec::new();
-
-    for row in rows {
-        let r = row.map_err(CatalogError::Sqlite)?;
-        file_path.push(r.0);
-        data_offset.push(r.1);
-        naxis1.push(r.2);
-        naxis2.push(r.3);
-        bitpix.push(r.4);
-        bzero.push(r.5);
-        data_size.push(r.6);
-        file_name.push(r.7);
-        sample_name.push(r.8);
-        tag.push(r.9);
-        scan_number.push(r.10);
-        frame_number.push(r.11);
-        date.push(r.12);
-        beamline_energy.push(r.13);
-        sample_theta.push(r.14);
-        ccd_theta.push(r.15);
-        hos.push(r.16);
-        epu.push(r.17);
-        exposure.push(r.18);
-        sample_name_h.push(r.19);
-        scan_id.push(r.20);
-        lambda.push(r.21);
-        q.push(r.22);
-        beam_row.push(r.23);
-        beam_col.push(r.24);
-        beam_sigma.push(r.25);
-    }
-
-    let series = vec![
-        Series::new("file_path".into(), file_path),
-        Series::new("data_offset".into(), data_offset),
-        Series::new("naxis1".into(), naxis1),
-        Series::new("naxis2".into(), naxis2),
-        Series::new("bitpix".into(), bitpix),
-        Series::new("bzero".into(), bzero),
-        Series::new("data_size".into(), data_size),
-        Series::new("file_name".into(), file_name),
-        Series::new("sample_name".into(), sample_name),
-        Series::new("tag".into(), tag),
-        Series::new("scan_number".into(), scan_number),
-        Series::new("frame_number".into(), frame_number),
-        Series::new("DATE".into(), date),
-        Series::new("Beamline Energy".into(), beamline_energy),
-        Series::new("Sample Theta".into(), sample_theta),
-        Series::new("CCD Theta".into(), ccd_theta),
-        Series::new("Higher Order Suppressor".into(), hos),
-        Series::new("EPU Polarization".into(), epu),
-        Series::new("EXPOSURE".into(), exposure),
-        Series::new("Sample Name".into(), sample_name_h),
-        Series::new("Scan ID".into(), scan_id),
-        Series::new("Lambda".into(), lambda),
-        Series::new("Q".into(), q),
-        Series::new("beam_row".into(), beam_row),
-        Series::new("beam_col".into(), beam_col),
-        Series::new("beam_sigma".into(), beam_sigma),
-    ];
-    let columns: Vec<Column> = series.into_iter().map(|s| s.into()).collect();
-    let df = DataFrame::new(columns).map_err(|e| CatalogError::Validation(e.to_string()))?;
-    Ok(df)
+    scan_from_catalog_bt(&conn, filter)
 }
 
 type OverrideRowSql = (String, Option<String>, Option<String>, Option<String>);
@@ -828,9 +708,8 @@ fn map_override_four_cols(row: &rusqlite::Row) -> rusqlite::Result<OverrideRowSq
 
 /// Loads override rows into a Polars frame with columns `path`, `sample_name`, `tag`, `notes`.
 ///
-/// Concatenates the legacy `overrides` table (`path` is `files.path`) and `bt_file_overrides`
-/// (`path` is `source_path` matching `bt_scan_points`). When `path` is `Some`, returns rows from
-/// both tables that match that exact string.
+/// Reads ``bt_file_overrides`` keyed by ``source_path`` (aligned with ``fits_files.path`` and
+/// ``bt_scan_points.source_path``). When ``path`` is ``Some``, returns only rows for that path.
 pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
     let conn = open_catalog_db(db_path)?;
     let mut paths = Vec::new();
@@ -839,16 +718,6 @@ pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
     let mut notes = Vec::new();
     match path {
         Some(p) => {
-            let mut stmt = conn.prepare(
-                "SELECT path, sample_name, tag, notes FROM overrides WHERE path = ?1",
-            )?;
-            for row in stmt.query_map([p], map_override_four_cols)? {
-                let r = row.map_err(CatalogError::Sqlite)?;
-                paths.push(r.0);
-                sample_names.push(r.1);
-                tags.push(r.2);
-                notes.push(r.3);
-            }
             let mut stmt = conn.prepare(
                 "SELECT source_path, sample_name, tag, notes FROM bt_file_overrides WHERE source_path = ?1",
             )?;
@@ -861,15 +730,6 @@ pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
             }
         }
         None => {
-            let mut stmt =
-                conn.prepare("SELECT path, sample_name, tag, notes FROM overrides")?;
-            for row in stmt.query_map([], map_override_four_cols)? {
-                let r = row.map_err(CatalogError::Sqlite)?;
-                paths.push(r.0);
-                sample_names.push(r.1);
-                tags.push(r.2);
-                notes.push(r.3);
-            }
             let mut stmt = conn.prepare(
                 "SELECT source_path, sample_name, tag, notes FROM bt_file_overrides",
             )?;
@@ -934,7 +794,8 @@ mod tests {
     #[test]
     fn test_scan_from_catalog_empty_db() {
         let tmp = TempDir::new().unwrap();
-        let db_path = tmp.path().join(".pyref_catalog.db");
+        std::fs::create_dir_all(tmp.path().join("CCD")).unwrap();
+        let db_path = crate::catalog::resolve_catalog_path(tmp.path());
         crate::catalog::open_or_create_db(tmp.path()).unwrap();
         let df = scan_from_catalog(&db_path, None).unwrap();
         assert_eq!(df.height(), 0);
@@ -946,8 +807,9 @@ mod tests {
     #[test]
     fn test_get_overrides_empty() {
         let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("CCD")).unwrap();
+        let db_path = crate::catalog::resolve_catalog_path(tmp.path());
         crate::catalog::open_or_create_db(tmp.path()).unwrap();
-        let db_path = tmp.path().join(".pyref_catalog.db");
         let df = get_overrides(&db_path, None).unwrap();
         assert_eq!(df.height(), 0);
     }
@@ -955,8 +817,9 @@ mod tests {
     #[test]
     fn test_list_beamtime_entries_empty() {
         let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("CCD")).unwrap();
+        let db_path = crate::catalog::resolve_catalog_path(tmp.path());
         crate::catalog::open_or_create_db(tmp.path()).unwrap();
-        let db_path = tmp.path().join(".pyref_catalog.db");
         let e = list_beamtime_entries(&db_path).unwrap();
         assert!(e.samples.is_empty());
         assert!(e.tags.is_empty());
@@ -975,7 +838,7 @@ mod tests {
             )
             .unwrap();
             conn.execute(
-                "INSERT INTO bt_samples (beamtime_id, name, tag) VALUES (1, 'orig', 't1')",
+                "INSERT INTO bt_samples (beamtime_id, name) VALUES (1, 'orig')",
                 [],
             )
             .unwrap();
@@ -1022,10 +885,10 @@ mod tests {
     }
 }
 
-/// Upserts `sample_name`, `tag`, and `notes` for a catalog file path.
+/// Upserts ``sample_name``, ``tag``, and ``notes`` for a catalog file path.
 ///
-/// When `path` exists in `files`, writes `overrides`. When it exists only as `bt_scan_points.source_path`,
-/// writes `bt_file_overrides`. Returns [`CatalogError::Validation`] when `path` matches neither.
+/// Applies when ``path`` exists in ``fits_files`` or as ``bt_scan_points.source_path``.
+/// Persists to ``bt_file_overrides``. Returns [`CatalogError::Validation`] when ``path`` matches neither.
 pub fn set_override(
     db_path: &Path,
     path: &str,
@@ -1034,23 +897,15 @@ pub fn set_override(
     notes: Option<&str>,
 ) -> Result<()> {
     let conn = open_catalog_db(db_path)?;
-    let in_files: i64 =
-        conn.query_row("SELECT COUNT(1) FROM files WHERE path = ?1", [path], |r| {
-            r.get(0)
-        })?;
-    if in_files > 0 {
-        conn.execute(
-            "INSERT OR REPLACE INTO overrides (path, sample_name, tag, notes) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![path, sample_name, tag, notes],
-        )?;
-        return Ok(());
-    }
+    let in_ff: i64 = conn.query_row("SELECT COUNT(1) FROM fits_files WHERE path = ?1", [path], |r| {
+        r.get(0)
+    })?;
     let in_bt: i64 = conn.query_row(
         "SELECT COUNT(1) FROM bt_scan_points WHERE source_path = ?1",
         [path],
         |r| r.get(0),
     )?;
-    if in_bt > 0 {
+    if in_ff > 0 || in_bt > 0 {
         conn.execute(
             "INSERT OR REPLACE INTO bt_file_overrides (source_path, sample_name, tag, notes) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![path, sample_name, tag, notes],
@@ -1058,7 +913,7 @@ pub fn set_override(
         return Ok(());
     }
     Err(CatalogError::Validation(format!(
-        "path not in catalog (not in files.path and not in bt_scan_points.source_path): {}",
+        "path not in catalog (not in fits_files.path and not in bt_scan_points.source_path): {}",
         path
     )))
 }
@@ -1073,20 +928,34 @@ pub fn rename_file_in_catalog(
 ) -> Result<()> {
     let conn = open_catalog_db(db_path)?;
     let exists: i64 = conn.query_row(
-        "SELECT COUNT(1) FROM files WHERE path = ?1",
+        "SELECT COUNT(1) FROM fits_files WHERE path = ?1",
         [old_path],
         |r| r.get(0),
     )?;
     if exists == 0 {
         return Err(CatalogError::Validation(format!(
-            "path not in files table: {}",
+            "path not in fits_files: {}",
             old_path
         )));
     }
     conn.execute(
-        "UPDATE files SET path = ?1, file_path = ?1, file_name = ?2, sample_name = ?3, tag = ?4 WHERE path = ?5",
-        rusqlite::params![new_path, new_file_name, new_sample_name, new_tag, old_path],
+        "UPDATE fits_files SET path = ?1, file_name = ?2 WHERE path = ?3",
+        rusqlite::params![new_path, new_file_name, old_path],
     )?;
-    conn.execute("DELETE FROM overrides WHERE path = ?1", [old_path])?;
+    conn.execute(
+        "UPDATE bt_scan_points SET source_path = ?1 WHERE source_path = ?2",
+        rusqlite::params![new_path, old_path],
+    )?;
+    conn.execute(
+        "UPDATE bt_file_overrides SET source_path = ?1 WHERE source_path = ?2",
+        rusqlite::params![new_path, old_path],
+    )?;
+    if !new_sample_name.is_empty() || new_tag.is_some() {
+        let sn = (!new_sample_name.is_empty()).then_some(new_sample_name);
+        conn.execute(
+            "INSERT OR REPLACE INTO bt_file_overrides (source_path, sample_name, tag) VALUES (?1, ?2, ?3)",
+            rusqlite::params![new_path, sn, new_tag],
+        )?;
+    }
     Ok(())
 }

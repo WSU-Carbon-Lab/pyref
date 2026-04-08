@@ -466,11 +466,13 @@ SELECT
       THEN sp.source_naxis1 * sp.source_naxis2 * max(1, abs(sp.source_bitpix) / 8) ELSE 0 END) AS data_size,
     COALESCE(o.sample_name, s.name) AS sample_name, COALESCE(o.tag, s.tag) AS tag, sc.uid AS scan_uid, sp.seq_index,
     sp.beamline_energy, sp.sample_theta, sp.ccd_theta, sp.epu_polarization, sp.exposure,
-    sp.beam_row, sp.beam_col, sp.beam_sigma
+    sp.beam_row, sp.beam_col, sp.beam_sigma,
+    sp.reflectivity_profile_index, rp.scan_type AS reflectivity_scan_type
 FROM bt_scan_points sp
 JOIN bt_samples s ON sp.sample_id = s.id
 JOIN bt_scans sc ON sp.scan_uid = sc.uid
 LEFT JOIN bt_file_overrides o ON o.source_path = sp.source_path
+LEFT JOIN bt_reflectivity_profiles rp ON rp.scan_uid = sc.uid AND rp.profile_index = sp.reflectivity_profile_index
 "#;
 
 fn scan_from_catalog_bt(
@@ -502,6 +504,8 @@ fn scan_from_catalog_bt(
             row.get::<_, Option<i64>>(16)?,
             row.get::<_, Option<i64>>(17)?,
             row.get::<_, Option<f64>>(18)?,
+            row.get::<_, Option<i64>>(19)?,
+            row.get::<_, Option<String>>(20)?,
         ))
     };
     let rows = if params.is_empty() {
@@ -537,6 +541,8 @@ fn scan_from_catalog_bt(
     let mut beam_row = Vec::new();
     let mut beam_col = Vec::new();
     let mut beam_sigma = Vec::new();
+    let mut reflectivity_profile_index = Vec::new();
+    let mut reflectivity_scan_type = Vec::new();
 
     for row in rows {
         let r = row.map_err(CatalogError::Sqlite)?;
@@ -573,6 +579,8 @@ fn scan_from_catalog_bt(
         beam_row.push(r.16);
         beam_col.push(r.17);
         beam_sigma.push(r.18);
+        reflectivity_profile_index.push(r.19);
+        reflectivity_scan_type.push(r.20);
     }
 
     let series = vec![
@@ -602,6 +610,8 @@ fn scan_from_catalog_bt(
         Series::new("beam_row".into(), beam_row),
         Series::new("beam_col".into(), beam_col),
         Series::new("beam_sigma".into(), beam_sigma),
+        Series::new("reflectivity_profile_index".into(), reflectivity_profile_index),
+        Series::new("reflectivity_scan_type".into(), reflectivity_scan_type),
     ];
     let columns: Vec<Column> = series.into_iter().map(|s| s.into()).collect();
     DataFrame::new(columns).map_err(|e| CatalogError::Validation(e.to_string()))
@@ -661,11 +671,13 @@ fn build_bt_df_where_and_params(
 
 pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<DataFrame> {
     let conn = open_catalog_db(db_path)?;
-    let use_bt: bool = conn.query_row(
+    let bt_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM bt_scan_points",
         [],
         |r| r.get::<_, i64>(0),
-    )? > 0;
+    )?;
+    let files_count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0))?;
+    let use_bt = bt_count > 0 || (bt_count == 0 && files_count == 0);
     if use_bt {
         return scan_from_catalog_bt(&conn, filter);
     }
@@ -909,6 +921,8 @@ fn scan_from_catalog_columns() -> Vec<&'static str> {
         "beam_row",
         "beam_col",
         "beam_sigma",
+        "reflectivity_profile_index",
+        "reflectivity_scan_type",
     ]
 }
 

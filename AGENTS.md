@@ -1,245 +1,401 @@
-# PyRef Architecture and Data Flow
+# pyref Contributor Quickstart Guide
 
-## Build and test (uv, maturin, cargo only)
+`pyref` is a Python library for reducing and analyzing polarized resonant soft X-ray reflectivity (PRSoXR) data collected at ALS Beamline 11.0.1.2, Lawrence Berkeley National Laboratory. The library couples a Python interface with a Rust backend via PyO3 bindings to achieve the parallel throughput required for large beamtime datasets. It is organized into three primary components: `IO`, which handles raw data ingestion and cataloging; `Reduction`, which reduces 2D detector images into 1D reflectivity profiles; and `Fitting`, which fits reduced profiles against optical models. Each component is designed to be independently extensible.
 
-- **Install and run tests**: `uv sync` then `uv run pytest tests/test_rust_fits_io.py` (or `uv run pytest` for full suite). `uv sync` builds the Rust extension via the maturin build backend and installs the project.
-- **Build wheel only**: `uv run --group dev maturin build`. Output: `target/wheels/pyref-*.whl`.
-- **Rust**: Use `cargo build` only for checking compilation of non-cdylib targets (e.g. bins). The Python extension is built by maturin so that linker flags for the extension are correct. Do not rely on `cargo test` for the main crate; it links the cdylib into the test binary and fails with unresolved Python symbols. Rust unit tests live in `src/` (e.g. `src/fits/header.rs`); integration tests in `tests/integration_test.rs` are `#[ignore]` (require Python runtime; validate via pytest instead).
-- **TUI binary**: The lib is built with default feature `extension-module` (pyo3/pyo3-polars). Building the standalone TUI must not link Python. Use: `cargo browser` (alias) or `cargo run --bin pyref-tui --no-default-features --features tui`. The `--no-default-features` disables `extension-module`, so the lib is built without pyo3 and the binary links successfully. Running the TUI requires a real TTY (interactive terminal); in a headless or IDE run context you may see "Device not configured".
+## Technical Jargon
 
-## Overview
+- **Beamtime**: An experimental allocation at the ALS during which a user group collects data across multiple samples and scans, typically spanning one to several days.
+- **Sample**: A physical thin-film specimen characterized by a preparation recipe and a set of deposition conditions. Samples are grouped into series, where each member shares a common recipe and is distinguished by one or more user-assigned tags in the filename.
+- **Scan**: A sequential series of frames collected continuously by the instrument under a common set of experimental parameters. Scans are nominally associated with a single sample and a single experiment type.
+- **Profile**: A reduced 1D reflectivity curve extracted from a scan, expressed as intensity vs. Q, intensity vs. 2theta, or intensity vs. energy. A single scan may contain multiple profiles collected at different fixed energies or fixed angles.
+- **Frame / Image**: A single detector acquisition within a scan, stored as a 2D CCD image accompanied by a FITS header containing motor positions, analog input (AI) values, timestamps, and other metadata.
+- **Motor**: A physical positioning device controlling sample theta, CCD theta, beamline energy, steering mirrors, slits, or other instrument components.
+- **AI (Analog Input)**: A scalar value recorded by one of the instrument's analog input channels. Relevant AI channels include beam current (ring current), upstream gold mesh absorption current (Ai 3 Izero), photodiode signal, CCD temperature, and TEY signals.
+- **Beamspot**: The location of the specularly reflected beam on the 2D detector image, typically a compact Gaussian intensity distribution.
+- **ROI (Region of Interest)**: A small rectangular subregion of the detector image, typically 10x10 pixels, centered on the beamspot and used to integrate the reflected beam intensity.
+- **Direct Beam**: A series of frames collected with the sample at theta = 0 degrees, where the incident beam hits the detector directly. Used to establish the incident beam intensity I0 as a function of energy or exposure time.
+- **I0**: The incident beam intensity used to normalize a reflectivity profile. For fixed-energy scans, I0 is extracted from direct beam frames at the start of the scan. For fixed-angle scans, I0 may be sourced from a separate dedicated scan.
+- **I0 Point**: A frame collected as part of the direct beam measurement sequence. I0 points are identified by Sample Theta = 0 and are used both to normalize the reflectivity and to characterize the counting statistics of the incident beam.
+- **Stitch Point**: A frame collected at the moment the independent variable reverses direction, signaling the start of a new measurement stitch. Stitch points are typically repeated several times to allow the motors to settle, and they establish the baseline statistics for the new stitch region.
+- **Overlap Point**: A frame whose independent variable value falls within the range already covered by the preceding stitch. Overlap points are used to compute the multiplicative scaling factor that aligns the new stitch to the previous one.
 
-PyRef is a library for reducing 2D X-ray reflectivity detector images into 1D reflectivity signals. The library handles experimental data collected in "stitches" - separate measurement chunks where beamline configuration parameters (higher-order suppressor, exit slits, exposure times) are adjusted to capture reflectivity across multiple orders of magnitude.
+## Fundamental Concepts
 
-## Terminology (glossary)
+### IO Module
 
-See also `CONTRIBUTE.md` for the full glossary.
+The IO module is responsible for ingesting raw FITS files, cataloging their contents into a structured SQLite database, and exposing the resulting data through a lazy interface that returns pandas or polars DataFrames on demand. By default, the module expects the FITS file conventions and directory structures produced by ALS Beamline 11.0.1.2. New beamline formats can be added by extending the IO layer.
 
-- **ingest**: Populate the catalog from FITS (discover, read headers, upsert into SQLite). Rust `ingest_beamtime`; Python `pyref.io.ingest_beamtime`.
-- **discover**: Find FITS paths under a directory; no header read. Rust `discover_fits_paths`.
-- **scan (IO)**: Build a LazyFrame of metadata. `scan_experiment(source)` returns a LazyFrame from catalog or from FITS; "scan from catalog" = read from SQLite (`scan_from_catalog`). Distinct from a CCD Scan (measurement run).
-- **scan (experiment)**: A single measurement run with a scan number (e.g. CCD Scan 88169, Scan ID); one reflectivity profile. Not the same as the `scan_experiment()` IO function.
-- **read**: FITS file I/O (headers and/or images). Rust `read_fits_headers_only`, `read_multiple_fits_headers_only`, `read_experiment_headers_only`.
-- **experiment**: Beamtime directory or a logical group; "experiment number" in headers refers to one scan (run), not the whole beamtime.
+All performance-critical IO operations are implemented in Rust and exposed to Python via PyO3 bindings. Rust is responsible for parallel FITS file reading, header card extraction, image data loading, filename parsing, directory traversal, SQLite catalog construction, and zarr archive management. Python is responsible for the user-facing query interface, DataFrame construction from catalog results, and any logic that does not require parallel throughput. This boundary is a design constraint, not a guideline: do not implement parallelism in Python and do not implement user-facing query logic in Rust.
 
-## Core Components
+The IO module is accessed via `pyref.io` and the cataloging subsystem via `pyref.io.catalog`.
 
-### 1. Data Loading (`src/loader.rs`, `python/pyref/io/readers.py`)
+### Reduction Module
 
-The Rust backend (`src/loader.rs`) handles parallel reading of FITS files:
-- Reads FITS file headers and image data
-- Processes images to extract beam spot locations
-- Calculates simple reflectivity using ROI (Region of Interest) analysis
-- Combines multiple FITS files into a single Polars DataFrame
-- Adds calculated columns (Q-vector from energy and theta)
+The Reduction module converts per-frame 2D detector images into normalized, stitched 1D reflectivity profiles. Reduction proceeds in three sequential stages.
 
-Key functions:
-- `read_fits(source, options)`: High-level eager read. Resolves `source` (file, paths, dir, catalog) with `ResolvePreference`; returns one DataFrame from catalog or from disk.
-- `scan_fits(source, options)`: High-level lazy scan. Returns a LazyFrame from catalog (fast) or from disk; use when you want to filter/select before collect.
-- `read_fits_metadata_batch(paths, options)`: Canonical batch read (headers + optional calculated domains). Used by ingest and by `read_fits` when source is disk.
-- `read_experiment_headers_only()`, `read_multiple_fits_headers_only()`: Lower-level header-only reads.
+The first stage localizes the beamspot in each 2D detector image, integrates the ROI intensity, and subtracts the background estimated from a dark region of the detector. The second stage normalizes the extracted beam intensity against I0, beam current, exposure time, and the upstream gold mesh absorption current (Ai 3 Izero). The third stage identifies the scan domain (fixed energy or fixed angle), classifies each frame as an I0 point, stitch point, or overlap point, computes per-stitch scaling corrections from the weighted mean of overlap regions, and assembles the stitched profile.
 
-**Source and options (Polars-style API):**
-- `FitsSource`: enum `File(PathBuf)`, `Paths(Vec<PathBuf>)`, `Dir(PathBuf)`, `Catalog(PathBuf)`. Impl `From<PathBuf>`, `From<Vec<PathBuf>>`, `From<&Path>`.
-- `ResolvePreference`: `PreferCatalog`, `PreferDisk`, `FromCatalog`, `FromDisk` when both catalog and disk could satisfy the source.
-- `ReadFitsOptions` / `ScanFitsOptions`: `header_items`, `header_only`, `add_calculated_domains`, `schema`, `batch_size`, `resolve_preference`, and (for catalog) `catalog_filter`.
-- `FitsMetadataSchema`: canonical column names and optional Polars `Schema` for one FITS row; used by `scan_from_catalog` and batch read output.
+The Reduction module is accessed via `pyref.reduction`. The primary user-facing class is `PrsoxrLoader`.
 
-**Catalog hook:** When source is `Dir(path)` or `Catalog(path)` and `.pyref_catalog.db` exists, `read_fits`/`scan_fits` use it when preference is `FromCatalog` or `PreferCatalog`, otherwise discover and read from disk. All library code must pass `cargo clippy` with no unwrap/expect in non-test code; every public function and module has docstrings.
+### Fitting Module
 
-#### FITS DataFrame Accessor (`df.fits`)
+The Fitting module fits reduced reflectivity profiles against optical layer-stack models. The primary backend is `refnx`, which implements the 4x4 transfer matrix method for anisotropic and resonant systems. The module is responsible for model definition, parameter specification, constraint enforcement, objective function construction, fitting algorithm selection, and output formatting. The fitting module is accessed via `pyref.fitting`.
 
-For metadata DataFrames from `scan_experiment().collect()`, use the `fits` accessor to load images. Collect your LazyFrame before using: `df = lf.filter(...).collect()` then `df.fits.img[0]`.
+## Reduction Subtleties
 
-- `df.fits.img[i]` / `df.fits.img[slice]`: Raw detector image(s); slice returns iterator
-- `df.fits.corrected(idx, bg_rows=10, bg_cols=10)`: Background-corrected image(s)
-- `df.fits.filtered(idx, sigma, bg_rows=10, bg_cols=10)`: Background-corrected + gaussian blurred (Rust pipeline)
-- `df.fits.custom(idx, callable, **kwargs)`: Apply custom Python callable to image(s)
+### Uncertainty Quantification
 
-Background correction uses edge-based subtraction: per-row (left/right) and per-column (top/bottom) with configurable `bg_rows`, `bg_cols`.
+Each frame is a photon-counting measurement. The raw intensity in each detector pixel follows a Poisson distribution to first approximation, giving a per-pixel standard deviation equal to the square root of the pixel count. Two classes of non-Poissonian noise are also present and must be accounted for.
 
-### 2. Image Processing (`python/pyref/image.py`, `src/io.rs`)
+Systematic noise originates from the detector itself (readout noise, dark current, stray light) and is characterized using a dark region of the detector image that is far from the beamspot. The mean and variance of this dark region are used to estimate the per-pixel systematic noise floor, which is subtracted from the ROI intensity and propagated into the final uncertainty.
 
-Image processing reduces 2D detector images to reflectivity values:
+Random non-Poissonian noise is characterized by the Fano factor, defined as the ratio of the observed variance in I0 measurements to the hypothesized Poissonian variance at the same intensity level. The Fano factor is computed as a function of incident energy from the ensemble of I0 frames within a scan, and is applied as a multiplicative scale on the Poissonian uncertainty for all frames at that energy. Agents implementing or modifying the uncertainty pipeline must propagate both the dark-region contribution and the Fano-scaled Poissonian contribution in quadrature at every reduction step. Silent variance truncation or implicit dtype coercion that reduces numerical precision is a correctness bug.
 
-**Rust implementation** (`src/io/mod.rs`):
-- Raw preview pipeline: trim edges (remove detector nonlinearity), then row-by-row background (10-pixel left/right strips, colder side per row), then cold-side dark subtraction (top vs bottom, single scalar). Used by TUI preview and `materialize_image`.
-- `subtract_background()`: Legacy row-by-row background subtraction (full-size output; interior only corrected).
-- `simple_reflectivity()`: Calculates beam signal vs background using ROI
-- `process_image()`: Main image processing pipeline
+### Beamspot Localization
 
-**Python implementation** (`python/pyref/image.py`):
-- `reduce_data()`: Full image reduction pipeline (dezinger, filtering, masking)
-- `locate_beam()`: Locates beam spot in processed image
-- `reduction()`: Calculates reflectivity from masked image and beam spot
+Beamspot localization is applied to each frame independently. The algorithm proceeds in the following fixed order and agents must not reorder or skip steps without explicit justification.
 
-Uncertainty in reflectivity originates from:
-- Counting statistics in beam signal
-- Background subtraction uncertainty
-- Exposure time and beam current normalization
+First, camera edge artifacts are removed by zeroing or masking a fixed border of pixels around the image perimeter. Second, a row-by-row background subtraction is applied: for each row, the median of a set of dark columns (columns known to be outside the beamspot region) is subtracted from all pixels in that row. Third, a column-by-column background subtraction is applied analogously. Fourth, a Gaussian filter is applied to suppress residual high-frequency noise. Fifth, a 2D peak fitting routine locates the beamspot centroid, integrated intensity, and fit standard deviation. The background intensity and its uncertainty are extracted from a designated dark region of the post-subtraction image.
 
-### 3. Masking (`python/pyref/masking.py`)
+Failed detections occur when the peak fitter cannot identify a credible Gaussian peak above the noise floor. A detection is considered failed when the fitted peak amplitude is less than a configurable multiple of the dark region standard deviation, or when the fitted centroid falls outside the detector boundary. Failed detections must be flagged in the BeamFinding Table and must not silently propagate NaN or zero values into the Reflectivity Table. Beamspot drift across a scan is expected and is not itself a failure condition; drift is characterized by fitting a linear model to the centroid coordinates as a function of Q or theta. Frames where the centroid deviates from the linear trend by more than a configurable threshold are flagged separately.
 
-- `InteractiveImageMasker`: Allows interactive rectangular masking of images
-- `ImageSeries.mask()`: Automatic mask generation based on CDF of mean image
-- Mask defines which pixels contribute to reflectivity calculation
+### Scan Type and Domain Identification
 
-### 4. Main Loader (`python/pyref/loader.py`)
+The scan domain is determined by inspecting the motor trajectory across all frames in a scan. The classification procedure is as follows.
 
-`PrsoxrLoader` orchestrates the data reduction workflow:
+A scan is classified as a fixed-energy reflectivity scan when a leading block of frames has Sample Theta = 0 and a constant beamline energy (these are the I0 frames), followed by frames in which Sample Theta and CCD Theta increase monotonically (subject to stitch reversals). A scan is classified as a fixed-angle reflectivity scan when either a leading block of frames has Sample Theta = 0 and a varying beamline energy (I0 frames collected as a function of energy), or the scan contains no I0 block at all and beamline energy varies monotonically throughout. A multi-profile scan is not a distinct scan type but is a repetition of the above patterns within a single experimental scan: the instrument completes one full fixed-energy or fixed-angle sweep, then changes the fixed parameter (energy or angle) and repeats the sweep. Multi-profile scans are decomposed into their constituent profiles during reduction, each profile being treated as an independent fixed-energy or fixed-angle scan.
 
-- Loads experiment data via `read_experiment()`
-- Processes images using the mask
-- Creates reflectivity DataFrame with columns: `file_name`, `Q`, `r`, `dr`
-- Groups data by `file_name` (each file_name represents a stitch)
-- Calculates uncertainty: `dr = sqrt(r)` (Poisson counting statistics)
+Once the domain is identified, stitch points are located by finding frames where the independent variable decreases relative to the preceding frame. Overlap points are the initial frames of a new stitch whose independent variable values fall within the range already covered by the preceding stitch. The scaling correction for each stitch is the weighted mean of the reflectivity values at the overlap points, where the weights are the inverse squared uncertainties of those frames.
 
-Key properties:
-- `refl`: DataFrame containing reflectivity data
-- `meta`: Full metadata DataFrame with images
-- `mask`: Image mask for beam isolation
+## Filename Parsing
 
-### 5. Uncertainty Propagation (`src/lib.rs`, `python/pyref/utils/__init__.py`)
+The cataloging system parses FITS filenames to extract the sample name, zero or more tags, the scan number, and the frame number. The parsing contract is as follows and must be implemented exactly as specified.
 
-Uncertainty propagation implemented as Polars plugins:
-
-**Rust functions** (`src/lib.rs`):
-- `err_prop_mult()`: Error propagation for multiplication
-  - Formula: `σ(xy) = |xy| * sqrt((σx/x)² + (σy/y)²)`
-- `err_prop_div()`: Error propagation for division
-  - Formula: `σ(x/y) = |x/y| * sqrt((σx/x)² + (σy/y)²)`
-- `weighted_mean()`: Weighted average using inverse variance weights
-- `weighted_std()`: Weighted standard deviation
-
-**Python interface** (`python/pyref/utils/__init__.py`):
-- Exposes Rust functions as Polars expressions
-- Used throughout the data processing pipeline
-
-### 6. Catalog (beamtime index)
-
-One SQLite database per beamtime directory (`.pyref_catalog.db`) caches FITS metadata and supports overrides so scans avoid repeated header I/O. A **new layout** uses a single catalog per parent directory.
-
-**Catalog layout (legacy vs new):**
-- Legacy: DB at beamtime_dir/.pyref_catalog.db; schema uses files table + overrides.
-- New: DB at parent/.pyref/catalog.db for multiple beamtimes; schema uses normalized bt_* tables only (bt_beamtimes, bt_samples, bt_scans, bt_streams, bt_scan_points, etc.). Ingest writes only to bt_* for new layout (no files table).
-- resolve_catalog_path(beamtime_dir) returns new path if it exists, else legacy path; new path is chosen when parent exists and is not root.
-- Beamtimes list: launcher uses ~/.pyref/beamtime_index.sqlite3; list_beamtimes_from_catalog(db_path) returns beamtimes from a given catalog (bt_beamtimes) for the new layout.
-- Zarr store: same location as catalog (parent/.pyref/zarr/<beamtime_key>/); one subdir per beamtime.
-- FITS discovery: case-insensitive .fits extension; failed FITS reads are not silently dropped during ingest (first error returned with path).
-
-**Source resolution in `scan_experiment(source)`** (Python `python/pyref/io/readers.py`):
-- If `source` is a directory and `path / ".pyref_catalog.db"` exists, the scan is served from the catalog (Rust `scan_from_catalog`); no FITS I/O.
-- If `source` is a file path to `.pyref_catalog.db`, the scan is from that catalog.
-- Otherwise, discovery and header reads use the existing directory/list path (resolve_fits_paths + batched `read_multiple_fits_headers_only`). The LazyFrame schema is the same in both cases so `df.fits` and the loader work unchanged.
-
-**Rust** (`src/catalog/`): Schema (files + overrides), discovery (walkdir, skippable stems), ingest (batch header read, Q/Lambda, upsert, prune), `scan_from_catalog`, `get_overrides`, `set_override`, `list_beamtime_entries`, `query_files`. The TUI (Rust binary) uses these when a beamtime has a catalog; no Python in the TUI process.
-
-**Programmatic APIs** (Python `pyref.io`):
-- `ingest_beamtime(beamtime_path, header_items=None, incremental=True)` -> Path to DB
-- `get_overrides(catalog_path, path=None)` -> DataFrame
-- `set_override(catalog_path, path, sample_name=..., tag=..., notes=...)`
-- `query_catalog(catalog_path, sample_name=..., tag=..., scan_numbers=..., energy_min=..., energy_max=...)` -> DataFrame
-
-Catalog is built by default (feature `catalog`); the TUI feature includes catalog so the binary can read/write the same DB.
-
-**Catalog watch**: When the TUI has a beamtime selected and `.pyref_catalog.db` exists, a catalog watcher runs in the background (Rust `run_catalog_watcher` in `src/catalog/watch.rs`). It uses the `notify-debouncer-mini` crate to watch the beamtime directory for FITS create/modify events, debounces them (about 1.5 s), and runs incremental ingest so new or changed files are added to the catalog without a full rescan. The watcher runs only for the current beamtime; when the user navigates away, the watcher is stopped. When the watcher triggers an ingest, the TUI shows "Updating catalog..." in the nav line and reloads the table when ingest completes. The TUI feature enables the `watch` feature; the Python wheel does not depend on the watcher.
-
-**Directory layout**: `$HOME/.config/pyref/` (XDG config) holds user preferences: `tui.toml` (keymap, theme, layout, `last_root`, `recent_roots`, selection export). Override with `PYREF_TUI_CONFIG`. `$HOME/.pyref/` holds data/index: `beamtime_index.sqlite3` (central index of indexed beamtimes for the launcher). Optional `pyref.toml` and subdirs `cache/`, `logs/` are reserved for future use. If `HOME` is unset, the beamtime index uses `./.pyref/` as fallback.
-
-**TUI (pyref-tui)**: Startup: with no CLI argument, the TUI shows the launcher (list of indexed beamtimes from `~/.pyref/beamtime_index.sqlite3`, most recent first). Enter opens the selected beamtime; [o] opens the "Open directory" dialog. With a CLI argument, the TUI opens that beamtime directly. Open directory: hybrid dialog with path input (Tab autocomplete) and scrollable folder list (.. and subdirs); Enter on a valid path runs ingest, registers the beamtime in the central index, and opens that beamtime. While ingesting (from launcher or from beamtime view), the nav line shows "Ingesting N/M...". If there is no catalog in the opened directory, the TUI shows an empty state and the message to run "Ingest directory" (key [i]) or `pyref.io.ingest_beamtime(path)` from Python. The beamtime browse panel lists **reflectivity profiles**: one row per experiment (scan) for a given sample, tag, and polarization. Two scan modes are supported: **fixed-energy (theta scan)** where sample theta varies and energy is fixed, and **fixed-angle (energy scan)** where energy varies and theta is fixed or limited to a few angles. The table shows Emin (eV), Emax (eV), Type (theta-scan / E-scan), theta min/max, frame count, and duration. Scan type is inferred from the data using energy/theta range tolerances, distinct-value counts, and an Izero heuristic (many points at theta near zero indicate a theta scan). Each row is a single reflectivity profile; Enter expands it to show the underlying FITS files in a table (Scan, Frame, pol, E (eV), sample theta). When expanded, j/k scroll the file list; Enter collapses. Rename/Retag write catalog overrides via `set_override` and the table reloads. On exit, the TUI saves config to `PYREF_TUI_CONFIG` or `~/.config/pyref/tui.toml`, including `last_root`, `selected_samples`, `selected_tags`, and `selected_scan_numbers` (when on beamtime view). Scripts can read that config and use `scan_experiment(last_root).filter(...)` with the same sample/tag/scan filters to match the TUI view.
-
-**Parallel ingest (feature `parallel_ingest`, enabled by default)**: Enables `crossbeam-channel` and a pipelined ingest path. The TUI/browser is built with `--features tui`, which includes `parallel_ingest`, so `ingest_beamtime` uses the pipelined path and partitioned discovery when applicable. Discovery can use partitioned parallel walks over top-level subdirs (`discover_fits_paths_parallel`) when multiple subdirs exist; results are merged and sorted by path. A single thread holds the SQLite connection; a reader thread sends bounded batches (sync channel capacity 2) so FITS reads overlap with batched commits. For the new catalog layout only (`is_new_catalog_layout`), the hot path can use row structs (`BtIngestRow` from `build_bt_ingest_row` / `read_multiple_fits_headers_only_rows`) and `upsert_bt_batch_rows` instead of building Polars DataFrames per batch. The DataFrame path (`read_fits_metadata_batch`, `upsert_bt_batch`) remains for Python and legacy layout. Build without Python: `cargo check --no-default-features --features catalog,parallel_ingest`.
-
-**Deferred work (calculated columns, beam spot, zarr)**: Catalog ingest stores header fields and source path/mtime in `bt_scan_points`. Calculated columns (e.g. Q, Lambda) can be deferred to export (Parquet/HDF5) rather than computed during ingest. Beam spot columns in `bt_scan_points` stay NULL until a processing stage updates them. Zarr materialization (`materialize_beamtime`) is an explicit stage that re-reads FITS from paths recorded in the catalog; a single combined pass (one read for catalog row plus zarr chunk) is optional and not the default, so back-to-back full-tree reread for catalog then zarr implies two NAS reads unless data is copied local first.
-
-**NAS usage**: Prefer one open/read per file for catalog metadata ingest. Parallel discovery reduces wall time on wide trees; batch transactions on the single writer reduce fsync churn. For repeated materialize runs, copy beamtime tree to local storage then run zarr materialize to avoid hammering NAS.
-
-**FITS Preview (three-panel, marquee)**: When a FITS file is selected in the TUI, a preview window shows one figure with three panels (non-macOS: egui; macOS: single composite PNG). Left panel: Raw image (trimmed, then row-by-row background with 10-pixel strips, then cold-side dark subtraction). Middle panel: Gaussian-filtered image. Right panel: 4-sigma crop around the fitted beam center with 1/2/3/4-sigma Gaussian fit contours overlaid. Sigma for the filter is derived from the 2D Gaussian fit (average of row/col sigma, clamped to 0.5--20.0); if the fit fails, a default sigma (2.0) is used and the right panel shows a center crop. On non-macOS, the user can optionally draw a marquee (drag a rectangle) on the left or middle panel; on mouse release the ROI is stored for that path and the fit is re-run inside the ROI, updating all three panels and contours. ROI is per-path and in-memory for the session.
-
-### 7. Data Stitching (Conceptual)
-
-While explicit stitching code is not fully implemented, the infrastructure supports it:
-
-**Current capabilities:**
-- Data grouped by `file_name` (each stitch is a separate file_name)
-- Uncertainty propagation functions ready for scale factor calculations
-- Weighted statistics for combining overlapping points
-- `OverlapError` exception defined for overlap validation
-
-**Stitching workflow (as designed):**
-1. Identify overlapping theta/Q values between consecutive stitches
-2. Calculate multiplicative scale factor from overlapping region
-3. Apply scale factor to subsequent stitch
-4. Propagate uncertainty through scaling operation
-5. Combine overlapping points using weighted mean
-6. Continue recursively for all stitches
-
-**Key considerations:**
-- Scale factors determined from overlapping measurements
-- Uncertainty propagation through multiplication (scale factor application)
-- Weighted combination preserves statistical information
-- Must handle cases where overlap is insufficient
-
-### 8. Reflectivity Fitting (`python/pyref/fitting/`)
-
-The fitting module provides:
-- `XrayReflectDataset`: Dataset class for reflectivity data with polarization handling
-- `ReflectModel`: Model for fitting reflectivity curves
-- `Structure`: Layer structure definitions
-- Uniaxial and birefringent reflectivity calculations
-
-## Data Flow
+The frame number is always the five-digit zero-padded integer to the right of the last hyphen in the filename stem (before the `.fits` extension). The scan number is always the five-digit zero-padded integer immediately to the left of that hyphen. The remainder of the stem to the left of the scan number is the concatenation of the sample name and any tags, optionally separated by underscores or hyphens. Because no separator is guaranteed between the sample name and the scan number, the scan number anchor is the five digits immediately left of the hyphen; the parser must split there first before attempting to tokenize the sample name and tags. The following filename patterns are all valid and must be handled without special-casing individual formats.
 
 ```
-FITS Files
-    ↓
-[Rust IO Layer] - Parallel reading, image processing, initial reflectivity
-    ↓
-(optional) [Catalog] - ingest_beamtime writes .pyref_catalog.db per beamtime; scan_from_catalog reads it
-    ↓
-scan_experiment(source) - directory/list -> FITS I/O; directory with .pyref_catalog.db or path to .db -> catalog only
-    ↓
-Polars DataFrame (meta) - All images, metadata, calculated Q (same schema either path)
-    ↓
-[Python Loader] - Masking, grouping by file_name
-    ↓
-Reflectivity DataFrame (refl) - Q, r, dr grouped by stitch
-    ↓
-[Stitching] - Scale factor calculation, uncertainty propagation (conceptual)
-    ↓
-Combined Reflectivity Dataset - Complete R vs Q curve
-    ↓
-[Fitting Module] - Model fitting with refnx
+<sample_name>_<tag1>_<tag2>_<scan_number>-<frame_number>.fits
+<sample_name>-<tag1>-<tag2>-<scan_number>-<frame_number>.fits
+<sample_name>_<scan_number>-<frame_number>.fits
+<sample_name><scan_number>-<frame_number>.fits
+<sample_name><tag1><tag2><scan_number>-<frame_number>.fits
+<sample_name>_<tag1>-<tag2>_<tag3>_<scan_number>-<frame_number>.fits
 ```
 
-## Key Design Decisions
+The number of tags is unbounded. Tags may contain alphanumeric characters and hyphens. Parsing failures must be logged and the offending file flagged in the File Table rather than silently skipped or allowed to panic.
 
-1. **Rust backend**: Critical path operations (FITS reading, image processing) implemented in Rust for performance
-2. **Polars DataFrame**: Efficient columnar operations, lazy evaluation, built-in parallelization
-3. **Uncertainty tracking**: Uncertainty propagated at every step, not added post-hoc
-4. **Grouped processing**: Data naturally organized by file_name (stitch) for easy stitching
-5. **Plugin architecture**: Uncertainty functions as Polars plugins for seamless integration
+## Directory Layout Traversal
 
-## Usage Patterns
+Two directory layouts are supported. The cataloging system must detect which layout is present by inspection and handle both without user configuration.
 
-### Basic Workflow
-1. Initialize loader: `loader = PrsoxrLoader(directory)`
-2. Optionally mask images: `loader.mask_image()`
-3. Access reflectivity: `refl_df = loader.refl`
-4. Process by stitch: `loader.refl.group_by("file_name")`
+The first layout places each scan in its own instrument subdirectory within a date-grouped scan directory. Detection criterion: the beamtime root contains one or more date directories, each of which contains one or more scan directories (named with a scan number prefix), each of which contains an instrument subdirectory named either `CCD` or `Axis Photonique`. FITS files live inside the instrument subdirectory.
 
-### Uncertainty Handling
-- Use `pyref.utils.err_prop_mult()` and `err_prop_div()` for calculations
-- Use `weighted_mean()` and `weighted_std()` for combining overlapping points
-- Uncertainty propagates automatically through Polars expressions
+```
+<beamtime_root>/
+    <date_dir>/
+        CCD Scan <scan_number>/
+            CCD/
+                <sample>_<tags>_<scan>-<frame>.fits
+            <sample>_<tags>_<scan>-AI.txt
+        CCD Scan <scan_number>/
+            Axis Photonique/
+                <sample>_<tags>_<scan>-<frame>.fits
+            <sample>_<tags>_<scan>-<frame>_AI.txt
+```
 
-### Catalog usage
-- Ingest once (or incrementally): `pyref.io.ingest_beamtime(beamtime_path)`; then `scan_experiment(beamtime_path)` uses the DB.
-- Overrides: `set_override(catalog_path, path, sample_name=..., tag=..., notes=...)`; resolved values (e.g. for scan) use COALESCE(override, file).
-- Query with filters: `query_catalog(catalog_path, sample_name=..., tag=..., experiment_numbers=...)`.
+The second layout places all FITS files in a single flat instrument directory directly under the beamtime root. Detection criterion: the beamtime root contains a directory named `CCD` or `Axis Photonique` that holds FITS files from multiple scan numbers.
 
-### Stitching (Future Implementation)
-- Identify overlapping Q ranges between consecutive file_name groups
-- Calculate scale factors from weighted mean of overlapping points
-- Apply scale factors with proper uncertainty propagation
-- Combine using weighted statistics
+```
+<beamtime_root>/
+    CCD/
+        <sample1>_<tags>_<scan1>-<frame>.fits
+        <sample2>_<tags>_<scan2>-<frame>.fits
+    <sample1>_<tags>_<scan1>-AI.txt
+    <sample2>_<tags>_<scan2>-AI.txt
+```
+
+AI text files are supplementary and are not required for cataloging. If present, they should be associated with their scan by matching the scan number extracted from the filename. If neither layout is detected, the cataloging system must emit a structured error identifying the unrecognized layout rather than silently producing an empty catalog.
+
+## I/O Operations and Cataloging
+
+Connecting individual frames back to their originating sample, scan, and beamtime requires meticulous bookkeeping that is impractical to maintain manually across a full beamtime. `pyref` provides an automated cataloging system that ingests a beamtime directory and populates a SQLite database encoding this hierarchy. The database is the structural backbone for all downstream reduction and fitting workflows. Users interact with it primarily through the lazy DataFrame interface exposed by `pyref.io`, which allows them to filter by sample name, tag, energy, or angle and receive a polars or pandas DataFrame containing the relevant frame metadata and image retrieval handles.
+
+### Cataloging System
+
+The cataloging system ingests a beamtime directory and populates a SQLite database that serves as the structural backbone for all downstream reduction and fitting workflows. Its primary purpose is to resolve individual FITS frames back to their originating sample, scan, and beamtime, and to expose this hierarchy as a queryable, lazily accessible interface. The most common access pattern is retrieving all frames associated with a given sample and tag combination, grouped by energy or angle, for reduction into a stitched reflectivity profile.
+
+Importantly, some of this catalog tablular logic will not be filled out initially by the catalog ingestion. In particular, the BeamFinding, StitchCorrection, and Reflectivity tables will be empty untill we actually sit down and process the data in python from a jupyter notebook.
+
+#### Beamtime Table
+Stores the top-level metadata for a given beamtime, specifically the path to the beamtime root directory and the date. All other tables carry a foreign key to this table, making it the root of the catalog hierarchy. The path stored here is also used to resolve the location of the monolithic beamtime zarr archive.
+
+#### Sample Table
+Stores metadata for each physical sample identified during cataloging. Each sample has a name, a representative sample-x and sample-y stage position extracted from the FITS headers, and a foreign key to the Beamtime Table. Stage positions are treated as nominally fixed per sample. During cataloging, if frames attributed to the same sample name exhibit large positional drift beyond a configurable tolerance, those frames are flagged as likely mislabeled rather than treated as a distinct sample position. Small sub-decimal drift is acceptable and ignored.
+
+#### Tag Table
+Stores the individual tag slugs parsed from FITS filenames. Tags carry no intrinsic meaning to the catalog; they are user-defined labels encoding experimental series membership or preparation conditions. Tags are scan-specific, not sample-specific. The association between tags and files is resolved through a join table linking the Tag Table and the File Table, allowing many tags to map to many files without duplication.
+
+#### File Table
+Stores the fully specified path, filename, frame number, scan number, sample ID, and beamtime ID for each FITS file ingested. This table is the canonical reference for raw file locations and serves as the join target for tag resolution. Image data is not retrieved through this table directly; it is accessed via the zarr group key and frame index recorded in the Data Table.
+
+#### Scan Table
+Stores metadata for each scan, including scan number, scan type (fixed energy or fixed angle), start and stop timestamps, sample ID, and beamtime ID. Scan type is determined during cataloging from the motor trajectory analysis described above and is recorded here as a first-class attribute to avoid recomputing it downstream.
+
+#### Data Table
+Stores one row per frame per scan, containing all header card values extracted from the FITS file along with the scan-group key and frame index needed to retrieve the corresponding 2D detector image from the beamtime zarr archive. Image data for the entire beamtime is stored in a single monolithic zarr archive located at the beamtime root, organized hierarchically with scan number as the group key and frame number as the dataset index within that group. Each scan group stores two datasets per frame: the raw detector image as extracted from the FITS file, and the post-processed image produced after edge artifact removal, row-wise and column-wise background subtraction, and Gaussian filtering. Both datasets share the same frame index, allowing the user to retrieve either the unmodified or the processed image for any given frame without reprocessing. The archive path is resolved through the foreign key to the Beamtime Table, avoiding redundant path storage at the frame level while keeping retrieval efficient and unambiguous. Each row additionally carries a foreign key to the File Table and the Scan Table, providing the full provenance chain from pixel to beamtime.
+
+#### BeamFinding Table
+Stores the per-frame outputs of the beamspot localization pipeline. This includes the pre-processing steps applied prior to peak fitting (edge artifact removal flag, row-wise and column-wise background subtraction parameters, and Gaussian filter kernel size), the peak fitting result (fitted centroid row and column, integrated ROI intensity, and fit standard deviation), the background intensity extracted from the dark region of the detector, and a flag indicating whether the detection succeeded or failed. Each row carries a foreign key to the Data Table.
+
+#### StitchCorrection Table
+Stores the per-stitch correction factors computed during the stitching and normalization pipeline. This includes the energy-dependent Fano Factor used to rescale photon-counting uncertainties away from the pure Poisson limit, the weighted-mean overlap scaling factor applied at each stitch boundary, the I0 normalization value and its source (either direct beam frames within the scan or a foreign key to an external scan for fixed-angle profiles where I0 is sourced separately), and the frame-type classification for each frame (I0, Stitch, Overlap). Each row carries a foreign key to the Scan Table.
+
+#### Reflectivity Table
+Stores the frame-level reduced reflectivity data produced after normalization and stitching. Each row represents a single reduced frame and contains the theta, energy, and Q values, the normalized reflectivity intensity and its propagated uncertainty, the frame-type classification (I0, Stitch, Overlap), and a foreign key to the BeamFinding Table. Stitched profile construction and export are handled outside the catalog by a packaging utility that queries the Reflectivity and StitchCorrection tables and writes the assembled profile to a flat parquet file.
+
+## Data Quality Flagging
+
+Several conditions arising during cataloging and reduction require flagging rather than silent failure or hard error. The following flags are first-class catalog attributes, not log messages, and must be queryable from the DataFrame interface.
+
+Frames attributed to a sample name whose inferred stage position deviates from the representative position for that sample by more than a configurable threshold are flagged as `MISLABELED_SAMPLE`. The threshold is configurable per beamtime but should default to a value that tolerates sub-millimeter drift while rejecting stage position changes consistent with a deliberate sample move.
+
+Frames for which the beamspot localization algorithm fails to identify a credible peak are flagged as `BEAM_DETECTION_FAILED`. These frames must not contribute to the Reflectivity Table and must not be silently zeroed or filled.
+
+Frames whose fitted beamspot centroid deviates from the linear trend model across the scan by more than a configurable multiple of the fit residual standard deviation are flagged as `BEAM_DRIFT_ANOMALY`. These frames may still contribute to the Reflectivity Table but should be treated with caution and are surfaced to the user for manual inspection.
+
+Files that fail the filename parser are flagged as `PARSE_FAILURE` in the File Table. Files whose directory layout does not match either supported pattern are flagged at the beamtime level.
+
+## Profile Packaging Utility
+
+The packaging utility assembles a stitched reflectivity profile from the Reflectivity and StitchCorrection tables and exports it as a flat parquet file. It is not part of the catalog; it is a standalone tool in `pyref.reduction` that operates on catalog query results. The output parquet file contains one row per reduced frame with the following columns at minimum: Q (inverse angstroms), theta (degrees), energy (eV), reflectivity intensity (normalized), propagated uncertainty, frame-type classification, scan number, sample name, and the applied stitch scaling factor. The packaging utility must reject frames flagged as `BEAM_DETECTION_FAILED` and must surface `BEAM_DRIFT_ANOMALY` frames to the user with a warning before including them. The output schema is fixed; agents must not add or remove columns without updating this specification.
+
+## Fitting Module Architecture
+
+The Fitting module wraps `refnx` to provide a domain-specific interface for PRSoXR model construction and optimization. The 4x4 transfer matrix method implemented in `refnx` handles anisotropic dielectric tensors and resonant scattering contrast, which are the physically relevant cases for this beamline. Agents working in `pyref.fitting` are expected to understand the transfer matrix formalism and the relationship between the model layer stack (thickness, roughness, optical constants) and the computed reflectivity curve.
+
+The module boundary is as follows. Model construction (layer stack definition, optical constant assignment, parameter bounds, and inter-parameter constraints) lives in `pyref.fitting`. Numerical optimization and MCMC sampling are delegated entirely to `refnx` and must not be reimplemented. Objective function construction follows `refnx` conventions. Fitting output is returned as a structured result object containing the optimized parameters, their uncertainties, the fitted reflectivity curve, and the residuals, and must be serializable to parquet or HDF5 for archival.
+
+## Numerical Precision and Scientific Correctness
+
+This library processes experimental data where uncertainty quantification is not decorative but determines the validity of downstream physical conclusions. The following constraints are non-negotiable.
+
+Uncertainty propagation must be exact to first order at every reduction step. Any operation that discards, truncates, or implicitly zeros an uncertainty is a correctness bug. Weighted means must use inverse-variance weights throughout; unweighted means are not acceptable substitutes in any reduction context.
+
+Silent dtype coercion is prohibited. Operations that would coerce float64 to float32, or integer counts to floating point without explicit intent, must be made explicit or prevented. The catalog and parquet outputs must preserve float64 precision for all physical quantities.
+
+Frame provenance must be preserved end-to-end. Every row in the Reflectivity Table must be traceable back to the originating FITS file and zarr frame index through the foreign key chain. Any reduction step that breaks this chain by aggregating without recording the constituent frame IDs is unacceptable.
+
+Fano factor computation and application must be documented in the StitchCorrection Table for every scan. A scan processed without a Fano correction must record this explicitly (Fano factor = 1.0) rather than leaving the field null.
+
+<!-- DO NOT EDIT THIS BLOCK IT IS MANAGED BY DOTAGENTS -->
+
+# General
+
+## General Structure
+
+This codebase is maintained by contributors with physics PhDs and extensive backgrounds in scientific and engineering software, including numerical computing, data analysis, instrumentation, simulation, and research-grade reproducibility. Maintainers are highly mathematically literate, comfortable with linear algebra and statistics, and expect rigorous numerics with explicit type handling—silent coercion and imprecise computations are not acceptable.
+
+## Operating principles
+
+- Prefer the smallest coherent change set that satisfies the stated specification. Avoid drive-by refactors, unrelated formatting sweeps, and scope expansion.
+- Treat the repository’s existing patterns as the default contract. Match naming, module boundaries, error-handling style, and test layout unless the user explicitly requests a migration.
+- Default to production-grade output: complete, runnable, and reviewable. Do not ship placeholder text such as ellipses, “the rest of the implementation here”, “TODO: implement”, or “fill in later” inside code or patches unless the user explicitly authorizes a stub.
+- Remain non-lazy: if a command fails, diagnose, adjust, and retry with a different approach when reasonable. Do not stop after the first error without analysis.
+- Do not use emoji in code, comments, documentation strings, commit messages, or user-facing text unless the user explicitly requests emoji.
+
+## Communication and documentation outside code
+
+- Avoid standalone documentation files or long narrative write-ups unless the user asks for them or the repository already uses them for the same purpose.
+- Prefer editing the code and tests that enforce behavior over adding parallel prose that can drift out of date.
+- When the user asks for explanation, keep it precise and tied to the change set.
+
+## Public API documentation (language-agnostic)
+
+- Every **public** function, method, or type exported from a library module carries documentation appropriate to the language (for example Python docstrings, Rust `///` on public items, TSDoc/JSDoc on exported symbols).
+- Documentation states the **surface**: name, purpose, parameters, return value, and thrown or returned error shapes when that is part of the contract.
+- Prefer **prescriptive** voice that states what the symbol **does** and **means** for callers. Prefer “Maximum `foo` grouped by `bar` using a stable sort on `bar`.” over “Returns the max of foo by bar.” or "Computes the maximum `foo` grouped by `bar` using a stable sort on `bar`." or "Returns the maximum `foo` grouped by `bar` using a stable sort on `bar`."
+- For each parameter: name, type as used in the project, allowed ranges or invariants when non-obvious, and interaction with other parameters.
+- For results: type, semantics, units when relevant, ordering guarantees, and stability promises when they matter for science or reproducibility.
+- Describe **what** the function does at the abstraction level of the API, **how** only when algorithmic choices affect correctness, performance contracts, or numerical stability, and **why** that approach is chosen when trade-offs are non-obvious (for example streaming vs materializing, online vs batch statistics).
+- **Internal** helpers omit the long-form contract unless complexity warrants a short note. **Private** helpers keep documentation minimal (a phrase or single sentence at most).
+
+## Module and package documentation
+
+- Each library module (or the closest equivalent in the language’s module system) includes a short module-level description of responsibility: what problems it solves, what it explicitly does not handle, and which invariants callers should respect.
+- Module docs are prescriptive about intent and boundaries so new contributors and agents do not duplicate concerns across modules.
+
+## Tooling, skills, and continued learning
+
+- Use project rules, agent skills, and MCP documentation tools when they apply to the task. Prefer authoritative library and framework documentation over memory when behavior, defaults, or breaking changes matter.
+- When touching unfamiliar APIs, verify signatures, deprecations, and error modes against current docs or source in the dependency before guessing.
+- Prefer file-scoped or package-scoped commands when the repository documents them (typecheck, lint, format, test on a single path) to shorten feedback loops.
+- State permission-sensitive actions clearly (dependency installs, destructive commands, credential access) and follow the user’s safety expectations for the workspace.
+
+## Task shape (goal, context, constraints, completion)
+
+- Restate the goal in terms of observable outcomes: behavior, tests, or interfaces that change.
+- Ground work in the relevant files, modules, and existing tests named by the user or discovered through search.
+- Honor explicit constraints (performance, numerics, compatibility, style) before proposing alternatives.
+- Stop when the completion criteria are met: tests pass where applicable, edge cases called out by the user are handled, and no placeholder implementation remains.
+
+## Quality bar for agent output
+
+- Do not substitute templates, pseudocode, or abbreviated implementations when the user asked for working code.
+- If scope is too large for one pass, propose a staged plan and complete the first stage fully rather than leaving partial files full of omissions.
+
+# Python
+
+## Python
+
+The following applies to **Python** work in this repository: scientific and general-purpose code, with emphasis on clear structure, reproducible tooling, and documentation that matches how the team uses Cursor (skills, subagents, and editor rules).
+
+### Conventions
+
+- Follow **PEP 8** surface style; treat **Ruff** configuration in `pyproject.toml` as the enforced interpretation of those conventions.
+- Prefer **Python 3.12+** unless the repo pins an older interpreter.
+- Prefer **readability** over micro-optimizations; vectorize numerics when a library primitive exists instead of tight Python loops over large data.
+- **NumPy-style docstrings** on **public** APIs (parameters, returns, and examples where they clarify behavior). Keep implementation bodies clear **without** long narrative **inline comments**—use names, small functions, and docstrings instead.
+- **Tables and time series**: explicit **index/column** semantics when using **pandas**; **lazy** queries when standardizing on **Polars** for heavy pipelines.
+- **Lab / instruments**: separate **resource lifecycle** (open, configure, close) from **command strings** and parsing (e.g. **pyvisa** patterns).
+
+### Tooling
+
+Use **[uv](https://docs.astral.sh/uv/latest/)** for environments, runs, and dependency changes. Pair it with the **[Astral](https://astral.sh/)** stack as configured in this project.
+
+- **Dependencies**: add, upgrade, and remove packages with **`uv add`**, **`uv add … --upgrade`**, **`uv remove`**—do **not** hand-edit version pins in `pyproject.toml`.
+- **Environment**: **`uv sync`** after cloning or when the lockfile changes; **`uv run …`** to execute Python, tools, and tests.
+- **Dev tools**: keep **`ruff`** and **`ty`** in the development (or project) dependency group; run **`ruff check`** (and project formatting if applicable) plus **`ty check`** on changed code. **`uvx`** remains an option for one-off tool runs.
+- **pytest**: install via **`uv add --dev pytest`** (or the project’s dev group); run with **`uv run pytest`**.
+
+If a **`uv`** subcommand differs by version, use **`uv --help`** or the [uv docs](https://docs.astral.sh/uv/latest/).
+
+### Testing
+
+- Prefer **fast, deterministic** unit tests; isolate I/O and timing-sensitive checks when the team uses markers or separate jobs.
+- **Regression tests** for fixed bugs; for numerics, assert **shapes**, **dtypes**, and stability expectations when science or reproducibility requires it.
+
+### Cursor: skills
+
+Load these **skills** by **name** when the task matches (each skill’s own `SKILL.md` and references hold the full detail). Installed skills usually live under `.cursor/skills/` (or your editor’s equivalent).
+
+| Skill | Use it for |
+|-------|------------|
+| **general-python** | Hub: **uv** / **ruff** / **ty** workflow, builtins and collections, functions and classes, **dataclasses**, typing boundaries, **pytest**, scientific defaults, and pointers to the other skills. |
+| **numpy-scientific** | **NumPy**: dtypes, views vs copies, broadcasting, ufuncs and reductions, **linalg** / **einsum**, **`Generator`**, I/O, interop with tables and plotting. |
+| **dataframes** | **pandas** and **Polars**: when to use which, indexing, joins, lazy execution, I/O, nulls, Arrow interop. |
+| **numpy-docstrings** | **Numpydoc**-style docstrings: section order, semantics (what belongs in docstrings vs types vs tests), anti-patterns, **Parameters** / **Returns** / **Examples** / classes / modules. |
+| **matplotlib-scientific** | Publication-style **Matplotlib**: OO API, axes and legends, layout, export, journal widths, optional **SciencePlots**. |
+| **lab-instrumentation** | **PyVISA** / VISA sessions, **sockets** vs VISA, **hardware abstraction**, **input validation** before I/O, **testing** without hardware, **PDF** extraction for datasheets and manuals. |
+
+### Cursor: subagents
+
+Delegate by **subagent name** when a focused pass is better than inline editing. Subagents usually live under `.cursor/agents/` (or your editor’s equivalent).
+
+| Subagent | Use it for |
+|----------|------------|
+| **python-reviewer** | Reviewing changes: **uv** hygiene, typing, numerics footguns, tests, docstring quality. |
+| **python-types** | Deep **typing** for **ty**: annotations, PEP 695-style generics, exhaustive **`match`**, fixing checker output. |
+| **python-refactor** | **Structure**: unclear multi-value returns, composition vs inheritance, oversized functions or classes, deterministic boundaries. |
+
+### Cursor: rules
+
+- A **Python** Cursor **rule** applies to Python sources (typically `**/*.py` when the rule is configured for those globs). It restates **interpreter preference**, **uv** usage, **ruff** / **ty** expectations, numerics and docstring defaults, and points to **general-python**, domain skills such as **lab-instrumentation** when editing drivers or lab I/O, and the subagents above.
+- **Rule text is authoritative for “always on” editor hints**; **skills** carry the long-form patterns and examples. When the two differ on a detail, follow **this spec** and **`pyproject.toml`**, then the **rule**, then skill nuance.
+
+### External references
+
+- [numpydoc format](https://numpydoc.readthedocs.io/en/latest/format.html)
+- [uv](https://docs.astral.sh/uv/latest/), [Ruff](https://docs.astral.sh/ruff/), [ty](https://docs.astral.sh/ty/)
+
+# Rust
+
+This workspace uses the **dotagent Rust** stack.
+
+- Prefer `cargo` as the interface for builds, tests, and dependency changes; add crates with `cargo add`.
+- Match edition and MSRV documented in the repository; do not bump them casually.
+- Prefer `clippy` clean builds when the project already enforces clippy in CI.
+- Error handling should be structured (`Result`) at boundaries; avoid `unwrap` in library code unless explicitly documented.
+
+# Python - Jupyter
+
+This workspace extends Python with **Jupyter notebook** expectations.
+
+### General Guidelines
+
+This project will make strong use of jupyter notebooks to solve a number of problems, primarily with a scientific focus, but may also have a general purpose focus. Notebooks should be written and well documented. But keep in mind that a notebook allows for a lot of flexibility, and as such, the code should be written in a way that is easy to understand and maintain.
+
+!!!!Make sure that you use your new jupyter tools instead of generating as a json!!!!
+
+ As a general rule, we will use notebooks for one of the following purposes:
+
+#### Lightweight Exploration Notebooks
+
+Here we will have a few cells that will build the idea or concept, test it with some data, and then present the results in a clean and easy way. Use matplotlib for static plotting, or hvplot/altair/plotly for interactive plotting.
+
+It is important to note that these notebooks are not really designed to be robust, and as such we should not focus too hard on making them so. Write the minimal code to get the job done, and then move on to the next notebook.
+
+#### Prototyping Notebooks
+
+This is where we will prototype a robust coding solution to a problem. We will use this to test and validate each chunk of code in the complex workflow. As such it is important that we use many small cells to test and validate each chunk of code. Eventually, we will want to move this code into a final script/library.
+
+It is important to note that these notebooks, are not really designed to showcase the code, but rather to test and validate each chunk of code in the complex workflow. As such, we should not focus too hard on making them look nice, but rather ensure that we atomize the code into small cells that can be tested and validated individually. Testing and validation might be done using simple displays, or plotting, or other cases. But assertstetements are not necessary, and should be avoided if possible in favor of displaying the results to the user.
+
+#### Demonstration Notebooks
+
+These notebooks are designed to showcase a workflow of production ready code. Ideally, after a library is complete and ready to use, the user will be able to import the library and use the code treating the notebook as a production environment. They will have a minimal ammount of cells, mixing in documentation and examples of how to use the library.
+
+It is important to note that these notebooks are designed to be robust. These should mix in a healthy ammount of markdown documentation and explaination. but not be too heavy handed. Keep in mind that the goal of these notebooks is that a user can copy them into their own notebooks and know how to use the library.
+
+### Use of Cells
+
+- Use markdown cells sparingly to explain the code, or why it works the way it does. But avoid long narrative markdown cells that are overly robust.
+- Use code cells to write the code. Ensure that each cell is small and atomic. Each cell should have one responsibility and deterministically produce a result. If you define a function, call it in the same cell. Avoid using global variables, or mutable state if possible.
+- Class definitions should idealy be avoided in notebooks, unless we are prototyping a library. If we need a class, it should be defined in a separate cell and have a minimal footprint.
+- Variables should be defined in the cells that use them, and should usually be displayed to the user. Avoid using global variables, or mutable state if possible.
+- When prototping a library, use the `%autoreload 2` magic to ensure that the code is reloaded when it is changed.
+
+# Python - PyO3
+
+This workspace extends Python with **PyO3 / Maturin** integration expectations.
+
+### General Guidelines
+We are using the [pyo3](https://pyo3.rs/) library to create a python extension for our project. The ONLY reason we are doing this is to speed up the execution of critical code. As such, we should only use pyo3 for code that is critical to the performance of the project, and should avoid using it for code that is not performance critical. Generally, iO operations are easier to implement in python, while multi-threaded operations are faster in rust.
+
+The python GIL is the global interpreter lock, limiting the ability for python to be truly multi-threaded. However, rust executions can bypass the GIL leading to a significant speedup in performance. As such, we should not multi-thread in python, but rather pass tasks into rust for parallel processing, and then return the results back to python.
+
+### Tooling
+`uv` is still king within the project, and should be used for all python needs. However, we will use the `maturin` tool as the build system for the project. See the [maturin documentation](https://www.maturin.rs/) for more information on how to use it. Ensure that `maturin` is installed in the dev group. See the [uv documentation](https://docs.astral.sh/uv/concepts/projects/init/#projects-with-extension-modules) for more information on how to use maturin as a tool. In general, we prefer a structure native to maturin following the following format:
+
+```
+.
+├── pyproject.toml
+├── Cargo.toml
+├── python/
+│   ├── <module_name>/
+│   │   ├── __init__.py
+│   │   └── ...
+├── src/
+│   ├── lib.rs
+│   └── bindings.rs
+```
+Ensure that the `python/` directory is a valid python package, and that the `src/` directory is a valid rust crate.
+
+# Rust - TUI
+
+This workspace extends Rust with **TUI** application expectations.
+
+- Prefer established TUI crates already present in the dependency graph; do not introduce a parallel framework without a migration plan.
+- Treat terminal sizing, resize bursts, and partial redraws as normal inputs; avoid assuming a static viewport.
+- Separate rendering from application state: model updates should not directly depend on widget internals.
+- Keyboard and mouse interactions should degrade gracefully when a capability is unavailable.
+
+# Rust - PyO3
+
+This workspace extends Rust with **PyO3 / Maturin** extension expectations.
+
+- Design the Rust crate as an extension first: minimal Python surface, maximal safety around lifetimes and exceptions.
+- Use Maturin's layout and metadata conventions; keep `pyproject.toml` and `Cargo.toml` agreeing on names and versions.
+- Document unsafe blocks with the project's standard (even if you avoid new unsafe code).
+- Prefer thin Python modules that re-export a small Rust API rather than exposing many low-level Rust objects.
+
+<!-- END OF MANAGED SECTION -->

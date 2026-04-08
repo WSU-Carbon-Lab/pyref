@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
 import polars as pl
 
 from pyref.io.readers import read_fits

@@ -1,6 +1,7 @@
 #![cfg(feature = "catalog")]
 
-use crate::catalog::{CatalogError, Result};
+use crate::catalog::{discover_paths_for_catalog_ingest, CatalogError, Result};
+use crate::io::parse_fits_stem;
 use crate::io::BtIngestRow;
 #[cfg(not(feature = "parallel_ingest"))]
 use crate::catalog::open_or_create_db;
@@ -233,6 +234,7 @@ fn ingest_beamtime_sequential(
         prune_missing_files(&conn, &path_list)?;
     }
     prune_bt_scan_points(&conn, &path_list)?;
+    super::profile_persist::recompute_reflectivity_profiles_for_beamtime(&conn, beamtime_id)?;
 
     Ok(db_path)
 }

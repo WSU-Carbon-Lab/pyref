@@ -113,6 +113,21 @@ def test_scan_experiment_catalog_has_required_columns(
         assert c in df.columns, f"missing column {c}"
 
 
+def test_scan_experiment_includes_reflectivity_profile_columns(
+    minimal_fits_dir: Path | None,
+) -> None:
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    ingest_beamtime(minimal_fits_dir, incremental=False)
+    df = scan_experiment(minimal_fits_dir).collect()
+    if len(df) == 0:
+        pytest.skip("no rows in catalog")
+    assert "reflectivity_profile_index" in df.columns
+    assert "reflectivity_scan_type" in df.columns
+    assert df["reflectivity_profile_index"].dtype in (pl.Int64, pl.Null)
+    assert df["reflectivity_scan_type"].dtype == pl.String
+
+
 def test_fits_accessor_from_catalog(minimal_fits_dir: Path | None) -> None:
     if minimal_fits_dir is None:
         pytest.skip("fixtures/minimal.fits not found")

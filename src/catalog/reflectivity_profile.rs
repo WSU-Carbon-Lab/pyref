@@ -2,8 +2,10 @@
 //!
 //! Classifies a sequence of (energy, theta) observations into fixed-energy (theta scan),
 //! fixed-angle (energy scan), or degenerate single-point behavior using tolerances and
-//! heuristics shared with the TUI. Callers use this to choose the independent domain for
-//! beamspot drift checks (theta vs energy per project spec).
+//! heuristics shared with the TUI. [`segment_reflectivity_profiles`] splits ordered points when
+//! an instrument scan contains multiple profiles (e.g. I0 plateau then theta ramp, or successive
+//! energy blocks). Callers use the scan type to choose the independent domain for beamspot drift
+//! checks (theta vs energy per project spec).
 
 use std::collections::HashSet;
 
@@ -134,6 +136,110 @@ pub fn classify_scan_type(
     )
 }
 
+/// One contiguous sub-sequence of frames within an instrument scan, ordered by acquisition.
+///
+/// `start` is inclusive; `end` is exclusive, indexing into the same slice passed to
+/// [`segment_reflectivity_profiles`]. `scan_type` is the classification of that slice alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProfileSegment {
+    pub start: usize,
+    pub end: usize,
+    pub scan_type: ReflectivityScanType,
+}
+
+fn energy_step_boundaries(pairs: &[(Option<f64>, Option<f64>)]) -> Vec<usize> {
+    let n = pairs.len();
+    let mut out = Vec::new();
+    for i in 1..n {
+        if let (Some(e0), Some(e1)) = (pairs[i - 1].0, pairs[i].0) {
+            if (e1 - e0).abs() > E_TOL_EV {
+                out.push(i);
+            }
+        }
+    }
+    out
+}
+
+/// First index after an initial alignment run of near-zero sample theta when the remainder is a theta scan.
+///
+/// Requires at least `IZERO_MIN_POINTS` finite samples with `|theta|` below the alignment tolerance
+/// before the first finite theta above that tolerance. Skips leading rows with missing theta without
+/// breaking the prefix. If the suffix does not classify as [`ReflectivityScanType::FixedEnergy`],
+/// returns `None` so energy-only or ambiguous scans are not split on noise.
+fn izero_then_theta_ramp_boundary(pairs: &[(Option<f64>, Option<f64>)]) -> Option<usize> {
+    let mut i = 0usize;
+    let mut prefix_near_zero = 0usize;
+    while i < pairs.len() {
+        match pairs[i].1 {
+            Some(tv) if tv.abs() <= THETA_TOL_DEG => {
+                prefix_near_zero += 1;
+                i += 1;
+            }
+            None => {
+                i += 1;
+            }
+            Some(_) => break,
+        }
+    }
+    if prefix_near_zero < IZERO_MIN_POINTS || i >= pairs.len() {
+        return None;
+    }
+    let (st, _, _, _, _) = classify_scan_type(&pairs[i..]);
+    if matches!(st, ReflectivityScanType::FixedEnergy) {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+/// Partition ordered `(energy, theta)` points into contiguous profiles for reflectivity grouping.
+///
+/// Boundaries are inserted when:
+///
+/// 1. **Energy step:** consecutive finite energies differ by more than the catalog energy
+///    tolerance (same scale as classification).
+/// 2. **I0 then theta ramp:** an initial stretch of at least `IZERO_MIN_POINTS` samples with
+///    near-zero theta (classification alignment tolerance) followed by a suffix classified as a
+///    fixed-energy theta scan.
+///
+/// Each segment is classified with [`classify_scan_type`] on its slice alone. Empty input yields an
+/// empty vector.
+pub fn segment_reflectivity_profiles(
+    energy_theta_pairs: &[(Option<f64>, Option<f64>)],
+) -> Vec<ProfileSegment> {
+    let n = energy_theta_pairs.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut starts: Vec<usize> = vec![0];
+    starts.extend(energy_step_boundaries(energy_theta_pairs));
+    if let Some(k) = izero_then_theta_ramp_boundary(energy_theta_pairs) {
+        starts.push(k);
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    starts.retain(|&s| s < n);
+    let mut segments = Vec::new();
+    for (j, &start) in starts.iter().enumerate() {
+        let end = if j + 1 < starts.len() {
+            starts[j + 1]
+        } else {
+            n
+        };
+        if start >= end {
+            continue;
+        }
+        let slice = &energy_theta_pairs[start..end];
+        let (scan_type, _, _, _, _) = classify_scan_type(slice);
+        segments.push(ProfileSegment {
+            start,
+            end,
+            scan_type,
+        });
+    }
+    segments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +301,56 @@ mod tests {
         assert!(e_max.is_none());
         assert!(t_min.is_none());
         assert!(t_max.is_none());
+    }
+
+    #[test]
+    fn segment_izero_then_theta_ramp_two_profiles() {
+        let mut rows = Vec::new();
+        for _ in 0..4 {
+            rows.push(pair(Some(284.0), Some(0.0)));
+        }
+        for i in 1..6 {
+            rows.push(pair(Some(284.0), Some(i as f64 * 0.5)));
+        }
+        let segs = segment_reflectivity_profiles(&rows);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].start, 0);
+        assert_eq!(segs[0].end, 4);
+        assert_eq!(segs[0].scan_type, ReflectivityScanType::SinglePoint);
+        assert_eq!(segs[1].start, 4);
+        assert_eq!(segs[1].end, rows.len());
+        assert_eq!(segs[1].scan_type, ReflectivityScanType::FixedEnergy);
+    }
+
+    #[test]
+    fn segment_two_energy_blocks_two_fixed_angle() {
+        let mut rows = Vec::new();
+        for e in [280.0, 280.3, 280.6] {
+            rows.push(pair(Some(e), Some(10.0)));
+        }
+        for e in [295.0, 295.3, 295.6] {
+            rows.push(pair(Some(e), Some(10.0)));
+        }
+        let segs = segment_reflectivity_profiles(&rows);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].scan_type, ReflectivityScanType::FixedAngle);
+        assert_eq!(segs[1].scan_type, ReflectivityScanType::FixedAngle);
+        assert_eq!(segs[0].start, 0);
+        assert_eq!(segs[0].end, 3);
+        assert_eq!(segs[1].start, 3);
+        assert_eq!(segs[1].end, 6);
+    }
+
+    #[test]
+    fn segment_single_block_matches_whole_classify() {
+        let rows: Vec<_> = (0..8)
+            .map(|i| pair(Some(284.0), Some(0.3 * i as f64)))
+            .collect();
+        let segs = segment_reflectivity_profiles(&rows);
+        assert_eq!(segs.len(), 1);
+        let (whole, _, _, _, _) = classify_scan_type(&rows);
+        assert_eq!(segs[0].scan_type, whole);
+        assert_eq!(segs[0].start, 0);
+        assert_eq!(segs[0].end, rows.len());
     }
 }

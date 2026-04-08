@@ -190,3 +190,6 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 python/pyref/data/.pyref_catalog.db
+
+# Macos metadata
+.DS_Store

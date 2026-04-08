@@ -5,6 +5,8 @@ mod ingest_parallel;
 mod query;
 mod explorer_query;
 mod reflectivity_profile;
+mod beamspot_qc;
+mod profile_persist;
 
 #[cfg(feature = "zarr")]
 mod materialize;
@@ -23,7 +25,10 @@ use walkdir::WalkDir;
 
 pub const CATALOG_DB_NAME: &str = ".pyref_catalog.db";
 
-pub use ingest::{ingest_beamtime, ingest_beamtime_with_context, DEFAULT_INGEST_HEADER_ITEMS};
+pub use ingest::{
+    ingest_beamtime, ingest_beamtime_with_context, ingest_header_scan, ingest_header_scan_with_context,
+    ingest_sample_scan, ingest_sample_scan_with_context, DEFAULT_INGEST_HEADER_ITEMS,
+};
 #[cfg(feature = "parallel_ingest")]
 pub use ingest_parallel::ingest_beamtime_pipelined;
 pub use query::{
@@ -36,7 +41,10 @@ pub use explorer_query::{
     list_experimentalists, list_beamtimes_for_expt, catalog_status_for_path,
     ExptMeta, BeamtimeMeta, DbCatalogStatus,
 };
-pub use reflectivity_profile::{classify_scan_type, ReflectivityScanType};
+pub use beamspot_qc::{beamspot_status, domain_for_row, fit_beamspot_linear, BeamspotLinearFit};
+pub use reflectivity_profile::{
+    classify_scan_type, segment_reflectivity_profiles, ProfileSegment, ReflectivityScanType,
+};
 
 #[cfg(feature = "zarr")]
 pub use materialize::materialize_beamtime;
@@ -335,6 +343,63 @@ CREATE TABLE IF NOT EXISTS bt_file_overrides (
     notes TEXT
 )"#;
 
+const BT_REFLECTIVITY_PROFILES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bt_reflectivity_profiles (
+    scan_uid TEXT NOT NULL REFERENCES bt_scans(uid) ON DELETE CASCADE,
+    profile_index INTEGER NOT NULL,
+    scan_type TEXT NOT NULL,
+    seq_index_first INTEGER NOT NULL,
+    seq_index_last INTEGER NOT NULL,
+    e_min REAL,
+    e_max REAL,
+    t_min REAL,
+    t_max REAL,
+    PRIMARY KEY (scan_uid, profile_index)
+)"#;
+
+const BT_INDEX_REFLECTIVITY_PROFILES_SCAN: &str =
+    "CREATE INDEX IF NOT EXISTS idx_bt_reflectivity_profiles_scan ON bt_reflectivity_profiles(scan_uid)";
+
+const BT_FITS_DISCOVERY_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bt_fits_discovery (
+    beamtime_id INTEGER NOT NULL REFERENCES bt_beamtimes(id) ON DELETE CASCADE,
+    source_path TEXT NOT NULL,
+    source_mtime INTEGER NOT NULL,
+    file_stem TEXT NOT NULL,
+    stem_sample_name TEXT NOT NULL,
+    stem_tag TEXT,
+    scan_number INTEGER NOT NULL,
+    frame_number INTEGER NOT NULL,
+    stem_parse_ok INTEGER NOT NULL,
+    resolved_sample_name TEXT NOT NULL,
+    resolved_tag TEXT,
+    PRIMARY KEY (beamtime_id, source_path)
+)"#;
+
+const BT_INDEX_FITS_DISCOVERY_BEAMTIME: &str =
+    "CREATE INDEX IF NOT EXISTS idx_bt_fits_discovery_beamtime ON bt_fits_discovery(beamtime_id)";
+
+fn migrate_bt_fits_discovery(conn: &Connection) -> Result<()> {
+    conn.execute_batch(BT_FITS_DISCOVERY_TABLE)?;
+    conn.execute_batch(BT_INDEX_FITS_DISCOVERY_BEAMTIME)?;
+    Ok(())
+}
+
+/// Discover FITS paths under ``beamtime_dir`` using the same walk strategy as ingest (parallel when
+/// the ``parallel_ingest`` feature is enabled).
+pub(crate) fn discover_paths_for_catalog_ingest(
+    beamtime_dir: &Path,
+) -> Result<Vec<(PathBuf, i64)>> {
+    #[cfg(feature = "parallel_ingest")]
+    {
+        discover_fits_paths_parallel(beamtime_dir)
+    }
+    #[cfg(not(feature = "parallel_ingest"))]
+    {
+        discover_fits_paths(beamtime_dir)
+    }
+}
+
 pub fn is_skippable_stem(stem: &str) -> bool {
     stem.is_empty() || stem.starts_with('_')
 }
@@ -535,6 +600,23 @@ fn migrate_add_experimentalist_and_data_root(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_reflectivity_profiles_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(BT_REFLECTIVITY_PROFILES_TABLE)?;
+    conn.execute_batch(BT_INDEX_REFLECTIVITY_PROFILES_SCAN)?;
+    let has_col: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM pragma_table_info('bt_scan_points') WHERE name = 'reflectivity_profile_index'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_col == 0 {
+        conn.execute(
+            "ALTER TABLE bt_scan_points ADD COLUMN reflectivity_profile_index INTEGER",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 fn migrate_add_last_indexed_at_column(conn: &Connection) -> Result<()> {
     let table_exists: i64 = conn.query_row(
         "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='bt_beamtimes'",
@@ -591,6 +673,8 @@ pub fn open_catalog_db(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(BT_FILE_OVERRIDES_TABLE)?;
     migrate_add_experimentalist_and_data_root(&conn)?;
     migrate_add_last_indexed_at_column(&conn)?;
+    migrate_reflectivity_profiles_schema(&conn)?;
+    migrate_bt_fits_discovery(&conn)?;
     Ok(conn)
 }
 

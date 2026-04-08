@@ -89,6 +89,7 @@ pub fn ingest_beamtime_pipelined(
             prune_missing_files(&conn, &path_list)?;
         }
         prune_bt_scan_points(&conn, &path_list)?;
+        super::profile_persist::recompute_reflectivity_profiles_for_beamtime(&conn, beamtime_id)?;
         return Ok(db_path);
     }
 
@@ -191,6 +192,7 @@ pub fn ingest_beamtime_pipelined(
         prune_missing_files(&conn, &path_list)?;
     }
     prune_bt_scan_points(&conn, &path_list)?;
+    super::profile_persist::recompute_reflectivity_profiles_for_beamtime(&conn, beamtime_id)?;
 
     Ok(db_path)
 }
@@ -264,6 +266,7 @@ pub fn ingest_beamtime_pipelined_with_context(
             prune_missing_files(&conn, &path_list)?;
         }
         prune_bt_scan_points(&conn, &path_list)?;
+        super::profile_persist::recompute_reflectivity_profiles_for_beamtime(&conn, beamtime_id)?;
         return Ok(db_path);
     }
 
@@ -377,6 +380,7 @@ pub fn ingest_beamtime_pipelined_with_context(
         prune_missing_files(&conn, &path_list)?;
     }
     prune_bt_scan_points(&conn, &path_list)?;
+    super::profile_persist::recompute_reflectivity_profiles_for_beamtime(&conn, beamtime_id)?;
 
     Ok(db_path)
 }

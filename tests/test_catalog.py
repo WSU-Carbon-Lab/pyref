@@ -1,5 +1,7 @@
 """Tests for catalog ingest, scan_from_catalog, and overrides."""
 
+# ruff: noqa: D103, PT018
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +12,9 @@ import pytest
 
 if getattr(_pyref_mod, "py_ingest_beamtime", None) is None:
     pytest.skip("catalog not built", allow_module_level=True)
+
+if getattr(_pyref_mod, "py_default_catalog_db_path", None) is None:
+    pytest.skip("catalog path export missing", allow_module_level=True)
 
 from pyref.io import (
     classify_reflectivity_scan_type,
@@ -22,53 +27,25 @@ from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.readers import REQUIRED_SCAN_COLUMNS
 
 
+@pytest.fixture(autouse=True)
+def _pyref_home_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYREF_HOME", str(tmp_path))
+
+
 def _ensure_flat_beamtime_layout(beamtime: Path) -> None:
     (beamtime / "CCD").mkdir(parents=True, exist_ok=True)
 
 
-def test_resolve_catalog_path_prefers_new_layout_when_created(tmp_path: Path) -> None:
-    beamtime = tmp_path / "beam"
-    beamtime.mkdir()
-    new_db = tmp_path / ".pyref" / "catalog.db"
-    new_db.parent.mkdir(parents=True, exist_ok=True)
-    new_db.write_bytes(b"")
-    assert resolve_catalog_path(beamtime).resolve() == new_db.resolve()
-
-
-def test_resolve_catalog_path_ignores_legacy_sidecar(tmp_path: Path) -> None:
-    beamtime = tmp_path / "beam"
-    beamtime.mkdir()
-    legacy = beamtime / ".pyref_catalog.db"
-    legacy.write_bytes(b"")
-    expected = (tmp_path / ".pyref" / "catalog.db").resolve()
-    assert resolve_catalog_path(beamtime).resolve() == expected
-
-
-def test_resolve_catalog_path_new_wins_when_both_exist(tmp_path: Path) -> None:
-    beamtime = tmp_path / "beam"
-    beamtime.mkdir()
-    new_db = tmp_path / ".pyref" / "catalog.db"
-    new_db.parent.mkdir(parents=True, exist_ok=True)
-    new_db.write_bytes(b"")
-    legacy = beamtime / ".pyref_catalog.db"
-    legacy.write_bytes(b"")
-    assert resolve_catalog_path(beamtime).resolve() == new_db.resolve()
-
-
-def test_resolve_catalog_path_defaults_to_new_when_neither_exists(
-    tmp_path: Path,
-) -> None:
-    beamtime = tmp_path / "beam"
-    beamtime.mkdir()
-    expected = (tmp_path / ".pyref" / "catalog.db").resolve()
-    assert resolve_catalog_path(beamtime).resolve() == expected
-    assert not expected.exists()
+def test_resolve_catalog_path_global(tmp_path: Path) -> None:
+    expected = (tmp_path / "catalog.db").resolve()
+    assert resolve_catalog_path().resolve() == expected
+    assert resolve_catalog_path(tmp_path / "any" / "beam").resolve() == expected
 
 
 def test_ingest_beamtime_empty_dir(tmp_path: Path) -> None:
     _ensure_flat_beamtime_layout(tmp_path)
     db = ingest_beamtime(tmp_path, incremental=True)
-    assert db == resolve_catalog_path(tmp_path)
+    assert db == resolve_catalog_path()
     assert db.exists()
 
 
@@ -95,7 +72,7 @@ def test_get_overrides_empty(tmp_path: Path) -> None:
 def test_set_override_invalid_path_raises(tmp_path: Path) -> None:
     _ensure_flat_beamtime_layout(tmp_path)
     db = ingest_beamtime(tmp_path, incremental=True)
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="path not in catalog"):
         set_override(db, "/nonexistent/path.fits", sample_name="x")
 
 
@@ -151,7 +128,7 @@ def test_fits_accessor_from_catalog(minimal_fits_dir: Path | None) -> None:
     _ = df.fits.img[0]
 
 
-def test_set_override_bt_scan_point_updates_scan_experiment(
+def test_set_override_updates_scan_experiment(
     minimal_fits_dir: Path | None,
 ) -> None:
     if minimal_fits_dir is None:

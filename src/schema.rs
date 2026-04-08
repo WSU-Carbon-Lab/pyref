@@ -1,3 +1,5 @@
+#![cfg(feature = "catalog")]
+
 // schema.rs
 //
 // Diesel schema for the pyref catalog database.
@@ -37,14 +39,57 @@
 
 diesel::table! {
     /// Root of the catalog hierarchy. One row per beamtime directory ingested.
-    /// The `path` column is the absolute path to the beamtime root and is also
-    /// used to resolve the monolithic zarr archive at `<path>/beamtime.zarr`.
+    ///
+    /// `nas_uri` is the logical URI of the form `nas://<label>/<relative_path>`
+    /// pointing to the original FITS data on the NAS. It is used only during
+    /// ingestion and re-ingestion; path resolution goes through `path_aliases`.
+    ///
+    /// `zarr_path` is the absolute local filesystem path to the beamtime's
+    /// monolithic zarr archive, located at
+    /// `<data_dir>/pyref/.cache/<beamtime_hash>/beamtime.zarr`. All
+    /// post-ingestion image retrieval uses this path exclusively. The NAS
+    /// does not need to be mounted for any workflow after ingestion completes.
     beamtimes (id) {
         id -> Integer,
-        /// Absolute path to the beamtime root directory.
-        path -> Text,
+        /// Logical NAS URI: `nas://<label>/<relative_path>`.
+        nas_uri -> Text,
+        /// Absolute local path to the beamtime zarr archive.
+        zarr_path -> Text,
         /// ISO 8601 date string parsed from the beamtime directory name.
         date -> Text,
+        /// Unix seconds when this beamtime was last fully ingested (explorer staleness).
+        last_indexed_at -> Nullable<Integer>,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Path aliases
+// ---------------------------------------------------------------------------
+
+diesel::table! {
+    /// Per-machine registry of NAS label-to-physical-path mappings. One row
+    /// per registered NAS volume on this machine. Populated and updated
+    /// exclusively by `pyref config set-mount <label> <physical_path>`.
+    ///
+    /// This table is machine-local in semantics even when the catalog lives
+    /// on a shared network drive. Each machine must register its own mount
+    /// points independently.
+    ///
+    /// The Rust IO layer reads this table on connection open and caches the
+    /// mappings for the process lifetime. Path resolution must never be
+    /// performed inside SQL or in Python; it is exclusively an IO-layer
+    /// concern. If a `nas://<label>/...` URI is encountered and `label` has
+    /// no row in this table, the IO layer must return an `UnresolvedAlias`
+    /// error naming the missing label explicitly.
+    path_aliases (id) {
+        id -> Integer,
+        /// Short user-assigned label matching the `<label>` component of
+        /// `nas://<label>/...` URIs. Unique within the catalog.
+        label -> Text,
+        /// Absolute filesystem path to the NAS mount point on this machine.
+        physical_path -> Text,
+        /// ISO 8601 timestamp of the last `set-mount` registration.
+        registered_at -> Text,
     }
 }
 
@@ -108,21 +153,34 @@ diesel::joinable!(file_tags -> tags (tag_id));
 
 diesel::table! {
     /// One row per FITS file ingested. The canonical reference for raw file
-    /// provenance. Image data is not retrieved through this table; it is
-    /// accessed via the zarr keys on `frames`.
+    /// provenance and the join target for tag resolution. Image data is not
+    /// retrieved through this table; it is accessed via the zarr keys on
+    /// `frames`.
+    ///
+    /// `nas_uri` stores the logical URI of the form
+    /// `nas://<label>/<relative_path>` rather than an absolute filesystem
+    /// path. Physical path resolution goes through `path_aliases` in the
+    /// Rust IO layer and is never performed inside SQL.
     files (id) {
         id -> Integer,
         beamtime_id -> Integer,
         sample_id -> Integer,
         scan_number -> Integer,
         frame_number -> Integer,
-        /// Absolute path to the FITS file.
-        path -> Text,
+        /// Logical NAS URI: `nas://<label>/<relative_path>`.
+        nas_uri -> Text,
         /// Bare filename including extension.
         filename -> Text,
         /// NULL when parsing succeeds. Set to "parse_failure" when the
         /// filename does not conform to any supported naming pattern.
         parse_flag -> Nullable<Text>,
+        /// Byte offset to the start of the primary image HDU data array.
+        data_offset -> BigInt,
+        naxis1 -> Integer,
+        naxis2 -> Integer,
+        /// FITS BITPIX (signed; e.g. 16 for unsigned 16-bit after BZERO).
+        bitpix -> Integer,
+        bzero -> BigInt,
     }
 }
 
@@ -190,8 +248,8 @@ diesel::table! {
     /// header values as typed columns, plus zarr retrieval keys. All remaining
     /// header cards are stored in `frame_header_values`.
     ///
-    /// Zarr retrieval: the monolithic beamtime archive is at
-    /// `<beamtime.path>/beamtime.zarr`. Within the archive, images are at
+    /// Zarr retrieval: the monolithic beamtime archive is `beamtimes.zarr_path`.
+    /// Within the archive, images are at
     /// `/<scan_number>/<frame_number>/raw` and
     /// `/<scan_number>/<frame_number>/processed`.
     frames (id) {
@@ -422,8 +480,8 @@ diesel::table! {
         profile_id -> Integer,
         frame_id -> Integer,
         beam_finding_id -> Integer,
-        /// Momentum transfer (inverse angstroms).
-        q -> Double,
+        #[sql_name = "q"]
+        q_momentum -> Double,
         /// Sample theta (degrees).
         theta -> Double,
         /// Beamline energy (eV).
@@ -441,12 +499,24 @@ diesel::joinable!(reflectivity -> profiles (profile_id));
 diesel::joinable!(reflectivity -> frames (frame_id));
 diesel::joinable!(reflectivity -> beam_finding (beam_finding_id));
 
+diesel::table! {
+    /// User overrides for display sample name, tag, and notes keyed by resolved FITS path.
+    file_overrides (id) {
+        id -> Integer,
+        source_path -> Text,
+        sample_name -> Nullable<Text>,
+        tag -> Nullable<Text>,
+        notes -> Nullable<Text>,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Allow tables to appear in the same query
 // ---------------------------------------------------------------------------
 
 diesel::allow_tables_to_appear_in_same_query!(
     beamtimes,
+    path_aliases,
     samples,
     tags,
     file_tags,
@@ -460,4 +530,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     beam_finding,
     stitch_corrections,
     reflectivity,
+    file_overrides,
 );

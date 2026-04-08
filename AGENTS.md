@@ -120,7 +120,72 @@ AI text files are supplementary and are not required for cataloging. If present,
 
 ## I/O Operations and Cataloging
 
-Connecting individual frames back to their originating sample, scan, and beamtime requires meticulous bookkeeping that is impractical to maintain manually across a full beamtime. `pyref` provides an automated cataloging system that ingests a beamtime directory and populates a SQLite database encoding this hierarchy. The database is the structural backbone for all downstream reduction and fitting workflows. Users interact with it primarily through the lazy DataFrame interface exposed by `pyref.io`, which allows them to filter by sample name, tag, energy, or angle and receive a polars or pandas DataFrame containing the relevant frame metadata and image retrieval handles.
+Connecting individual frames back to their originating sample, scan, and beamtime requires meticulous bookkeeping that is impractical to maintain manually across a full beamtime. `pyref` provides an automated cataloging system that ingests a beamtime directory and populates a Diesel-managed SQLite database encoding this hierarchy. The database is the structural backbone for all downstream reduction and fitting workflows. Users interact with it primarily through the lazy DataFrame interface exposed by `pyref.io`, which allows them to filter by sample name, tag, energy, or angle and receive a polars or pandas DataFrame containing the relevant frame metadata and image retrieval handles.
+
+### Catalog and Cache Storage
+
+#### Default: local user data directory
+
+By default, `pyref` maintains a single persistent catalog that accumulates every beamtime the user has ever ingested. The catalog and its associated zarr cache live in the platform-appropriate user data directory, resolved at runtime by the Rust IO layer using the `directories` crate:
+
+| Platform | Default catalog path |
+|----------|----------------------|
+| Linux    | `$XDG_DATA_HOME/pyref/catalog.db` (falls back to `~/.local/share/pyref/catalog.db`) |
+| macOS    | `~/Library/Application Support/pyref/catalog.db` |
+| Windows  | `%APPDATA%\pyref\catalog.db` |
+
+The zarr archive for each beamtime is stored **on local disk under the same platform data directory** as the catalog, not under the system cache directory: `<data_dir>/pyref/.cache/<beamtime_hash>/beamtime.zarr`, where `<data_dir>` is the same root as in the table above (`$XDG_DATA_HOME` or `~/.local/share`, `~/Library/Application Support`, or `%APPDATA%` as appropriate) and `<beamtime_hash>` is a stable SHA-256 digest of the beamtime root path recorded at ingestion time. Example on macOS: `~/Library/Application Support/pyref/.cache/<beamtime_hash>/beamtime.zarr`. The zarr tree is local-only; NAS-backed FITS are used for ingestion and re-ingestion, not for routine image reads after ingest.
+
+Optional environment overrides: `PYREF_CATALOG_DB` (absolute path to `catalog.db`) and `PYREF_CACHE_ROOT` (parent of `<beamtime_hash>/beamtime.zarr` directories). Parallel FITS reads during ingest honor `PYREF_INGEST_WORKER_THREADS` or `PYREF_INGEST_RESOURCE_FRACTION` when explicit kwargs or TUI config fields are unset.
+
+Ingestion is a **single pipeline**: catalog metadata (Diesel/SQLite) and zarr array writes happen in one pass. There is no separate user-visible “metadata only” phase followed by a later image materialization step.
+
+The raw FITS files on the NAS are only required during initial ingestion and re-ingestion. After ingestion, reduction and browsing workflows operate from the local catalog and zarr store. If the NAS is unavailable, previously ingested beamtimes remain fully accessible from local storage.
+
+#### Path aliasing for NAS-sourced data
+
+Because NAS mount points differ across machines (e.g., `/Volumes/beamdata` on macOS vs. `/mnt/beamdata` on Linux), paths stored in `beamtimes.path` and `files.path` are recorded as logical URIs of the form `nas://<label>/<relative_path>` rather than absolute filesystem paths. The `label` component is a short user-assigned name for the NAS volume (e.g., `als-data`). Physical mount point resolution is handled by the `path_aliases` table in the catalog, which stores `(label, physical_path)` pairs for the current machine.
+
+On a new machine, the user registers the mount point once:
+
+```
+pyref config set-mount als-data /mnt/beamdata
+```
+
+This inserts or updates the row in `path_aliases`. All path resolution in the Rust IO layer goes through this table before any filesystem operation. If a label has no registered physical path, the IO layer must return a structured `UnresolvedAlias` error that names the missing label explicitly, rather than a generic file-not-found error. The path aliasing layer is transparent to Diesel queries; aliases are resolved by the IO layer before constructing filesystem paths, never inside SQL.
+
+The zarr cache path stored in `beamtimes` is an absolute local path and is never aliased, since it lives on the local machine by definition. Ingestion records both the NAS logical URI (for FITS provenance) and the resolved local zarr path (for image retrieval) in `beamtimes` as separate columns.
+
+#### Alternative: shared catalog on a network drive or mounted filesystem
+
+For groups where multiple users share a beamtime dataset and want a common catalog, `pyref` supports an explicit catalog path override. The user specifies a path to a directory that is visible to all machines, typically a network share or a FUSE-mounted filesystem:
+
+```
+pyref config set-catalog /mnt/shared/pyref/catalog.db
+```
+
+When using a shared catalog, the following constraints apply and must be enforced by the IO layer.
+
+SQLite over NFS is unsafe for concurrent writes due to unreliable advisory file locking. If the configured catalog path resolves to a network filesystem (detected by comparing the device ID of the catalog file against known local device IDs, or by an explicit `--network` flag acknowledged by the user at config time), the IO layer must open the connection in WAL mode with a generous busy timeout and must warn the user that concurrent write access from multiple machines is not supported. Concurrent read access is safe in WAL mode. The recommended usage pattern for shared catalogs is that one designated machine performs all ingestion (writes) and all other machines open the catalog read-only.
+
+The zarr cache may also be redirected to a shared location using a separate config key:
+
+```
+pyref config set-cache /mnt/shared/pyref/zarr
+```
+
+A zarr archive on a fast local network share (e.g., 10GbE NFS or SMB) is acceptable for read-heavy workloads such as browsing and fitting. It is not acceptable as the primary location for zarr writes during ingestion, which should always target local storage first and be copied to the shared location afterwards if shared access is desired.
+
+#### `path_aliases` table
+
+This table lives in the catalog database and is machine-local in semantics, even when the catalog is on a shared drive. It stores one row per registered NAS label for the current machine. The Rust IO layer reads this table on startup and caches the mappings in memory for the duration of the process. Agents must never read `path_aliases` directly from Python; path resolution is an IO-layer concern exposed through the `pyref.io` interface.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `Integer` | Primary key. |
+| `label` | `Text` | Short user-assigned NAS label (e.g., `als-data`). Unique per catalog. |
+| `physical_path` | `Text` | Absolute filesystem path to the mount point on this machine. |
+| `registered_at` | `Text` | ISO 8601 timestamp of last registration. |
 
 ### Cataloging System
 
@@ -133,7 +198,7 @@ The `profiles` table is the primary user-facing entry point. Users browse profil
 The 115 FITS primary HDU cards per frame are split into two tiers at ingestion time. Eleven cards that directly drive scan classification, beamspot localization, normalization, and profile identity are promoted to first-class typed columns on the `frames` table: `sample_x`, `sample_y`, `sample_z`, `sample_theta`, `ccd_theta`, `beamline_energy`, `epu_polarization`, `exposure`, `ring_current`, `ai3_izero`, and `beam_current`. All remaining cards are stored in the `frame_header_values` EAV table, keyed through the `header_cards` registry. The `header_cards` table is populated automatically on first ingestion from whatever cards are present in the FITS files; subsequent beamtimes with new or renamed channels append rows to this table without requiring a schema migration. If a card that was previously treated as non-critical needs to be queried as a first-class column, the correct remedy is a Diesel migration that adds the column to `frames` and backfills it from `frame_header_values`, not a workaround join.
 
 #### `beamtimes`
-Root of the catalog hierarchy. Stores the absolute path to the beamtime root directory and the date parsed from the directory name. The `path` column is also used to resolve the monolithic zarr archive at `<path>/beamtime.zarr`. All other tables carry a foreign key to this table.
+Root of the catalog hierarchy. Stores two path columns: `nas_uri`, which is the logical `nas://<label>/<relative_path>` URI pointing to the original FITS data on the NAS, and `zarr_path`, which is the absolute local filesystem path to the beamtime's zarr archive at `<data_dir>/pyref/.cache/<beamtime_hash>/beamtime.zarr` (same `<data_dir>` convention as the default catalog path). The `nas_uri` is used for provenance and during ingestion and re-ingestion; all post-ingestion image retrieval goes through `zarr_path`. The date parsed from the beamtime directory name is also stored here. All other tables carry a foreign key to this table.
 
 #### `samples`
 One row per unique sample name within a beamtime. Stores the sample name and the median `sample_x`, `sample_y`, and `sample_z` stage positions computed across all frames attributed to that name. Stage positions are nominally fixed per sample; frames that deviate beyond a configurable tolerance are flagged `mislabeled_sample` in `frames.quality_flag` rather than creating a second sample row.
@@ -154,7 +219,7 @@ One row per scan. Stores the scan number, scan type (`fixed_energy` or `fixed_an
 Registry of FITS header card names discovered during ingestion. One row per unique card name. Each row stores the raw card name as it appears in the FITS header, a human-readable display name, and a category label (`motor`, `ai`, `camera`, or `metadata`). This table is the lookup key for the `frame_header_values` EAV table. Agents must not hard-code card name strings outside of this table and the first-class column definitions on `frames`.
 
 #### `frames`
-One row per frame per scan. Stores the eleven first-class header card values as typed `Double` columns, plus the zarr retrieval keys (`zarr_group_key` and `zarr_frame_index`) needed to fetch the detector image. The monolithic zarr archive at `<beamtime.path>/beamtime.zarr` is organized hierarchically: scan number is the group key, frame number is the dataset index within that group, and each group stores two datasets per frame named `raw` and `processed`. The `raw` dataset is the image as extracted from the FITS file; the `processed` dataset is the image after edge artifact removal, row-wise and column-wise background subtraction, and Gaussian filtering. Both share the same frame index. The archive path is resolved through the FK to `beamtimes`, avoiding redundant path storage at the frame level. Each row also carries FKs to `files` and `scans`, providing the full provenance chain from pixel to beamtime.
+One row per frame per scan. Stores the eleven first-class header card values as typed `Double` columns, plus the zarr retrieval keys (`zarr_group_key` and `zarr_frame_index`) needed to fetch the detector image. The monolithic zarr archive is located at `beamtimes.zarr_path` for the parent beamtime. Within the archive, scan number is the group key, frame number is the dataset index within that group, and each group stores two datasets per frame named `raw` and `processed`. The `raw` dataset is the image as extracted from the FITS file; the `processed` dataset is the image after edge artifact removal, row-wise and column-wise background subtraction, and Gaussian filtering. Both share the same frame index. Each row also carries FKs to `files` and `scans`, providing the full provenance chain from pixel to beamtime.
 
 #### `frame_header_values`
 EAV store for all FITS header cards not promoted to first-class columns on `frames`. All values are stored as `Double`. The card name is resolved through `header_cards`. This table is append-only after initial ingestion; values are never updated in place.

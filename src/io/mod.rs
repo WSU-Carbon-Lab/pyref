@@ -44,6 +44,10 @@ impl ImageInfo {
         }
     }
 
+    /// Builds [`ImageInfo`] from catalog-style scan rows.
+    ///
+    /// When `file_path` is a `file://` URI (local provenance in the catalog), strips the
+    /// scheme so filesystem reads target the absolute path segment.
     pub fn from_dataframe_row(df: &DataFrame, row_index: usize) -> Result<Self, FitsError> {
         let path_str: &str = df
             .column("file_path")
@@ -52,7 +56,11 @@ impl ImageInfo {
             .map_err(FitsError::from)?
             .get(row_index)
             .ok_or_else(|| FitsError::validation("file_path row missing or null"))?;
-        let path = PathBuf::from(path_str);
+        let path = if let Some(rest) = path_str.strip_prefix("file://") {
+            PathBuf::from(rest)
+        } else {
+            PathBuf::from(path_str)
+        };
         let data_offset: u64 = df
             .column("data_offset")
             .map_err(FitsError::from)?
@@ -536,6 +544,13 @@ pub struct BtIngestRow {
     pub ccd_theta: Option<f64>,
     pub epu_polarization: Option<f64>,
     pub exposure: Option<f64>,
+    pub sample_x: Option<f64>,
+    pub sample_y: Option<f64>,
+    pub sample_z: Option<f64>,
+    pub ring_current: Option<f64>,
+    pub ai3_izero: Option<f64>,
+    pub beam_current: Option<f64>,
+    pub date_iso: Option<String>,
 }
 
 fn header_float(primary: &PrimaryHdu, key: &str) -> Option<f64> {
@@ -596,8 +611,22 @@ pub fn build_bt_ingest_row(
         ccd_theta: None,
         epu_polarization: None,
         exposure: None,
+        sample_x: None,
+        sample_y: None,
+        sample_z: None,
+        ring_current: None,
+        ai3_izero: None,
+        beam_current: None,
+        date_iso: None,
     };
     for key in header_items {
+        if key == "DATE" {
+            row.date_iso = primary
+                .header
+                .get_card("DATE")
+                .map(|c| c.value.to_string());
+            continue;
+        }
         let v = header_float(primary, key);
         match key.as_str() {
             "Beamline Energy" => row.beamline_energy = v,
@@ -605,6 +634,12 @@ pub fn build_bt_ingest_row(
             "CCD Theta" => row.ccd_theta = v,
             "EPU Polarization" => row.epu_polarization = v,
             "EXPOSURE" => row.exposure = v,
+            "Sample X" => row.sample_x = v,
+            "Sample Y" => row.sample_y = v,
+            "Sample Z" => row.sample_z = v,
+            "RINGCRNT" => row.ring_current = v,
+            "AI 3 Izero" => row.ai3_izero = v,
+            "Beam Current" => row.beam_current = v,
             _ => {}
         }
     }

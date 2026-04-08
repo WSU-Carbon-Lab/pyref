@@ -1,23 +1,36 @@
-#![cfg(feature = "catalog")]
+//! Beamtime ingest: Diesel catalog rows and zarr arrays in one pass.
+//!
+//! SQLite allows one writer at a time. Ingest uses a single [`diesel::SqliteConnection`] for all
+//! catalog mutations in this process. After `fork` or when spawning a subprocess, open a new
+//! connection in the child; do not share a connection across process boundaries.
+//!
+//! FITS header reads and pixel reads for zarr use a [`rayon::ThreadPool`] sized by
+//! [`crate::catalog::IngestParallelism`] (after [`IngestParallelism::from_options_or_env`]); nested
+//! [`rayon::prelude::ParallelIterator`] work runs on that pool via [`rayon::ThreadPool::install`].
+//! Diesel transactions and [`super::zarr_write::write_frame_raw`] run on the calling thread in
+//! order so catalog rows and zarr datasets stay aligned.
 
-use crate::catalog::layout::BeamtimeLayout;
-use crate::catalog::{CatalogError, Result, FILE_FLAG_PARSE_FAILURE};
-#[cfg(not(feature = "parallel_ingest"))]
-use crate::catalog::{discover_paths_for_catalog_ingest, open_or_create_db_at};
-use crate::io::parse_fits_stem;
-use crate::io::BtIngestRow;
-#[cfg(not(feature = "parallel_ingest"))]
-use polars::prelude::*;
-#[cfg(not(feature = "parallel_ingest"))]
-use crate::io::options::ReadFitsOptions;
-#[cfg(not(feature = "parallel_ingest"))]
-use crate::loader::read_fits_metadata_batch;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-#[cfg(not(feature = "parallel_ingest"))]
-const BATCH_SIZE: usize = 500;
+use diesel::prelude::*;
+use diesel::OptionalExtension;
+use ndarray::Array2;
+use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
+
+use crate::io::BtIngestRow;
+use crate::loader::read_multiple_fits_headers_only_rows;
+use crate::schema::{beamtimes, file_tags, files, frames, samples, scans, tags};
+
+use super::layout::BeamtimeLayout;
+use super::parallelism::IngestParallelism;
+use super::zarr_write::{open_zarr_store, write_frame_raw};
+use super::{db, paths, CatalogError, Result};
+use super::discover_paths_for_catalog_ingest;
 
 pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "DATE",
@@ -29,6 +42,12 @@ pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "EXPOSURE",
     "Sample Name",
     "Scan ID",
+    "Sample X",
+    "Sample Y",
+    "Sample Z",
+    "RINGCRNT",
+    "AI 3 Izero",
+    "Beam Current",
 ];
 
 fn layout_label(layout: BeamtimeLayout) -> &'static str {
@@ -38,586 +57,417 @@ fn layout_label(layout: BeamtimeLayout) -> &'static str {
     }
 }
 
-pub(crate) fn update_beamtime_catalog_layout(
-    conn: &rusqlite::Connection,
-    beamtime_id: i64,
-    layout: BeamtimeLayout,
-) -> Result<()> {
-    conn.execute(
-        "UPDATE bt_beamtimes SET catalog_layout = ?1 WHERE id = ?2",
-        rusqlite::params![layout_label(layout), beamtime_id],
-    )?;
-    Ok(())
-}
-
-fn ensure_catalog_tag_id(conn: &rusqlite::Connection, name: &str) -> Result<i64> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(CatalogError::Validation("empty tag name".into()));
+fn read_image_i32(row: &BtIngestRow) -> Result<Array2<i32>> {
+    if row.bitpix != 16 {
+        return Err(CatalogError::Validation(format!(
+            "unsupported BITPIX {} for zarr (expected 16): {}",
+            row.bitpix, row.file_path
+        )));
     }
-    let slug = name.to_lowercase().replace(' ', "_");
-    conn.execute(
-        "INSERT OR IGNORE INTO catalog_tags (name, slug) VALUES (?1, ?2)",
-        rusqlite::params![name, slug],
-    )?;
-    let id: i64 = conn.query_row(
-        "SELECT id FROM catalog_tags WHERE name = ?1",
-        rusqlite::params![name],
-        |r| r.get(0),
-    )?;
-    Ok(id)
-}
-
-fn set_fits_file_tags(
-    conn: &rusqlite::Connection,
-    file_id: i64,
-    tag_names: &[String],
-) -> Result<()> {
-    conn.execute(
-        "DELETE FROM fits_file_tags WHERE file_id = ?1",
-        rusqlite::params![file_id],
-    )?;
-    for t in tag_names {
-        let t = t.trim();
-        if t.is_empty() || crate::io::is_polarization_tag(t) {
-            continue;
-        }
-        let tid = ensure_catalog_tag_id(conn, t)?;
-        conn.execute(
-            "INSERT OR IGNORE INTO fits_file_tags (file_id, tag_id) VALUES (?1, ?2)",
-            rusqlite::params![file_id, tid],
-        )?;
+    let path = Path::new(&row.file_path);
+    let mut f = File::open(path).map_err(CatalogError::Io)?;
+    f.seek(SeekFrom::Start(row.data_offset as u64))
+        .map_err(CatalogError::Io)?;
+    let n = (row.naxis1 * row.naxis2) as usize;
+    let mut out = Vec::with_capacity(n);
+    let mut b = [0u8; 2];
+    for _ in 0..n {
+        f.read_exact(&mut b).map_err(CatalogError::Io)?;
+        out.push(i16::from_be_bytes(b) as i32);
     }
-    Ok(())
+    Array2::from_shape_vec((row.naxis2 as usize, row.naxis1 as usize), out)
+        .map_err(|e| CatalogError::Validation(e.to_string()))
 }
 
-fn ensure_bt_sample(conn: &rusqlite::Connection, beamtime_id: i64, name: &str) -> Result<i64> {
-    let name = name.trim();
-    let name_for_row = if name.is_empty() { "<unparsed>" } else { name };
-    conn.execute(
-        "INSERT OR IGNORE INTO bt_samples (beamtime_id, name) VALUES (?1, ?2)",
-        rusqlite::params![beamtime_id, name_for_row],
-    )?;
-    let id: i64 = conn.query_row(
-        "SELECT id FROM bt_samples WHERE beamtime_id = ?1 AND name = ?2",
-        rusqlite::params![beamtime_id, name_for_row],
-        |r| r.get(0),
-    )?;
-    Ok(id)
+fn beamtime_date_label(beamtime_dir: &Path) -> String {
+    beamtime_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "unknown".into())
 }
 
-fn upsert_fits_file_row(
-    conn: &rusqlite::Connection,
-    beamtime_id: i64,
-    sample_id: Option<i64>,
-    path_str: &str,
-    file_stem: &str,
-    scan_number: i64,
-    frame_number: i64,
-    parse_ok: bool,
-    source_mtime: i64,
-) -> Result<i64> {
-    let file_flags = if parse_ok {
-        0i64
-    } else {
-        FILE_FLAG_PARSE_FAILURE
-    };
-    let parse_ok_i = if parse_ok { 1i64 } else { 0i64 };
-    conn.execute(
-        r#"INSERT INTO fits_files (beamtime_id, sample_id, path, file_name, scan_number, frame_number, parse_ok, file_flags, source_mtime)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-           ON CONFLICT(path) DO UPDATE SET
-             beamtime_id = excluded.beamtime_id,
-             sample_id = excluded.sample_id,
-             file_name = excluded.file_name,
-             scan_number = excluded.scan_number,
-             frame_number = excluded.frame_number,
-             parse_ok = excluded.parse_ok,
-             file_flags = excluded.file_flags,
-             source_mtime = excluded.source_mtime"#,
-        rusqlite::params![
-            beamtime_id,
-            sample_id,
-            path_str,
-            file_stem,
-            scan_number,
-            frame_number,
-            parse_ok_i,
-            file_flags,
-            source_mtime
-        ],
-    )?;
-    let id: i64 = conn.query_row(
-        "SELECT id FROM fits_files WHERE path = ?1",
-        rusqlite::params![path_str],
-        |r| r.get(0),
-    )?;
-    Ok(id)
-}
-
-fn stem_parse_fields(file_stem: &str) -> (String, Vec<String>, i64, i64, bool) {
-    match parse_fits_stem(file_stem) {
-        Some(p) => (p.sample_name, p.tags, p.scan_number, p.frame_number, true),
-        None => (String::new(), Vec::new(), 0, 0, false),
-    }
-}
-
-pub(crate) fn prune_fits_files(
-    conn: &rusqlite::Connection,
-    beamtime_id: i64,
-    known_paths: &[&str],
-) -> Result<()> {
-    if known_paths.is_empty() {
-        conn.execute(
-            "DELETE FROM fits_files WHERE beamtime_id = ?1",
-            rusqlite::params![beamtime_id],
-        )?;
-        return Ok(());
-    }
-    let placeholders = known_paths
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 2))
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "DELETE FROM fits_files WHERE beamtime_id = ?1 AND path NOT IN ({})",
-        placeholders
-    );
-    let mut v: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(beamtime_id)];
-    for p in known_paths {
-        v.push(Box::new(*p));
-    }
-    let refs: Vec<&dyn rusqlite::ToSql> = v.iter().map(|b| b.as_ref()).collect();
-    conn.execute(&sql, rusqlite::params_from_iter(refs))?;
-    Ok(())
-}
-
+/// Ingests a beamtime directory into the global catalog and local zarr store.
 pub fn ingest_beamtime(
     beamtime_dir: &Path,
     header_items: &[String],
     incremental: bool,
     progress_tx: Option<mpsc::Sender<(u32, u32)>>,
 ) -> Result<PathBuf> {
-    ingest_beamtime_with_context(
+    ingest_beamtime_inner(
         beamtime_dir,
-        None,
-        None,
         header_items,
         incremental,
         progress_tx,
+        IngestParallelism::default(),
         None,
     )
 }
 
+/// Ingest with explicit parallelism (worker threads or resource fraction).
+pub fn ingest_beamtime_parallel(
+    beamtime_dir: &Path,
+    header_items: &[String],
+    incremental: bool,
+    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    parallelism: IngestParallelism,
+) -> Result<PathBuf> {
+    ingest_beamtime_inner(
+        beamtime_dir,
+        header_items,
+        incremental,
+        progress_tx,
+        parallelism,
+        None,
+    )
+}
+
+/// Ingest with optional data-root / experimentalist context (accepted for API compatibility).
 pub fn ingest_beamtime_with_context(
     beamtime_dir: &Path,
-    data_root: Option<&Path>,
-    experimentalist: Option<&str>,
+    _data_root: Option<&Path>,
+    _experimentalist: Option<&str>,
     header_items: &[String],
     incremental: bool,
     progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    parallelism: IngestParallelism,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
-    #[cfg(feature = "parallel_ingest")]
+    if cancel
+        .as_ref()
+        .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(false)
     {
-        return super::ingest_parallel::ingest_beamtime_pipelined_with_context(
-            beamtime_dir,
-            data_root,
-            experimentalist,
-            header_items,
-            incremental,
-            progress_tx,
-            cancel,
-        );
+        return Err(CatalogError::Validation("ingest cancelled".into()));
     }
-    #[cfg(not(feature = "parallel_ingest"))]
-    {
-        ingest_beamtime_sequential(
-            beamtime_dir,
-            data_root,
-            experimentalist,
-            header_items,
-            incremental,
-            progress_tx,
-            cancel,
-        )
-    }
+    ingest_beamtime_inner(
+        beamtime_dir,
+        header_items,
+        incremental,
+        progress_tx,
+        parallelism,
+        cancel,
+    )
 }
 
-#[cfg(not(feature = "parallel_ingest"))]
-fn ingest_beamtime_sequential(
+#[cfg(feature = "parallel_ingest")]
+pub fn ingest_beamtime_pipelined_with_context(
     beamtime_dir: &Path,
     data_root: Option<&Path>,
     experimentalist: Option<&str>,
     header_items: &[String],
     incremental: bool,
     progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    parallelism: IngestParallelism,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
-    let db_path = resolve_ingest_target(beamtime_dir, data_root);
-    let conn = open_or_create_db_at(&db_path)?;
-    let beamtime_id = ensure_bt_beamtime(&conn, beamtime_dir)?;
-    upsert_beamtime_record(&conn, beamtime_dir, data_root, experimentalist)?;
-    let (discovered, layout) = discover_paths_for_catalog_ingest(beamtime_dir)?;
-    update_beamtime_catalog_layout(&conn, beamtime_id, layout)?;
-    let path_to_mtime: HashMap<String, i64> = discovered
-        .iter()
-        .map(|(p, m)| (p.to_string_lossy().to_string(), *m))
-        .collect();
-    let paths: Vec<PathBuf> = discovered.into_iter().map(|(p, _)| p).collect();
-    let to_ingest: Vec<PathBuf> = if incremental {
-        let existing: HashMap<String, i64> = conn
-            .prepare(
-                "SELECT path, source_mtime FROM fits_files WHERE beamtime_id = ?1",
-            )?
-            .query_map(rusqlite::params![beamtime_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        paths
-            .into_iter()
-            .filter(|p| {
-                let key = p.to_string_lossy().to_string();
-                let mtime = path_to_mtime.get(&key).copied().unwrap_or(0);
-                existing
-                    .get(&key)
-                    .is_none_or(|&stored| stored == 0 || mtime > stored)
-            })
-            .collect()
-    } else {
-        paths
-    };
-    let total = to_ingest.len() as u32;
-    let mut processed: u32 = 0;
-    let opts = ReadFitsOptions {
-        header_items: header_items.to_vec(),
-        batch_size: BATCH_SIZE,
-        ..ReadFitsOptions::default()
-    };
-    for chunk in to_ingest.chunks(BATCH_SIZE) {
-        if cancel
-            .as_ref()
-            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-            .unwrap_or(false)
-        {
-            break;
-        }
-        let chunk_vec: Vec<PathBuf> = chunk.to_vec();
-        let df = read_fits_metadata_batch(chunk_vec, &opts)?;
-        upsert_fits_and_bt_batch(&conn, beamtime_id, &df, &path_to_mtime)?;
-        processed = (processed as usize + chunk.len()).min(to_ingest.len()) as u32;
-        if let Some(ref tx) = progress_tx {
-            let _ = tx.send((processed, total));
-        }
-    }
-    let path_list: Vec<&str> = path_to_mtime.keys().map(|s| s.as_str()).collect();
-    prune_fits_files(&conn, beamtime_id, &path_list)?;
-    prune_bt_scan_points(&conn, &path_list)?;
-    super::profile_persist::recompute_reflectivity_profiles_for_beamtime(&conn, beamtime_id)?;
-    Ok(db_path)
+    ingest_beamtime_with_context(
+        beamtime_dir,
+        data_root,
+        experimentalist,
+        header_items,
+        incremental,
+        progress_tx,
+        parallelism,
+        cancel,
+    )
 }
 
-#[cfg(not(feature = "parallel_ingest"))]
-pub(crate) fn upsert_fits_and_bt_batch(
-    conn: &rusqlite::Connection,
-    beamtime_id: i64,
-    df: &DataFrame,
-    path_to_mtime: &HashMap<String, i64>,
-) -> Result<()> {
-    let n = df.height();
-    if n == 0 {
-        return Ok(());
-    }
-    let file_path_col = df
-        .column("file_path")
-        .map_err(|e| CatalogError::Validation(e.to_string()))?
-        .str()
-        .map_err(|e| CatalogError::Validation(e.to_string()))?;
-    let get_str = |name: &str| -> Result<Vec<Option<String>>> {
-        match df.column(name) {
-            Ok(c) => Ok(c
-                .str()
-                .map_err(|e| CatalogError::Validation(e.to_string()))?
-                .iter()
-                .map(|s| s.map(|v| v.to_string()))
-                .collect()),
-            _ => Ok(std::iter::repeat_n(None, n).collect()),
-        }
-    };
-    let get_i64 = |name: &str| -> Result<Vec<Option<i64>>> {
-        match df.column(name) {
-            Ok(c) => Ok(c
-                .i64()
-                .map_err(|e| CatalogError::Validation(e.to_string()))?
-                .iter()
-                .collect()),
-            _ => Ok(std::iter::repeat_n(None, n).collect()),
-        }
-    };
-    let get_f64 = |name: &str| -> Result<Vec<Option<f64>>> {
-        match df.column(name) {
-            Ok(c) => Ok(c
-                .f64()
-                .map_err(|e| CatalogError::Validation(e.to_string()))?
-                .iter()
-                .collect()),
-            _ => Ok(std::iter::repeat_n(None, n).collect()),
-        }
-    };
-    let data_offset = get_i64("data_offset")?;
-    let naxis1 = get_i64("naxis1")?;
-    let naxis2 = get_i64("naxis2")?;
-    let bitpix = get_i64("bitpix")?;
-    let bzero = get_i64("bzero")?;
-    let file_stem_col = get_str("file_name")?;
-    let beamline_energy = get_f64("Beamline Energy")?;
-    let sample_theta = get_f64("Sample Theta")?;
-    let ccd_theta = get_f64("CCD Theta")?;
-    let epu = get_f64("EPU Polarization")?;
-    let exposure = get_f64("EXPOSURE")?;
-    let mut stmt = conn.prepare_cached(
-        r#"
-        INSERT OR REPLACE INTO bt_scan_points (
-            uid, stream_uid, scan_uid, sample_id, seq_index, time,
-            exposure, beamline_energy, epu_polarization, sample_theta, ccd_theta,
-            source_path, source_data_offset, source_naxis1, source_naxis2,
-            source_bitpix, source_bzero, source_mtime, beam_row, beam_col, beam_sigma,
-            fits_file_id
-        ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, 0,
-            ?6, ?7, ?8, ?9, ?10,
-            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
-        )"#,
-    )?;
-    for i in 0..n {
-        let path_str = file_path_col.get(i).unwrap_or("").to_string();
-        let mtime = path_to_mtime.get(&path_str).copied().unwrap_or(0);
-        let stem = file_stem_col
-            .get(i)
-            .cloned()
-            .flatten()
-            .unwrap_or_default();
-        let (sample_name, tags, scan_number, frame_number, parse_ok) = stem_parse_fields(&stem);
-        let sample_id_row = ensure_bt_sample(conn, beamtime_id, &sample_name)?;
-        let fits_sample_id = if parse_ok {
-            Some(sample_id_row)
-        } else {
-            None
-        };
-        let file_id = upsert_fits_file_row(
-            conn,
-            beamtime_id,
-            fits_sample_id,
-            &path_str,
-            &stem,
-            scan_number,
-            frame_number,
-            parse_ok,
-            mtime,
-        )?;
-        set_fits_file_tags(conn, file_id, &tags)?;
-        let scan_no = scan_number;
-        let frame_no = frame_number;
-        let scan_uid = format!("s_{}_{}", beamtime_id, scan_no);
-        let stream_uid = format!("st_{}_{}", beamtime_id, scan_no);
-        let point_uid = format!("sp_{}_{}_{}", beamtime_id, scan_no, frame_no);
-        let _ = ensure_bt_scan(conn, beamtime_id, sample_id_row, scan_no)?;
-        let _ = ensure_bt_stream(conn, beamtime_id, scan_no)?;
-        stmt.execute(rusqlite::params![
-            point_uid,
-            stream_uid,
-            scan_uid,
-            sample_id_row,
-            frame_no,
-            exposure.get(i).copied().flatten(),
-            beamline_energy.get(i).copied().flatten(),
-            epu.get(i).copied().flatten(),
-            sample_theta.get(i).copied().flatten(),
-            ccd_theta.get(i).copied().flatten(),
-            path_str,
-            data_offset.get(i).copied().flatten().unwrap_or(0),
-            naxis1.get(i).copied().flatten().unwrap_or(0),
-            naxis2.get(i).copied().flatten().unwrap_or(0),
-            bitpix.get(i).copied().flatten().unwrap_or(0),
-            bzero.get(i).copied().flatten().unwrap_or(0),
-            mtime,
-            Option::<i64>::None,
-            Option::<i64>::None,
-            Option::<f64>::None,
-            file_id,
-        ])?;
-    }
-    Ok(())
-}
-
-pub fn resolve_ingest_target(beamtime_dir: &Path, data_root: Option<&Path>) -> PathBuf {
-    match data_root {
-        Some(root) => super::data_root_catalog_path(root),
-        None => super::resolve_catalog_path(beamtime_dir),
-    }
-}
-
-pub(crate) fn upsert_beamtime_record(
-    conn: &rusqlite::Connection,
+#[cfg(feature = "parallel_ingest")]
+pub fn ingest_beamtime_pipelined(
     beamtime_dir: &Path,
-    data_root: Option<&Path>,
-    experimentalist: Option<&str>,
-) -> Result<()> {
-    let path_str = beamtime_dir.to_string_lossy().to_string();
-    let data_root_str = data_root.and_then(|p| p.to_str()).unwrap_or("");
-    let expt_str = experimentalist.unwrap_or("");
-    conn.execute(
-        "INSERT INTO bt_beamtimes (beamtime_path, data_root, experimentalist, last_indexed_at)
-         VALUES (?1, ?2, ?3, strftime('%s','now'))
-         ON CONFLICT(beamtime_path) DO UPDATE SET
-             data_root = excluded.data_root,
-             experimentalist = excluded.experimentalist,
-             last_indexed_at = excluded.last_indexed_at",
-        rusqlite::params![path_str, data_root_str, expt_str],
-    )?;
-    Ok(())
+    header_items: &[String],
+    incremental: bool,
+    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+) -> Result<PathBuf> {
+    ingest_beamtime(beamtime_dir, header_items, incremental, progress_tx)
 }
 
-pub(crate) fn ensure_bt_beamtime(conn: &rusqlite::Connection, beamtime_dir: &Path) -> Result<i64> {
-    let path_str = beamtime_dir.to_string_lossy().to_string();
-    conn.execute(
-        "INSERT OR IGNORE INTO bt_beamtimes (beamtime_path) VALUES (?1)",
-        rusqlite::params![path_str],
-    )?;
-    let id: i64 = conn.query_row(
-        "SELECT id FROM bt_beamtimes WHERE beamtime_path = ?1",
-        rusqlite::params![path_str],
-        |r| r.get(0),
-    )?;
-    Ok(id)
-}
-
-fn ensure_bt_scan(
-    conn: &rusqlite::Connection,
-    beamtime_id: i64,
-    sample_id: i64,
-    scan_number: i64,
-) -> Result<String> {
-    let uid = format!("s_{}_{}", beamtime_id, scan_number);
-    conn.execute(
-        "INSERT OR REPLACE INTO bt_scans (uid, beamtime_id, sample_id) VALUES (?1, ?2, ?3)",
-        rusqlite::params![uid, beamtime_id, sample_id],
-    )?;
-    Ok(uid)
-}
-
-fn ensure_bt_stream(
-    conn: &rusqlite::Connection,
-    beamtime_id: i64,
-    scan_number: i64,
-) -> Result<String> {
-    let scan_uid = format!("s_{}_{}", beamtime_id, scan_number);
-    let stream_uid = format!("st_{}_{}", beamtime_id, scan_number);
-    conn.execute(
-        "INSERT OR IGNORE INTO bt_streams (uid, scan_uid, name) VALUES (?1, ?2, 'primary')",
-        rusqlite::params![stream_uid, scan_uid],
-    )?;
-    Ok(stream_uid)
-}
-
-pub(crate) fn upsert_bt_batch_rows(
-    conn: &rusqlite::Connection,
-    beamtime_id: i64,
-    rows: &[BtIngestRow],
-    path_to_mtime: &HashMap<String, i64>,
-) -> Result<()> {
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let mut stmt = conn.prepare_cached(
-        r#"
-        INSERT OR REPLACE INTO bt_scan_points (
-            uid, stream_uid, scan_uid, sample_id, seq_index, time,
-            exposure, beamline_energy, epu_polarization, sample_theta, ccd_theta,
-            source_path, source_data_offset, source_naxis1, source_naxis2,
-            source_bitpix, source_bzero, source_mtime, beam_row, beam_col, beam_sigma,
-            fits_file_id
-        ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, 0,
-            ?6, ?7, ?8, ?9, ?10,
-            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
-        )"#,
-    )?;
-    for row in rows {
-        let (sample_name, tags, scan_number, frame_number, parse_ok) =
-            stem_parse_fields(&row.file_name);
-        let sample_id_row = ensure_bt_sample(conn, beamtime_id, &sample_name)?;
-        let fits_sample_id = if parse_ok {
-            Some(sample_id_row)
-        } else {
-            None
-        };
-        let path_str = row.file_path.as_str();
-        let mtime = path_to_mtime.get(path_str).copied().unwrap_or(0);
-        let file_id = upsert_fits_file_row(
-            conn,
-            beamtime_id,
-            fits_sample_id,
-            path_str,
-            row.file_name.as_str(),
-            scan_number,
-            frame_number,
-            parse_ok,
-            mtime,
-        )?;
-        set_fits_file_tags(conn, file_id, &tags)?;
-        let scan_uid = format!("s_{}_{}", beamtime_id, scan_number);
-        let stream_uid = format!("st_{}_{}", beamtime_id, scan_number);
-        let point_uid = format!("sp_{}_{}_{}", beamtime_id, scan_number, frame_number);
-        let _ = ensure_bt_scan(conn, beamtime_id, sample_id_row, scan_number)?;
-        let _ = ensure_bt_stream(conn, beamtime_id, scan_number)?;
-        stmt.execute(rusqlite::params![
-            point_uid,
-            stream_uid,
-            scan_uid,
-            sample_id_row,
-            row.frame_number,
-            row.exposure,
-            row.beamline_energy,
-            row.epu_polarization,
-            row.sample_theta,
-            row.ccd_theta,
-            path_str,
-            row.data_offset,
-            row.naxis1,
-            row.naxis2,
-            row.bitpix,
-            row.bzero,
-            mtime,
-            Option::<i64>::None,
-            Option::<i64>::None,
-            Option::<f64>::None,
-            file_id,
-        ])?;
-    }
-    Ok(())
-}
-
-pub(crate) fn prune_bt_scan_points(
-    conn: &rusqlite::Connection,
-    known_source_paths: &[&str],
-) -> Result<()> {
-    if known_source_paths.is_empty() {
-        conn.execute("DELETE FROM bt_scan_points", [])?;
-        return Ok(());
-    }
-    let placeholders = known_source_paths
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "DELETE FROM bt_scan_points WHERE source_path IS NOT NULL AND source_path NOT IN ({})",
-        placeholders
+fn ingest_beamtime_inner(
+    beamtime_dir: &Path,
+    header_items: &[String],
+    incremental: bool,
+    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    parallelism: IngestParallelism,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<PathBuf> {
+    let parallelism = IngestParallelism::from_options_or_env(
+        parallelism.worker_threads,
+        parallelism.resource_fraction,
     );
-    conn.execute(&sql, rusqlite::params_from_iter(known_source_paths.iter()))?;
-    Ok(())
+    if !beamtime_dir.is_dir() {
+        return Err(CatalogError::Validation(format!(
+            "beamtime_dir is not a directory: {}",
+            beamtime_dir.display()
+        )));
+    }
+    let db_path = paths::default_catalog_db_path()?;
+    let nas_uri = paths::file_uri_for_path(beamtime_dir)?;
+    let zarr_path = paths::beamtime_zarr_path(beamtime_dir)?;
+    let date_label = beamtime_date_label(beamtime_dir);
+    let (discovered, layout) = discover_paths_for_catalog_ingest(beamtime_dir)?;
+    let _ = layout_label(layout);
+
+    let mut conn = db::establish_connection(&db_path)?;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i32)
+        .unwrap_or(0);
+
+    conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        diesel::delete(beamtimes::table.filter(beamtimes::nas_uri.eq(&nas_uri))).execute(conn)?;
+        diesel::insert_into(beamtimes::table)
+            .values((
+                beamtimes::nas_uri.eq(&nas_uri),
+                beamtimes::zarr_path.eq(zarr_path.to_string_lossy().as_ref()),
+                beamtimes::date.eq(&date_label),
+                beamtimes::last_indexed_at.eq(Some(now_secs)),
+            ))
+            .execute(conn)?;
+        Ok(())
+    })
+    .map_err(CatalogError::Diesel)?;
+
+    let beamtime_id: i32 = beamtimes::table
+        .filter(beamtimes::nas_uri.eq(&nas_uri))
+        .select(beamtimes::id)
+        .first(&mut conn)
+        .map_err(CatalogError::Diesel)?;
+
+    if discovered.is_empty() {
+        let _ = progress_tx.map(|tx| tx.send((0, 0)));
+        return Ok(db_path);
+    }
+
+    let paths_only: Vec<PathBuf> = discovered.iter().map(|(p, _)| p.clone()).collect();
+    let n_workers = parallelism.resolve_worker_count()?;
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(n_workers)
+        .build()
+        .map_err(|e| CatalogError::Validation(format!("rayon thread pool: {e}")))?;
+    let rows: Vec<BtIngestRow> = pool
+        .install(|| read_multiple_fits_headers_only_rows(paths_only.clone(), header_items))
+        .map_err(CatalogError::FitsReadFailed)?;
+
+    let zstore = open_zarr_store(&zarr_path).map_err(|e| CatalogError::Validation(e.to_string()))?;
+
+    let mut sample_cache: HashMap<String, i32> = HashMap::new();
+    let mut scan_cache: HashMap<i32, i32> = HashMap::new();
+
+    let unique_samples: HashSet<String> = rows
+        .iter()
+        .map(|r| {
+            let n = r.sample_name.trim();
+            if n.is_empty() {
+                "_".to_string()
+            } else {
+                n.to_string()
+            }
+        })
+        .collect();
+
+    conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        for name in &unique_samples {
+            diesel::insert_into(samples::table)
+                .values((
+                    samples::beamtime_id.eq(beamtime_id),
+                    samples::name.eq(name.as_str()),
+                    samples::representative_x.eq(0.0_f64),
+                    samples::representative_y.eq(0.0_f64),
+                    samples::representative_z.eq(0.0_f64),
+                ))
+                .execute(conn)?;
+            let sid: i32 = samples::table
+                .filter(samples::beamtime_id.eq(beamtime_id))
+                .filter(samples::name.eq(name.as_str()))
+                .select(samples::id)
+                .first(conn)?;
+            sample_cache.insert(name.clone(), sid);
+        }
+
+        let mut scan_first_sample: HashMap<i32, String> = HashMap::new();
+        for r in &rows {
+            let sn = r.scan_number as i32;
+            let sk = if r.sample_name.trim().is_empty() {
+                "_".to_string()
+            } else {
+                r.sample_name.clone()
+            };
+            scan_first_sample.entry(sn).or_insert(sk);
+        }
+        let unique_scans: HashSet<i32> = rows.iter().map(|r| r.scan_number as i32).collect();
+        for sn in &unique_scans {
+            let sk = scan_first_sample.get(sn).cloned().unwrap_or_else(|| "_".to_string());
+            let rep_sample = *sample_cache.get(&sk).ok_or_else(|| diesel::result::Error::NotFound)?;
+            diesel::insert_into(scans::table)
+                .values((
+                    scans::beamtime_id.eq(beamtime_id),
+                    scans::sample_id.eq(rep_sample),
+                    scans::scan_number.eq(*sn),
+                    scans::scan_type.eq("fixed_energy"),
+                    scans::started_at.eq(None::<String>),
+                    scans::ended_at.eq(None::<String>),
+                ))
+                .execute(conn)?;
+            let scid: i32 = scans::table
+                .filter(scans::beamtime_id.eq(beamtime_id))
+                .filter(scans::scan_number.eq(*sn))
+                .select(scans::id)
+                .first(conn)?;
+            scan_cache.insert(*sn, scid);
+        }
+
+        for (idx, row) in rows.iter().enumerate() {
+            if cancel
+                .as_ref()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .unwrap_or(false)
+            {
+                return Err(diesel::result::Error::RollbackTransaction);
+            }
+            let sample_key = if row.sample_name.trim().is_empty() {
+                "_".to_string()
+            } else {
+                row.sample_name.clone()
+            };
+            let sample_id = *sample_cache
+                .get(&sample_key)
+                .ok_or_else(|| diesel::result::Error::NotFound)?;
+
+            let scan_no = row.scan_number as i32;
+            let scan_id = *scan_cache
+                .get(&scan_no)
+                .ok_or_else(|| diesel::result::Error::NotFound)?;
+
+            let parse_flag = if row.scan_number == 0 || row.frame_number == 0 {
+                Some("parse_failure".to_string())
+            } else {
+                None
+            };
+
+            diesel::insert_into(files::table)
+                .values((
+                    files::beamtime_id.eq(beamtime_id),
+                    files::sample_id.eq(sample_id),
+                    files::scan_number.eq(scan_no),
+                    files::frame_number.eq(row.frame_number as i32),
+                    files::nas_uri.eq(row.file_path.as_str()),
+                    files::filename.eq(
+                        Path::new(&row.file_path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(""),
+                    ),
+                    files::parse_flag.eq(parse_flag.as_deref()),
+                    files::data_offset.eq(row.data_offset),
+                    files::naxis1.eq(row.naxis1 as i32),
+                    files::naxis2.eq(row.naxis2 as i32),
+                    files::bitpix.eq(row.bitpix as i32),
+                    files::bzero.eq(row.bzero),
+                ))
+                .execute(conn)?;
+
+            let file_id: i32 = files::table
+                .filter(files::beamtime_id.eq(beamtime_id))
+                .filter(files::nas_uri.eq(row.file_path.as_str()))
+                .select(files::id)
+                .first(conn)?;
+
+            if let Some(tag_slug) = row.tag.as_ref().filter(|t| !t.is_empty()) {
+                let tid: i32 = match tags::table
+                    .filter(tags::slug.eq(tag_slug.as_str()))
+                    .select(tags::id)
+                    .first(conn)
+                    .optional()?
+                {
+                    Some(id) => id,
+                    None => {
+                        diesel::insert_into(tags::table)
+                            .values(tags::slug.eq(tag_slug.as_str()))
+                            .execute(conn)?;
+                        tags::table
+                            .filter(tags::slug.eq(tag_slug.as_str()))
+                            .select(tags::id)
+                            .first(conn)?
+                    }
+                };
+                let ft_exists: Option<i32> = file_tags::table
+                    .filter(file_tags::file_id.eq(file_id))
+                    .filter(file_tags::tag_id.eq(tid))
+                    .select(file_tags::id)
+                    .first(conn)
+                    .optional()?;
+                if ft_exists.is_none() {
+                    diesel::insert_into(file_tags::table)
+                        .values((
+                            file_tags::file_id.eq(file_id),
+                            file_tags::tag_id.eq(tid),
+                        ))
+                        .execute(conn)?;
+                }
+            }
+
+            let sx = row.sample_x.unwrap_or(0.0);
+            let sy = row.sample_y.unwrap_or(0.0);
+            let sz = row.sample_z.unwrap_or(0.0);
+            let st = row.sample_theta.unwrap_or(0.0);
+            let ccd = row.ccd_theta.unwrap_or(0.0);
+            let epu = row.epu_polarization.unwrap_or(0.0);
+            let exp = row.exposure.unwrap_or(0.0);
+            let be = row.beamline_energy.unwrap_or(0.0);
+            let ring = row.ring_current.unwrap_or(0.0);
+            let ai3 = row.ai3_izero.unwrap_or(0.0);
+            let bcm = row.beam_current.unwrap_or(0.0);
+
+            diesel::insert_into(frames::table)
+                .values((
+                    frames::scan_id.eq(scan_id),
+                    frames::file_id.eq(file_id),
+                    frames::frame_number.eq(row.frame_number as i32),
+                    frames::zarr_group_key.eq(scan_no),
+                    frames::zarr_frame_index.eq(row.frame_number as i32),
+                    frames::acquired_at.eq(row.date_iso.clone()),
+                    frames::sample_x.eq(sx),
+                    frames::sample_y.eq(sy),
+                    frames::sample_z.eq(sz),
+                    frames::sample_theta.eq(st),
+                    frames::ccd_theta.eq(ccd),
+                    frames::beamline_energy.eq(be),
+                    frames::epu_polarization.eq(epu),
+                    frames::exposure.eq(exp),
+                    frames::ring_current.eq(ring),
+                    frames::ai3_izero.eq(ai3),
+                    frames::beam_current.eq(bcm),
+                    frames::quality_flag.eq(None::<String>),
+                ))
+                .execute(conn)?;
+
+            let _ = progress_tx.as_ref().map(|tx| {
+                tx.send(((idx + 1) as u32, rows.len() as u32))
+            });
+        }
+        Ok(())
+    })
+    .map_err(CatalogError::Diesel)?;
+
+    let mut indexed: Vec<(usize, Array2<i32>)> = pool.install(|| {
+        rows.par_iter()
+            .enumerate()
+            .map(|(i, row)| read_image_i32(row).map(|img| (i, img)))
+            .collect::<std::result::Result<Vec<_>, CatalogError>>()
+    })?;
+    indexed.sort_by_key(|(i, _)| *i);
+    for (i, img) in indexed {
+        let row = &rows[i];
+        write_frame_raw(
+            &zstore,
+            row.scan_number,
+            row.frame_number,
+            &img,
+        )
+        .map_err(|e| CatalogError::Validation(e.to_string()))?;
+    }
+
+    let _ = incremental;
+    Ok(db_path)
 }

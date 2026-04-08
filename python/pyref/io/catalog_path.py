@@ -1,56 +1,58 @@
 """
-Resolve SQLite catalog paths for a beamtime directory.
+Resolve the global SQLite catalog path.
 
-Mirrors ``resolve_catalog_path`` in the Rust catalog module (``src/catalog/mod.rs``).
-The catalog is stored at ``parent/.pyref/catalog.db`` when ``beamtime_dir`` has a
-non-root parent; otherwise at ``beamtime_dir/.pyref/catalog.db``.
+The catalog is a single database shared across beamtimes. Its default location is
+``<pyref_data_dir>/catalog.db``, where ``pyref_data_dir`` is ``$PYREF_HOME`` when that
+environment variable is set (created if missing), or the platform user data directory
+subdirectory ``pyref`` (for example macOS ``~/Library/Application Support/pyref``).
+
+Optional overrides (Rust IO layer): ``PYREF_CATALOG_DB`` forces the catalog file path;
+``PYREF_CACHE_ROOT`` sets the parent directory of each ``<beamtime_hash>/beamtime.zarr``
+tree (default remains ``<pyref_data_dir>/.cache/``). Parallel ingest reads
+``PYREF_INGEST_WORKER_THREADS`` or ``PYREF_INGEST_RESOURCE_FRACTION`` when Python
+passes neither ``worker_threads`` nor ``resource_fraction`` to ``ingest_beamtime``.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-PYREF_CATALOG_DIR = ".pyref"
 NEW_CATALOG_DB_NAME = "catalog.db"
+PYREF_CATALOG_DIR = ".pyref"
 
 
-def catalog_path_new(beamtime_dir: Path) -> Path:
+def catalog_path_new(_beamtime_dir: Path | None = None) -> Path:
     """
-    Return the catalog database path for a beamtime directory.
+    Return the default catalog database path (global; beamtime argument ignored).
 
     Parameters
     ----------
-    beamtime_dir : pathlib.Path
-        Beamtime root directory. Not required to exist.
+    _beamtime_dir : pathlib.Path, optional
+        Ignored. Retained for compatibility with older signatures.
 
     Returns
     -------
     pathlib.Path
-        ``parent / .pyref / catalog.db`` when ``beamtime_dir`` has a usable parent,
-        else ``beamtime_dir / .pyref / catalog.db``.
+        Path to ``catalog.db`` (may not exist yet).
     """
-    parent = beamtime_dir.parent
-    ps = parent.as_posix()
-    if ps and ps != "/":
-        return parent / PYREF_CATALOG_DIR / NEW_CATALOG_DB_NAME
-    return beamtime_dir / PYREF_CATALOG_DIR / NEW_CATALOG_DB_NAME
+    return resolve_catalog_path()
 
 
-def resolve_catalog_path(beamtime_dir: str | Path) -> Path:
+def resolve_catalog_path(_beamtime_dir: str | Path | None = None) -> Path:
     """
-    Return the catalog database path for a beamtime directory.
-
-    Resolves ``beamtime_dir`` with :meth:`pathlib.Path.resolve` for stable paths.
+    Return the default catalog database path via the Rust extension.
 
     Parameters
     ----------
-    beamtime_dir : str or pathlib.Path
-        Beamtime root directory.
+    _beamtime_dir : str or pathlib.Path, optional
+        Ignored. Retained for compatibility with older signatures.
 
     Returns
     -------
     pathlib.Path
-        Absolute path to the catalog database file (may not exist yet).
+        Resolved absolute path to the catalog SQLite file.
     """
-    d = Path(beamtime_dir).resolve()
-    return catalog_path_new(d).resolve()
+    from pyref.pyref import py_default_catalog_db_path
+
+    _ = _beamtime_dir
+    return Path(py_default_catalog_db_path()).resolve()

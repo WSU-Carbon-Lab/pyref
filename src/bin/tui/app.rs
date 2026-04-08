@@ -1480,14 +1480,20 @@ impl App {
             .iter()
             .map(|s| (*s).to_string())
             .collect();
+        let cfg = super::config::TuiConfig::load_or_default();
+        let parallelism = pyref::catalog::IngestParallelism::from_options_or_env(
+            cfg.ingest_worker_threads,
+            cfg.ingest_resource_fraction,
+        );
         let (tx, rx) = mpsc::channel();
         let (progress_tx, progress_rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = pyref::catalog::ingest_beamtime(
+            let result = pyref::catalog::ingest_beamtime_parallel(
                 path_for_thread.as_path(),
                 &header_items,
                 false,
                 Some(progress_tx),
+                parallelism,
             )
             .map(|_| ())
             .map_err(|e| e.to_string());
@@ -1518,12 +1524,18 @@ impl App {
             .iter()
             .map(|s| (*s).to_string())
             .collect();
+        let cfg = super::config::TuiConfig::load_or_default();
+        let parallelism = pyref::catalog::IngestParallelism::from_options_or_env(
+            cfg.ingest_worker_threads,
+            cfg.ingest_resource_fraction,
+        );
         thread::spawn(move || {
-            let result = pyref::catalog::ingest_beamtime(
+            let result = pyref::catalog::ingest_beamtime_parallel(
                 path_for_thread.as_path(),
                 &header_items,
                 false,
                 Some(progress_tx),
+                parallelism,
             )
             .map(|_| ())
             .map_err(|e| e.to_string());
@@ -2585,14 +2597,20 @@ impl App {
             .iter()
             .map(|s| (*s).to_string())
             .collect();
+        let cfg = super::config::TuiConfig::load_or_default();
+        let parallelism = pyref::catalog::IngestParallelism::from_options_or_env(
+            cfg.ingest_worker_threads,
+            cfg.ingest_resource_fraction,
+        );
         let (tx, rx) = mpsc::channel();
         let (progress_tx, progress_rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = pyref::catalog::ingest_beamtime(
+            let result = pyref::catalog::ingest_beamtime_parallel(
                 Path::new(&root_str),
                 &header_items,
                 false,
                 Some(progress_tx),
+                parallelism,
             )
             .map(|_| ())
             .map_err(|e| e.to_string());
@@ -3318,6 +3336,11 @@ impl App {
             .iter()
             .map(|s| s.to_string())
             .collect();
+        let cfg = super::config::TuiConfig::load_or_default();
+        let parallelism = pyref::catalog::IngestParallelism::from_options_or_env(
+            cfg.ingest_worker_threads,
+            cfg.ingest_resource_fraction,
+        );
 
         thread::spawn(move || {
             let result = pyref::catalog::ingest_beamtime_with_context(
@@ -3327,6 +3350,7 @@ impl App {
                 &default_headers,
                 true, // incremental
                 Some(progress_tx),
+                parallelism,
                 Some(cancel_clone),
             );
             let _ = done_tx.send(result.map(|_| ()).map_err(|e| e.to_string()));

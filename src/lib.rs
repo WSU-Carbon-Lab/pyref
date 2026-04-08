@@ -13,6 +13,9 @@ pub mod path_policy;
 #[cfg(feature = "catalog")]
 pub mod catalog;
 
+#[cfg(feature = "catalog")]
+pub mod schema;
+
 pub use errors::FitsError;
 pub use io::options::{ReadFitsOptions, ScanFitsOptions};
 pub use io::schema::FitsMetadataSchema;
@@ -45,8 +48,8 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     use crate::catalog::{
-        classify_scan_type, get_overrides, ingest_beamtime, scan_from_catalog, set_override,
-        CatalogFilter, ReflectivityScanType,
+        classify_scan_type, get_overrides, ingest_beamtime_parallel, paths, scan_from_catalog,
+        set_override, CatalogFilter, IngestParallelism, ReflectivityScanType,
     };
 
     #[global_allocator]
@@ -337,15 +340,36 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     #[pyfunction]
+    #[pyo3(name = "py_default_catalog_db_path")]
+    pub fn py_default_catalog_db_path() -> PyResult<String> {
+        match paths::default_catalog_db_path() {
+            Ok(p) => Ok(p.to_string_lossy().to_string()),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
     #[pyo3(name = "py_ingest_beamtime")]
-    #[pyo3(signature = (beamtime_path, header_items, incremental=true), text_signature = "(beamtime_path, header_items, incremental=True)")]
+    #[pyo3(
+        signature = (beamtime_path, header_items, incremental=true, worker_threads=None, resource_fraction=None),
+        text_signature = "(beamtime_path, header_items, incremental=True, worker_threads=None, resource_fraction=None)"
+    )]
     pub fn py_ingest_beamtime(
         beamtime_path: &str,
         header_items: Vec<String>,
         incremental: bool,
+        worker_threads: Option<usize>,
+        resource_fraction: Option<f64>,
     ) -> PyResult<String> {
         let path = std::path::Path::new(beamtime_path);
-        match ingest_beamtime(path, &header_items, incremental, None) {
+        let parallelism = IngestParallelism {
+            worker_threads,
+            resource_fraction,
+        };
+        match ingest_beamtime_parallel(path, &header_items, incremental, None, parallelism) {
             Ok(p) => Ok(p.to_string_lossy().to_string()),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 e.to_string(),
@@ -487,6 +511,7 @@ mod extension {
         )?)?;
         #[cfg(feature = "catalog")]
         {
+            m.add_function(pyo3::wrap_pyfunction!(py_default_catalog_db_path, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_ingest_beamtime, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_scan_from_catalog, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_get_overrides, m)?)?;

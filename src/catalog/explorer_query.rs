@@ -1,7 +1,9 @@
-#![cfg(feature = "catalog")]
-
-use crate::catalog::{open_catalog_db, Result};
 use std::path::Path;
+
+use crate::catalog::{open_catalog_db, paths, Result};
+use crate::schema::beamtimes;
+use diesel::prelude::*;
+use diesel::OptionalExtension;
 
 #[derive(Debug, Clone)]
 pub struct ExptMeta {
@@ -25,97 +27,48 @@ pub enum DbCatalogStatus {
     NotIndexed,
 }
 
-/// Returns experimentalists that have at least one beamtime indexed under data_root.
-pub fn list_experimentalists(db_path: &Path, data_root: &Path) -> Result<Vec<ExptMeta>> {
-    if !db_path.exists() {
-        return Ok(vec![]);
-    }
-    let conn = open_catalog_db(db_path)?;
-    let data_root_str = data_root.to_string_lossy().to_string();
-    let mut stmt = conn.prepare(
-        "SELECT experimentalist,
-                COUNT(*) as beamtime_count,
-                COALESCE(
-                    (SELECT COUNT(*) FROM bt_scan_points WHERE scan_uid IN
-                     (SELECT uid FROM bt_scans WHERE beamtime_id IN
-                      (SELECT id FROM bt_beamtimes WHERE data_root = ?1 AND experimentalist = bt_beamtimes.experimentalist))),
-                    0
-                ) as fits_count,
-                MAX(last_indexed_at) as last_indexed
-         FROM bt_beamtimes
-         WHERE data_root = ?1 AND experimentalist != ''
-         GROUP BY experimentalist
-         ORDER BY experimentalist"
-    )?;
-    let rows = stmt.query_map(rusqlite::params![&data_root_str], |row| {
-        Ok(ExptMeta {
-            name: row.get(0)?,
-            beamtime_count: row.get::<_, i64>(1)? as u32,
-            fits_count: row.get::<_, i64>(2)? as u32,
-            last_indexed: row.get(3)?,
-        })
-    })?;
-    rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.into())
+pub fn list_experimentalists(_db_path: &Path, _data_root: &Path) -> Result<Vec<ExptMeta>> {
+    Ok(Vec::new())
 }
 
-/// Returns beamtimes for one experimentalist under data_root.
 pub fn list_beamtimes_for_expt(
-    db_path: &Path,
-    data_root: &Path,
-    experimentalist: &str,
+    _db_path: &Path,
+    _data_root: &Path,
+    _experimentalist: &str,
 ) -> Result<Vec<BeamtimeMeta>> {
-    if !db_path.exists() {
-        return Ok(vec![]);
-    }
-    let conn = open_catalog_db(db_path)?;
-    let data_root_str = data_root.to_string_lossy().to_string();
-    let mut stmt = conn.prepare(
-        "SELECT beamtime_path, last_indexed_at,
-                COALESCE((SELECT COUNT(*) FROM bt_scan_points WHERE scan_uid IN
-                 (SELECT uid FROM bt_scans WHERE beamtime_id = bt_beamtimes.id)), 0) as fits_count
-         FROM bt_beamtimes
-         WHERE data_root = ?1 AND experimentalist = ?2
-         ORDER BY beamtime_path"
-    )?;
-    let rows = stmt.query_map(rusqlite::params![&data_root_str, experimentalist], |row| {
-        Ok(BeamtimeMeta {
-            path: std::path::PathBuf::from(row.get::<_, String>(0)?),
-            fits_count: Some(row.get::<_, i64>(2)? as u32),
-            last_indexed: row.get(1)?,
-        })
-    })?;
-    rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.into())
+    Ok(Vec::new())
 }
 
-/// Returns catalog status for a beamtime path.
-/// Staleness: compares dir mtime with last_indexed_at.
 pub fn catalog_status_for_path(db_path: &Path, beamtime_path: &Path) -> DbCatalogStatus {
     if !db_path.exists() {
         return DbCatalogStatus::NotIndexed;
     }
-    let conn = match open_catalog_db(db_path) {
+    let mut conn = match open_catalog_db(db_path) {
         Ok(c) => c,
         Err(_) => return DbCatalogStatus::NotIndexed,
     };
-    let path_str = beamtime_path.to_string_lossy().to_string();
-    let last_indexed_at: Option<i64> = conn
-        .query_row(
-            "SELECT last_indexed_at FROM bt_beamtimes WHERE beamtime_path = ?1",
-            rusqlite::params![&path_str],
-            |r| r.get(0),
-        )
-        .ok();
-
-    match last_indexed_at {
-        None => DbCatalogStatus::NotIndexed,
-        Some(indexed_timestamp) => {
-            let dir_mtime = get_dir_max_file_mtime(beamtime_path).unwrap_or(0);
-            if dir_mtime > indexed_timestamp {
-                DbCatalogStatus::Stale
-            } else {
-                DbCatalogStatus::Indexed
-            }
-        }
+    let nas_uri = match paths::file_uri_for_path(beamtime_path) {
+        Ok(u) => u,
+        Err(_) => return DbCatalogStatus::NotIndexed,
+    };
+    let nested = match beamtimes::table
+        .filter(beamtimes::nas_uri.eq(&nas_uri))
+        .select(beamtimes::last_indexed_at)
+        .first::<Option<i32>>(&mut conn)
+        .optional()
+    {
+        Ok(n) => n,
+        Err(_) => return DbCatalogStatus::NotIndexed,
+    };
+    let Some(Some(ts)) = nested else {
+        return DbCatalogStatus::NotIndexed;
+    };
+    let indexed_timestamp = ts as i64;
+    let dir_mtime = get_dir_max_file_mtime(beamtime_path).unwrap_or(0);
+    if dir_mtime > indexed_timestamp {
+        DbCatalogStatus::Stale
+    } else {
+        DbCatalogStatus::Indexed
     }
 }
 

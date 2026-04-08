@@ -203,11 +203,44 @@ def ingest_beamtime(
     beamtime_path: FilePath,
     header_items: list[str] | None = None,
     incremental: bool = True,
+    *,
+    worker_threads: int | None = None,
+    resource_fraction: float | None = None,
 ) -> Path:
+    """
+    Ingest a beamtime directory into the global catalog and local zarr cache.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Root directory of the beamtime (ALS layout with ``CCD`` or ``Axis Photonique``).
+    header_items : list of str, optional
+        FITS primary HDU keys to read during ingest; defaults to the same keys as
+        :data:`DEFAULT_HEADER_KEYS` extended by the Rust ingest list when omitted.
+    incremental : bool, optional
+        Reserved for future incremental ingest semantics; passed through to Rust.
+    worker_threads : int, optional
+        Parallel FITS reader worker count. Mutually exclusive with
+        ``resource_fraction``.
+    resource_fraction : float, optional
+        Fraction of ``available_parallelism()`` used for reader workers, in ``(0, 1]``.
+        Mutually exclusive with ``worker_threads``.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute path to the global ``catalog.db``.
+    """
     from pyref.pyref import py_ingest_beamtime
 
     keys = header_items if header_items is not None else list(DEFAULT_HEADER_KEYS)
-    out = py_ingest_beamtime(str(Path(beamtime_path).resolve()), keys, incremental)
+    out = py_ingest_beamtime(
+        str(Path(beamtime_path).resolve()),
+        keys,
+        incremental,
+        worker_threads,
+        resource_fraction,
+    )
     return Path(out)
 
 
@@ -216,27 +249,22 @@ def get_overrides(
     path: str | None = None,
 ) -> pl.DataFrame:
     """
-    Read user metadata overrides from the catalog database.
-
-    Merges rows from the legacy ``overrides`` table (keys are ``files.path``) and
-    from ``bt_file_overrides`` (keys match ``bt_scan_points.source_path`` when
-    ingest used the normalized bt_* layout without ``files`` rows). The result
-    always exposes columns ``path``, ``sample_name``, ``tag``, and ``notes``; for
-    bt-only overrides, ``path`` is the FITS filesystem path.
+    Read user metadata overrides from the ``file_overrides`` table.
 
     Parameters
     ----------
     catalog_path : str or pathlib.Path
-        Resolved path to the SQLite catalog (for example the return value of
+        Path to the global catalog database (for example the return value of
         :func:`ingest_beamtime`).
     path : str, optional
-        When given, return only overrides for this exact path (looked up in both
-        tables). When omitted, return all rows from both sources in sequence.
+        When given, return only overrides whose ``source_path`` equals this string.
+        When omitted, return all override rows.
 
     Returns
     -------
     polars.DataFrame
-        Zero or more override rows with consistent column names.
+        Zero or more rows with columns ``path``, ``sample_name``, ``tag``, and
+        ``notes``.
     """
     from pyref.pyref import py_get_overrides
 
@@ -251,21 +279,17 @@ def set_override(
     notes: str | None = None,
 ) -> None:
     """
-    Upsert sample name, tag, or notes for a catalog-backed file path.
+    Upsert sample name, tag, or notes for a row in ``file_overrides``.
 
-    If ``path`` equals ``files.path``, updates the legacy ``overrides`` table.
-    Otherwise, if ``path`` equals ``bt_scan_points.source_path`` (typical when
-    the catalog holds bt_* scan points but no ``files`` row for that path),
-    updates ``bt_file_overrides``. Scans from the catalog resolve display fields
-    with ``COALESCE(override, ingested)`` for sample name and tag.
+    The ``path`` must match ``files.nas_uri`` for an ingested file (use the
+    ``file_path`` column from :func:`scan_experiment`).
 
     Parameters
     ----------
     catalog_path : str or pathlib.Path
         Path to the catalog SQLite database.
     path : str
-        Must match an existing ``files.path`` or ``bt_scan_points.source_path``
-        string exactly (use paths from the scan metadata frame when unsure).
+        Must match ``files.nas_uri`` for an existing file row.
     sample_name : str, optional
         Override sample name, or ``None`` to clear that field on upsert.
     tag : str, optional

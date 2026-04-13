@@ -14,11 +14,15 @@ from pathlib import Path
 __author__ = """Harlan Heilman"""
 __email__ = "Harlan.Heilman@wsu.edu"
 
-from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
-from pyref.nexafs import accessor  # noqa: F401 - registers df.nexafs accessor
-from pyref.io import scan_experiment, build_catalog
+from pyref.io import (
+    fits_accessor,  # noqa: F401 - registers df.fits accessor
+    list_beamtimes,
+    read_beamtime,
+)
+from pyref.io.readers import read_experiment, read_fits
 from pyref.loader import PrsoxrLoader
 from pyref.masking import InteractiveImageMasker
+from pyref.nexafs import accessor  # noqa: F401 - registers df.nexafs accessor
 from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std
 
 
@@ -33,6 +37,8 @@ __all__ = [
     "err_prop_div",
     "err_prop_mult",
     "get_data_path",
+    "list_beamtimes",
+    "read_beamtime",
     "read_experiment",
     "read_fits",
     "weighted_mean",

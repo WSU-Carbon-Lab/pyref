@@ -5,16 +5,16 @@
 //! connection in the child; do not share a connection across process boundaries.
 //!
 //! FITS header reads and pixel reads for zarr use a [`rayon::ThreadPool`] sized by
-//! [`crate::catalog::IngestParallelism`] (after [`IngestParallelism::from_options_or_env`]); nested
-//! [`rayon::prelude::ParallelIterator`] work runs on that pool via [`rayon::ThreadPool::install`].
-//! Diesel transactions and [`super::zarr_write::write_frame_raw`] run on the calling thread in
+//! [`crate::catalog::IngestParallelism`] (after [`IngestParallelism::from_options_or_env`]). Work is
+//! parallelized **per scan** (each worker owns one scan's files sequentially); nested
+//! [`rayon::prelude::ParallelIterator`] runs on that pool via [`rayon::ThreadPool::install`]. Diesel
+//! transactions and [`super::zarr_write::write_frame_raw`] run on the calling thread in global row
 //! order so catalog rows and zarr datasets stay aligned.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 
 use diesel::prelude::*;
 use diesel::OptionalExtension;
@@ -26,6 +26,9 @@ use crate::io::BtIngestRow;
 use crate::loader::read_multiple_fits_headers_only_rows;
 use crate::schema::{beamtimes, file_tags, files, frames, samples, scans, tags};
 
+use super::ingest_progress::{
+    layout_and_groups_from_paths, BeamtimeIngestLayout, IngestProgress, IngestProgressSink,
+};
 use super::layout::BeamtimeLayout;
 use super::parallelism::IngestParallelism;
 use super::zarr_write::{open_zarr_store, write_frame_raw};
@@ -79,6 +82,14 @@ fn read_image_i32(row: &BtIngestRow) -> Result<Array2<i32>> {
         .map_err(|e| CatalogError::Validation(e.to_string()))
 }
 
+/// Returns scan and file counts from discovered FITS paths using filename stems only (no FITS I/O).
+pub fn beamtime_ingest_layout(beamtime_dir: &Path) -> Result<BeamtimeIngestLayout> {
+    let (discovered, _) = discover_paths_for_catalog_ingest(beamtime_dir)?;
+    let paths: Vec<PathBuf> = discovered.into_iter().map(|(p, _)| p).collect();
+    let (layout, _) = layout_and_groups_from_paths(&paths);
+    Ok(layout)
+}
+
 fn beamtime_date_label(beamtime_dir: &Path) -> String {
     beamtime_dir
         .file_name()
@@ -92,13 +103,14 @@ pub fn ingest_beamtime(
     beamtime_dir: &Path,
     header_items: &[String],
     incremental: bool,
-    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
 ) -> Result<PathBuf> {
+    let progress = progress_tx.map(IngestProgressSink::from_channel);
     ingest_beamtime_inner(
         beamtime_dir,
         header_items,
         incremental,
-        progress_tx,
+        progress,
         IngestParallelism::default(),
         None,
     )
@@ -109,14 +121,34 @@ pub fn ingest_beamtime_parallel(
     beamtime_dir: &Path,
     header_items: &[String],
     incremental: bool,
-    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
+    parallelism: IngestParallelism,
+) -> Result<PathBuf> {
+    let progress = progress_tx.map(IngestProgressSink::from_channel);
+    ingest_beamtime_inner(
+        beamtime_dir,
+        header_items,
+        incremental,
+        progress,
+        parallelism,
+        None,
+    )
+}
+
+/// Ingest with structured progress (layout, phases, per-file completion after zarr) and optional
+/// legacy channel behavior via [`IngestProgressSink::from_channel`].
+pub fn ingest_beamtime_with_progress_sink(
+    beamtime_dir: &Path,
+    header_items: &[String],
+    incremental: bool,
+    progress: Option<IngestProgressSink>,
     parallelism: IngestParallelism,
 ) -> Result<PathBuf> {
     ingest_beamtime_inner(
         beamtime_dir,
         header_items,
         incremental,
-        progress_tx,
+        progress,
         parallelism,
         None,
     )
@@ -129,7 +161,7 @@ pub fn ingest_beamtime_with_context(
     _experimentalist: Option<&str>,
     header_items: &[String],
     incremental: bool,
-    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
     parallelism: IngestParallelism,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
@@ -140,11 +172,12 @@ pub fn ingest_beamtime_with_context(
     {
         return Err(CatalogError::Validation("ingest cancelled".into()));
     }
+    let progress = progress_tx.map(IngestProgressSink::from_channel);
     ingest_beamtime_inner(
         beamtime_dir,
         header_items,
         incremental,
-        progress_tx,
+        progress,
         parallelism,
         cancel,
     )
@@ -157,7 +190,7 @@ pub fn ingest_beamtime_pipelined_with_context(
     experimentalist: Option<&str>,
     header_items: &[String],
     incremental: bool,
-    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
     parallelism: IngestParallelism,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
@@ -178,7 +211,7 @@ pub fn ingest_beamtime_pipelined(
     beamtime_dir: &Path,
     header_items: &[String],
     incremental: bool,
-    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
 ) -> Result<PathBuf> {
     ingest_beamtime(beamtime_dir, header_items, incremental, progress_tx)
 }
@@ -187,7 +220,7 @@ fn ingest_beamtime_inner(
     beamtime_dir: &Path,
     header_items: &[String],
     incremental: bool,
-    progress_tx: Option<mpsc::Sender<(u32, u32)>>,
+    progress: Option<IngestProgressSink>,
     parallelism: IngestParallelism,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
@@ -235,19 +268,65 @@ fn ingest_beamtime_inner(
         .map_err(CatalogError::Diesel)?;
 
     if discovered.is_empty() {
-        let _ = progress_tx.map(|tx| tx.send((0, 0)));
+        if let Some(ref sink) = progress {
+            sink.emit(IngestProgress::Layout {
+                total_files: 0,
+                scans: vec![],
+            });
+        }
         return Ok(db_path);
     }
 
     let paths_only: Vec<PathBuf> = discovered.iter().map(|(p, _)| p.clone()).collect();
+    let (layout_summary, scan_groups) = layout_and_groups_from_paths(&paths_only);
+    if let Some(ref sink) = progress {
+        sink.emit(IngestProgress::Layout {
+            total_files: layout_summary.total_files as u32,
+            scans: layout_summary
+                .scans
+                .iter()
+                .map(|s| (s.scan_number, s.file_count as u32))
+                .collect(),
+        });
+        sink.emit(IngestProgress::Phase {
+            name: "headers".into(),
+        });
+    }
+
     let n_workers = parallelism.resolve_worker_count()?;
     let pool = ThreadPoolBuilder::new()
         .num_threads(n_workers)
         .build()
         .map_err(|e| CatalogError::Validation(format!("rayon thread pool: {e}")))?;
-    let rows: Vec<BtIngestRow> = pool
-        .install(|| read_multiple_fits_headers_only_rows(paths_only.clone(), header_items))
+    let header_groups: Vec<Vec<BtIngestRow>> = pool
+        .install(|| {
+            scan_groups
+                .par_iter()
+                .map(|(_sn, paths)| {
+                    read_multiple_fits_headers_only_rows(paths.clone(), header_items)
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+        })
         .map_err(CatalogError::FitsReadFailed)?;
+    let mut rows: Vec<BtIngestRow> = header_groups.into_iter().flatten().collect();
+    rows.sort_by(|a, b| {
+        (
+            a.scan_number,
+            a.frame_number,
+            a.file_path.as_str(),
+        )
+            .cmp(&(
+                b.scan_number,
+                b.frame_number,
+                b.file_path.as_str(),
+            ))
+    });
+
+    if let Some(ref sink) = progress {
+        sink.emit(IngestProgress::Phase {
+            name: "catalog".into(),
+        });
+    }
 
     let zstore = open_zarr_store(&zarr_path).map_err(|e| CatalogError::Validation(e.to_string()))?;
 
@@ -442,22 +521,53 @@ fn ingest_beamtime_inner(
                 ))
                 .execute(conn)?;
 
-            let _ = progress_tx.as_ref().map(|tx| {
-                tx.send(((idx + 1) as u32, rows.len() as u32))
-            });
+            if let Some(ref sink) = progress {
+                sink.legacy_catalog_row((idx + 1) as u32, rows.len() as u32);
+            }
         }
         Ok(())
     })
     .map_err(CatalogError::Diesel)?;
 
-    let mut indexed: Vec<(usize, Array2<i32>)> = pool.install(|| {
-        rows.par_iter()
-            .enumerate()
-            .map(|(i, row)| read_image_i32(row).map(|img| (i, img)))
-            .collect::<std::result::Result<Vec<_>, CatalogError>>()
+    if let Some(ref sink) = progress {
+        sink.emit(IngestProgress::Phase {
+            name: "zarr".into(),
+        });
+    }
+
+    let scan_total_map: HashMap<i32, u32> = layout_summary
+        .scans
+        .iter()
+        .map(|s| (s.scan_number, s.file_count as u32))
+        .collect();
+    let mut by_scan: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (i, r) in rows.iter().enumerate() {
+        by_scan
+            .entry(r.scan_number as i32)
+            .or_default()
+            .push(i);
+    }
+    let scan_order: Vec<i32> = by_scan.keys().copied().collect();
+
+    let read_chunks: Vec<Vec<(usize, Array2<i32>)>> = pool.install(|| {
+        scan_order
+            .par_iter()
+            .map(|&sn| -> Result<Vec<(usize, Array2<i32>)>> {
+                let idxs: Vec<usize> = by_scan.get(&sn).cloned().unwrap_or_default();
+                idxs
+                    .into_iter()
+                    .map(|row_i| read_image_i32(&rows[row_i]).map(|img| (row_i, img)))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
     })?;
-    indexed.sort_by_key(|(i, _)| *i);
-    for (i, img) in indexed {
+    let mut flat: Vec<(usize, Array2<i32>)> = read_chunks.into_iter().flatten().collect();
+    flat.sort_by_key(|(i, _)| *i);
+
+    let mut scan_done: HashMap<i32, u32> = HashMap::new();
+    let mut global_done: u32 = 0;
+    let global_total = rows.len() as u32;
+    for (i, img) in flat {
         let row = &rows[i];
         write_frame_raw(
             &zstore,
@@ -466,6 +576,21 @@ fn ingest_beamtime_inner(
             &img,
         )
         .map_err(|e| CatalogError::Validation(e.to_string()))?;
+        let sn = row.scan_number as i32;
+        let e = scan_done.entry(sn).or_insert(0);
+        *e += 1;
+        let sd = *e;
+        let st = scan_total_map.get(&sn).copied().unwrap_or(0);
+        global_done += 1;
+        if let Some(ref sink) = progress {
+            sink.emit(IngestProgress::FileComplete {
+                scan_number: sn,
+                scan_done: sd,
+                scan_total: st,
+                global_done,
+                global_total,
+            });
+        }
     }
 
     let _ = incremental;

@@ -17,10 +17,14 @@ if getattr(_pyref_mod, "py_default_catalog_db_path", None) is None:
     pytest.skip("catalog path export missing", allow_module_level=True)
 
 from pyref.io import (
+    beamtime_ingest_layout,
     classify_reflectivity_scan_type,
     get_overrides,
     ingest_beamtime,
+    list_beamtimes,
+    read_beamtime,
     scan_experiment,
+    scan_from_catalog_for_beamtime,
     set_override,
 )
 from pyref.io.catalog_path import resolve_catalog_path
@@ -157,3 +161,81 @@ def test_classify_reflectivity_scan_type_fixed_angle() -> None:
     pairs = [(250.0 + i, 10.0) for i in range(10)]
     kind, _, _, _, _ = classify_reflectivity_scan_type(pairs)
     assert kind == "fixed_angle"
+
+
+def test_beamtime_ingest_layout_empty_ccd(tmp_path: Path) -> None:
+    if getattr(_pyref_mod, "py_beamtime_ingest_layout", None) is None:
+        pytest.skip("py_beamtime_ingest_layout not built")
+    _ensure_flat_beamtime_layout(tmp_path)
+    layout = beamtime_ingest_layout(tmp_path)
+    assert layout["total_files"] == 0
+    assert layout["scans"] == []
+
+
+def test_beamtime_ingest_layout_minimal(minimal_fits_dir: Path | None) -> None:
+    if getattr(_pyref_mod, "py_beamtime_ingest_layout", None) is None:
+        pytest.skip("py_beamtime_ingest_layout not built")
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    layout = beamtime_ingest_layout(minimal_fits_dir)
+    assert layout["total_files"] >= 1
+    assert len(layout["scans"]) >= 1
+    assert all("scan_number" in s and "files" in s for s in layout["scans"])
+
+
+def test_ingest_beamtime_progress_callback(minimal_fits_dir: Path | None) -> None:
+    if getattr(_pyref_mod, "py_beamtime_ingest_layout", None) is None:
+        pytest.skip("py_beamtime_ingest_layout not built")
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    events: list[dict[str, object]] = []
+    ingest_beamtime(
+        minimal_fits_dir,
+        incremental=False,
+        progress_callback=lambda d: events.append(dict(d)),
+    )
+    kinds = {e["event"] for e in events}
+    assert "layout" in kinds
+    assert "phase" in kinds
+    assert "file_complete" in kinds
+
+
+def test_scan_from_catalog_for_beamtime_unknown_empty(tmp_path: Path) -> None:
+    if getattr(_pyref_mod, "py_scan_from_catalog_for_beamtime", None) is None:
+        pytest.skip("py_scan_from_catalog_for_beamtime not built")
+    _ensure_flat_beamtime_layout(tmp_path)
+    ingest_beamtime(tmp_path, incremental=True)
+    db = resolve_catalog_path()
+    missing = tmp_path / "not_registered_beamtime"
+    df = scan_from_catalog_for_beamtime(missing, db)
+    assert df.height == 0
+    assert "file_path" in df.columns
+
+
+def test_list_beamtimes_and_read_beamtime(minimal_fits_dir: Path | None) -> None:
+    if getattr(_pyref_mod, "py_scan_from_catalog_for_beamtime", None) is None:
+        pytest.skip("py_scan_from_catalog_for_beamtime not built")
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    db = ingest_beamtime(minimal_fits_dir, incremental=False)
+    bts = list_beamtimes(db)
+    assert bts.height >= 1
+    assert "beamtime_path" in bts.columns
+    view = read_beamtime(minimal_fits_dir, catalog_path=db, ingest=False)
+    assert view.frames.height >= 1
+    assert len(view.entries.samples) >= 1
+
+
+def test_read_beamtime_ingest_quiet(minimal_fits_dir: Path | None) -> None:
+    if getattr(_pyref_mod, "py_scan_from_catalog_for_beamtime", None) is None:
+        pytest.skip("py_scan_from_catalog_for_beamtime not built")
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    db = resolve_catalog_path()
+    view = read_beamtime(
+        minimal_fits_dir,
+        catalog_path=db,
+        ingest=True,
+        show_progress=False,
+    )
+    assert view.frames.height >= 1

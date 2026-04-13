@@ -46,7 +46,11 @@ pub struct FileRow {
 }
 
 fn beamtime_id_for_dir(conn: &mut SqliteConnection, beamtime_dir: &Path) -> Result<Option<i32>> {
-    let uri = paths::file_uri_for_path(beamtime_dir)?;
+    let uri = match paths::file_uri_for_path(beamtime_dir) {
+        Ok(u) => u,
+        Err(CatalogError::Io(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
     Ok(beamtimes::table
         .filter(beamtimes::nas_uri.eq(uri))
         .select(beamtimes::id)
@@ -408,7 +412,7 @@ impl QueryableByName<Sqlite> for CatalogScanSql {
     }
 }
 
-fn build_scan_df_sql(filter: Option<&CatalogFilter>) -> String {
+fn build_scan_df_sql(beamtime_id: Option<i32>, filter: Option<&CatalogFilter>) -> String {
     let mut sql = String::from(
         r#"SELECT
   f.nas_uri AS file_path,
@@ -447,6 +451,9 @@ LEFT JOIN file_overrides o ON o.source_path = f.nas_uri
 LEFT JOIN beam_finding bf ON bf.frame_id = fr.id
 WHERE 1=1"#,
     );
+    if let Some(bid) = beamtime_id {
+        sql.push_str(&format!(" AND f.beamtime_id = {bid}"));
+    }
     if let Some(f) = filter {
         if let Some(s) = &f.sample_name {
             sql.push_str(&format!(
@@ -477,12 +484,7 @@ WHERE 1=1"#,
     sql
 }
 
-pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<DataFrame> {
-    let mut conn = db::establish_connection(db_path)?;
-    let sql = build_scan_df_sql(filter);
-    let rows: Vec<CatalogScanSql> = sql_query(&sql)
-        .load(&mut conn)
-        .map_err(CatalogError::Diesel)?;
+fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataFrame> {
     let mut file_path = Vec::new();
     let mut data_offset = Vec::new();
     let mut naxis1 = Vec::new();
@@ -574,6 +576,36 @@ pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Resu
     let columns: Vec<polars::prelude::Column> =
         series.into_iter().map(|s| s.into()).collect();
     DataFrame::new(columns).map_err(|e| CatalogError::Validation(e.to_string()))
+}
+
+pub fn scan_from_catalog(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<DataFrame> {
+    let mut conn = db::establish_connection(db_path)?;
+    let sql = build_scan_df_sql(None, filter);
+    let rows: Vec<CatalogScanSql> = sql_query(&sql)
+        .load(&mut conn)
+        .map_err(CatalogError::Diesel)?;
+    catalog_scan_sql_rows_to_dataframe(rows)
+}
+
+/// Frame-level scan rows for one beamtime root directory (matched via [`paths::file_uri_for_path`]).
+///
+/// When the beamtime is not present in `beamtimes`, returns an empty [`DataFrame`] with the same
+/// schema as [`scan_from_catalog`].
+pub fn scan_from_catalog_for_beamtime(
+    db_path: &Path,
+    beamtime_dir: &Path,
+    filter: Option<&CatalogFilter>,
+) -> Result<DataFrame> {
+    let mut conn = db::establish_connection(db_path)?;
+    let bid = match beamtime_id_for_dir(&mut conn, beamtime_dir)? {
+        Some(id) => id,
+        None => return catalog_scan_sql_rows_to_dataframe(Vec::new()),
+    };
+    let sql = build_scan_df_sql(Some(bid), filter);
+    let rows: Vec<CatalogScanSql> = sql_query(&sql)
+        .load(&mut conn)
+        .map_err(CatalogError::Diesel)?;
+    catalog_scan_sql_rows_to_dataframe(rows)
 }
 
 pub fn update_beamspot(
@@ -874,6 +906,19 @@ mod tests {
         let db = tmp.path().join("catalog.db");
         db::establish_connection(&db).unwrap();
         let df = scan_from_catalog(&db, None).unwrap();
+        assert_eq!(df.height(), 0);
+        for col in scan_from_catalog_columns() {
+            assert!(df.column(col).is_ok(), "missing column {}", col);
+        }
+    }
+
+    #[test]
+    fn test_scan_from_catalog_for_beamtime_unknown_root() {
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("catalog.db");
+        db::establish_connection(&db).unwrap();
+        let missing = tmp.path().join("no_such_beamtime");
+        let df = scan_from_catalog_for_beamtime(&db, &missing, None).unwrap();
         assert_eq!(df.height(), 0);
         for col in scan_from_catalog_columns() {
             assert!(df.column(col).is_ok(), "missing column {}", col);

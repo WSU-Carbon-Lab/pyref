@@ -20,19 +20,39 @@ FITS Files
 
 Experiment catalog and discovery
 -------------------------------
+- :func:`~pyref.io.read_beamtime`: Ingest (optional) and load one beamtime's samples,
+  scans, and frames.
+- :func:`~pyref.io.list_beamtimes`: Enumerate beamtime roots stored in the catalog.
 - :func:`~pyref.io.resolve_catalog_path`: Beamtime catalog database path (Rust-aligned).
-- :func:`~pyref.io.classify_reflectivity_scan_type`: Theta vs energy scan classification.
-- :func:`~pyref.io.discover_fits`: Discover FITS files under a root path (flat or recursive).
-- :func:`~pyref.io.parse_fits_stem`: Parse a FITS filename stem into sample_name, tag, scan_number, frame_number.
-- :func:`~pyref.io.build_catalog`: Build a per-file catalog DataFrame (names-only or with headers).
-- :func:`~pyref.io.scan_view`: Aggregate catalog into a per-scan view (file_count, energy/Q range).
-- :func:`~pyref.io.experiment_summary`: Quick view of an experiment directory (scan summary table).
-- :func:`~pyref.io.filter_catalog_paths`: Filter catalog by sample_name, tag, or scan number(s).
+- :func:`~pyref.io.classify_reflectivity_scan_type`: Theta vs energy scan
+  classification.
+- :func:`~pyref.io.discover_fits`: Discover FITS files under a root path (flat or
+  recursive).
+- :func:`~pyref.io.parse_fits_stem`: Parse a FITS filename stem into sample_name, tag,
+  scan_number, frame_number.
+- :func:`~pyref.io.build_catalog`: Build a per-file catalog DataFrame (names-only or
+  with headers).
+- :func:`~pyref.io.scan_view`: Aggregate catalog into a per-scan view (file_count,
+  energy/Q range).
+- :func:`~pyref.io.experiment_summary`: Quick view of an experiment directory (scan
+  summary table).
+- :func:`~pyref.io.filter_catalog_paths`: Filter catalog by sample_name, tag, or scan
+  number(s).
 
 See the specific function documentation for more details on usage and parameters.
 """
 
 from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
+from pyref.io.beamtime import (
+    BeamtimeCatalogView,
+    BeamtimeEntriesView,
+    beamtime_entries,
+    list_beamtimes,
+    naming_qc_from_frames,
+    naming_qc_with_db_parse_flags,
+    read_beamtime,
+    scan_from_catalog_for_beamtime,
+)
 from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.experiment_names import (
     ParsedFitsName,
@@ -44,6 +64,7 @@ from pyref.io.experiment_names import (
     scan_view,
 )
 from pyref.io.readers import (
+    beamtime_ingest_layout,
     classify_reflectivity_scan_type,
     get_image,
     get_image_corrected,
@@ -60,7 +81,11 @@ from pyref.io.readers import (
 )
 
 __all__ = [
+    "BeamtimeCatalogView",
+    "BeamtimeEntriesView",
     "ParsedFitsName",
+    "beamtime_entries",
+    "beamtime_ingest_layout",
     "build_catalog",
     "classify_reflectivity_scan_type",
     "discover_fits",
@@ -72,13 +97,18 @@ __all__ = [
     "get_image_filtered_edges",
     "get_overrides",
     "ingest_beamtime",
+    "list_beamtimes",
+    "naming_qc_from_frames",
+    "naming_qc_with_db_parse_flags",
     "parse_fits_stem",
     "query_catalog",
+    "read_beamtime",
     "read_experiment",
     "read_fits",
     "resolve_catalog_path",
     "resolve_fits_paths",
     "scan_experiment",
+    "scan_from_catalog_for_beamtime",
     "scan_view",
     "set_override",
 ]

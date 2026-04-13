@@ -13,6 +13,8 @@ import polars as pl
 from pyref.io.catalog_path import NEW_CATALOG_DB_NAME, resolve_catalog_path
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     import pandas as pd
 
 type FilePath = str | Path
@@ -199,6 +201,30 @@ def scan_experiment(
     )
 
 
+def beamtime_ingest_layout(beamtime_path: FilePath) -> dict[str, Any]:
+    """
+    Summarize how many FITS files will be ingested per stem-derived scan (no FITS I/O).
+
+    Use this before :func:`ingest_beamtime` to size a Rich ``Progress`` display (or custom
+    UI): one task with ``total=layout["total_files"]`` and one task per scan (see
+    ``progress_callback`` on :func:`ingest_beamtime`).
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory (same layout rules as ingest).
+
+    Returns
+    -------
+    dict
+        ``total_files`` (int) and ``scans`` (list of per-scan dicts with ``scan_number`` and
+        ``files``), ordered by ``scan_number``. Unparseable stems use scan ``0``.
+    """
+    from pyref.pyref import py_beamtime_ingest_layout
+
+    return dict(py_beamtime_ingest_layout(str(Path(beamtime_path).resolve())))
+
+
 def ingest_beamtime(
     beamtime_path: FilePath,
     header_items: list[str] | None = None,
@@ -206,6 +232,7 @@ def ingest_beamtime(
     *,
     worker_threads: int | None = None,
     resource_fraction: float | None = None,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> Path:
     """
     Ingest a beamtime directory into the global catalog and local zarr cache.
@@ -225,6 +252,21 @@ def ingest_beamtime(
     resource_fraction : float, optional
         Fraction of ``available_parallelism()`` used for reader workers, in ``(0, 1]``.
         Mutually exclusive with ``worker_threads``.
+    progress_callback : callable, optional
+        Invoked on the thread that runs Rust ingest (the GIL is released during heavy
+        work; the callback re-acquires it). Each call receives a mapping with:
+
+        - ``event == "layout"``: ``total_files``, ``scans`` (each with ``scan_number``,
+          ``files``).
+        - ``event == "phase"``: ``phase`` is ``headers``, ``catalog``, or ``zarr``.
+        - ``event == "file_complete"``: after each zarr write; includes ``scan_number``,
+          ``scan_done``, ``scan_total``, ``global_done``, ``global_total``.
+
+        For Rich ``Progress``: ``add_task`` for the main ingest total and one task per
+        ``scan_number`` from ``layout``; on ``file_complete`` call ``update`` with
+        ``advance=1`` on the matching tasks. Handle ``phase`` events so the UI stays
+        active during long ``headers`` or ``catalog`` work before ``file_complete``
+        events begin.
 
     Returns
     -------
@@ -240,6 +282,7 @@ def ingest_beamtime(
         incremental,
         worker_threads,
         resource_fraction,
+        progress_callback,
     )
     return Path(out)
 

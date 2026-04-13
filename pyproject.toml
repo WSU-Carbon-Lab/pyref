@@ -56,6 +56,8 @@ dependencies = [
     "ipyaggrid>=0.5.4",
     "altair>=6.0.0",
     "panel>=1.8.5",
+    "tqdm>=4.67.1",
+    "rich>=14.3.3",
 ]
 
 [tool.maturin]

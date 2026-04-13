@@ -48,8 +48,10 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     use crate::catalog::{
-        classify_scan_type, get_overrides, ingest_beamtime_parallel, paths, scan_from_catalog,
-        set_override, CatalogFilter, IngestParallelism, ReflectivityScanType,
+        beamtime_ingest_layout, classify_scan_type, get_overrides, ingest_beamtime_with_progress_sink,
+        list_beamtime_entries_v2, list_beamtimes_from_catalog,
+        paths, scan_from_catalog, scan_from_catalog_for_beamtime, set_override, CatalogFilter,
+        IngestProgress, IngestParallelism, IngestProgressSink, ReflectivityScanType,
     };
 
     #[global_allocator]
@@ -351,25 +353,113 @@ mod extension {
     }
 
     #[cfg(feature = "catalog")]
+    fn ingest_progress_to_pydict<'py>(
+        py: Python<'py>,
+        ev: &IngestProgress,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use pyo3::types::{PyDict, PyList};
+        let d = PyDict::new_bound(py);
+        match ev {
+            IngestProgress::Layout { total_files, scans } => {
+                d.set_item("event", "layout")?;
+                d.set_item("total_files", *total_files)?;
+                let list = PyList::empty_bound(py);
+                for (sn, c) in scans {
+                    let m = PyDict::new_bound(py);
+                    m.set_item("scan_number", *sn)?;
+                    m.set_item("files", *c)?;
+                    list.append(m)?;
+                }
+                d.set_item("scans", list)?;
+            }
+            IngestProgress::Phase { name } => {
+                d.set_item("event", "phase")?;
+                d.set_item("phase", name.as_str())?;
+            }
+            IngestProgress::FileComplete {
+                scan_number,
+                scan_done,
+                scan_total,
+                global_done,
+                global_total,
+            } => {
+                d.set_item("event", "file_complete")?;
+                d.set_item("scan_number", *scan_number)?;
+                d.set_item("scan_done", *scan_done)?;
+                d.set_item("scan_total", *scan_total)?;
+                d.set_item("global_done", *global_done)?;
+                d.set_item("global_total", *global_total)?;
+            }
+        }
+        Ok(d)
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_beamtime_ingest_layout")]
+    #[pyo3(signature = (beamtime_path), text_signature = "(beamtime_path)")]
+    pub fn py_beamtime_ingest_layout<'py>(
+        py: Python<'py>,
+        beamtime_path: &str,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use pyo3::types::{PyDict, PyList};
+        let layout = beamtime_ingest_layout(std::path::Path::new(beamtime_path)).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        let d = PyDict::new_bound(py);
+        d.set_item("total_files", layout.total_files)?;
+        let list = PyList::empty_bound(py);
+        for s in &layout.scans {
+            let m = PyDict::new_bound(py);
+            m.set_item("scan_number", s.scan_number)?;
+            m.set_item("files", s.file_count)?;
+            list.append(m)?;
+        }
+        d.set_item("scans", list)?;
+        Ok(d)
+    }
+
+    #[cfg(feature = "catalog")]
     #[pyfunction]
     #[pyo3(name = "py_ingest_beamtime")]
     #[pyo3(
-        signature = (beamtime_path, header_items, incremental=true, worker_threads=None, resource_fraction=None),
-        text_signature = "(beamtime_path, header_items, incremental=True, worker_threads=None, resource_fraction=None)"
+        signature = (beamtime_path, header_items, incremental=true, worker_threads=None, resource_fraction=None, progress_callback=None),
+        text_signature = "(beamtime_path, header_items, incremental=True, worker_threads=None, resource_fraction=None, progress_callback=None)"
     )]
     pub fn py_ingest_beamtime(
+        py: Python<'_>,
         beamtime_path: &str,
         header_items: Vec<String>,
         incremental: bool,
         worker_threads: Option<usize>,
         resource_fraction: Option<f64>,
+        progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> PyResult<String> {
         let path = std::path::Path::new(beamtime_path);
         let parallelism = IngestParallelism {
             worker_threads,
             resource_fraction,
         };
-        match ingest_beamtime_parallel(path, &header_items, incremental, None, parallelism) {
+        let progress = progress_callback.map(|cb| {
+            IngestProgressSink::from_callback(move |ev| {
+                Python::with_gil(|py| {
+                    let Ok(d) = ingest_progress_to_pydict(py, &ev) else {
+                        return;
+                    };
+                    let _ = cb.call1(py, (d,));
+                });
+            })
+        });
+        let result = py.allow_threads(|| {
+            ingest_beamtime_with_progress_sink(
+                path,
+                &header_items,
+                incremental,
+                progress,
+                parallelism,
+            )
+        });
+        match result {
             Ok(p) => Ok(p.to_string_lossy().to_string()),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 e.to_string(),
@@ -393,6 +483,68 @@ mod extension {
                 e.to_string(),
             )),
         }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_scan_from_catalog_for_beamtime")]
+    #[pyo3(
+        signature = (db_path, beamtime_path, filter=None),
+        text_signature = "(db_path, beamtime_path, filter=None)"
+    )]
+    pub fn py_scan_from_catalog_for_beamtime(
+        db_path: &str,
+        beamtime_path: &str,
+        filter: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyDataFrame> {
+        let db = std::path::Path::new(db_path);
+        let beam = std::path::Path::new(beamtime_path);
+        let cat_filter = filter.and_then(|f| dict_to_catalog_filter(f).ok());
+        match scan_from_catalog_for_beamtime(db, beam, cat_filter.as_ref()) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_beamtime_entries")]
+    #[pyo3(
+        signature = (db_path, beamtime_path),
+        text_signature = "(db_path, beamtime_path)"
+    )]
+    pub fn py_beamtime_entries<'py>(
+        py: Python<'py>,
+        db_path: &str,
+        beamtime_path: &str,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let db = std::path::Path::new(db_path);
+        let beam = std::path::Path::new(beamtime_path);
+        let e = list_beamtime_entries_v2(db, beam).map_err(|err| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string())
+        })?;
+        let d = pyo3::types::PyDict::new_bound(py);
+        d.set_item("samples", e.samples)?;
+        d.set_item("tags", e.tags)?;
+        d.set_item("scans", e.scans)?;
+        Ok(d)
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_list_beamtimes")]
+    #[pyo3(signature = (db_path), text_signature = "(db_path)")]
+    pub fn py_list_beamtimes(db_path: &str) -> PyResult<Vec<(String, i64)>> {
+        let db = std::path::Path::new(db_path);
+        let rows = list_beamtimes_from_catalog(db).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        Ok(rows
+            .into_iter()
+            .map(|(p, id)| (p.to_string_lossy().into_owned(), id))
+            .collect())
     }
 
     #[cfg(feature = "catalog")]
@@ -512,8 +664,15 @@ mod extension {
         #[cfg(feature = "catalog")]
         {
             m.add_function(pyo3::wrap_pyfunction!(py_default_catalog_db_path, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_beamtime_ingest_layout, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_ingest_beamtime, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_scan_from_catalog, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(
+                py_scan_from_catalog_for_beamtime,
+                m
+            )?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_beamtime_entries, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_list_beamtimes, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_get_overrides, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_set_override, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_classify_scan_type, m)?)?;

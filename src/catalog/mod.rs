@@ -3,6 +3,7 @@
 mod beamtime_index;
 pub mod db;
 mod ingest;
+mod ingest_progress;
 mod layout;
 mod models;
 mod parallelism;
@@ -21,8 +22,12 @@ pub use beamtime_index::{
 };
 
 pub use ingest::{
-    ingest_beamtime, ingest_beamtime_parallel, ingest_beamtime_with_context,
+    beamtime_ingest_layout, ingest_beamtime, ingest_beamtime_parallel,
+    ingest_beamtime_with_context, ingest_beamtime_with_progress_sink,
     DEFAULT_INGEST_HEADER_ITEMS,
+};
+pub use ingest_progress::{
+    BeamtimeIngestLayout, IngestProgress, IngestProgressSink, ScanFileCount,
 };
 #[cfg(feature = "parallel_ingest")]
 pub use ingest::{ingest_beamtime_pipelined, ingest_beamtime_pipelined_with_context};
@@ -31,8 +36,8 @@ pub use layout::{detect_beamtime_layout, discover_fits_for_layout, BeamtimeLayou
 pub use query::{
     catalog_file_count, get_overrides, get_scan_point_uid_by_source_path, list_beamtime_entries,
     list_beamtime_entries_v2, list_beamtimes_from_catalog, query_files, query_scan_points,
-    rename_file_in_catalog, scan_from_catalog, set_override, update_beamspot,
-    update_beamspot_scan_point, BeamtimeEntries, CatalogFilter, FileRow,
+    rename_file_in_catalog, scan_from_catalog, scan_from_catalog_for_beamtime, set_override,
+    update_beamspot, update_beamspot_scan_point, BeamtimeEntries, CatalogFilter, FileRow,
 };
 pub use explorer_query::{
     list_experimentalists, list_beamtimes_for_expt, catalog_status_for_path, BeamtimeMeta,

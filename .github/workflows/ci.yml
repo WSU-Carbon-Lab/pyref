@@ -34,7 +34,7 @@ jobs:
       - name: Build extension (maturin develop)
         run: >-
           uv run --python 3.12 maturin develop
-          --features "pyo3/extension-module,catalog,parallel_ingest,zarr"
+          --features "extension-module,parallel_ingest,zarr"
 
       - name: Ruff lint
         run: uv run --python 3.12 ruff check .

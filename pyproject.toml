@@ -62,7 +62,7 @@ dependencies = [
 
 [tool.maturin]
 bindings = "pyo3"
-features = ["pyo3/extension-module", "pyo3/generate-import-lib", "parallel_ingest", "zarr"]
+features = ["extension-module", "parallel_ingest", "zarr"]
 format = ["wheel"]
 minimum-python-version = "3.12"
 module-name = "pyref"
@@ -194,7 +194,7 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [package.metadata.maturin]
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
 python-source = "python"
 
 [dependency-groups]

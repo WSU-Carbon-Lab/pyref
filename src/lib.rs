@@ -1,4 +1,4 @@
-#[cfg(feature = "extension-module")]
+#[cfg(feature = "bindings")]
 use polars::prelude::*;
 
 pub mod beamfinding;
@@ -28,7 +28,7 @@ pub use loader::{
 };
 pub use path_policy::is_indexable_als_path;
 
-#[cfg(feature = "extension-module")]
+#[cfg(feature = "bindings")]
 #[allow(clippy::useless_conversion)]
 mod extension {
     use numpy::PyArray2;
@@ -675,20 +675,20 @@ mod extension {
     }
 }
 
-#[cfg(feature = "extension-module")]
+#[cfg(feature = "bindings")]
 pub use extension::*;
 
-#[cfg(feature = "extension-module")]
+#[cfg(feature = "bindings")]
 pub fn err_prop_div(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
     ((lhs.clone() / rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2))).sqrt()
 }
 
-#[cfg(feature = "extension-module")]
+#[cfg(feature = "bindings")]
 pub fn err_prop_mult(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
     ((lhs.clone() * rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2))).sqrt()
 }
 
-#[cfg(feature = "extension-module")]
+#[cfg(feature = "bindings")]
 pub fn weighted_mean(values: Expr, weights: Expr) -> Expr {
     let values = values.cast(DataType::Float64);
     let weights = weights.cast(DataType::Float64);
@@ -697,13 +697,13 @@ pub fn weighted_mean(values: Expr, weights: Expr) -> Expr {
     numerator.sum() / denominator.sum()
 }
 
-#[cfg(feature = "extension-module")]
+#[cfg(feature = "bindings")]
 pub fn weighted_std(weights: Expr) -> Expr {
     let weights = weights.cast(DataType::Float64);
     let denominator = weights.clone();
     (lit(1.0) / denominator.sum()).sqrt()
 }
 
-#[cfg(not(feature = "extension-module"))]
+#[cfg(not(feature = "bindings"))]
 #[allow(dead_code)]
 fn _lib_placeholder_for_tui() {}

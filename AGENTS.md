@@ -485,3 +485,16 @@ This workspace extends Rust with **PyO3 / Maturin** extension expectations.
 - Prefer thin Python modules that re-export a small Rust API rather than exposing many low-level Rust objects.
 
 <!-- END OF MANAGED SECTION -->
+
+## Learned User Preferences
+
+- Prefer **Rich** over **tqdm** for Python-facing ingest progress (nested or multi-segment bars, transient display when finished).
+- When the user supplies an authoritative **staged file list** for a commit, stage or commit **only** those paths and do not broaden `git add` unless they explicitly change the instruction.
+- For pull requests, default to the **parent integration branch** named in the thread rather than opening against `main` when the user specifies a non-main target.
+- For notebook-first catalog workflows, keep setup and queries in **Jupyter** with minimal required steps outside the notebook when that is the stated goal.
+
+## Learned Workspace Facts
+
+- Python ingest progress integrates **`beamtime_ingest_layout`** (total FITS count and per-scan file counts) with **`ingest_beamtime(..., progress_callback=...)`** emitting event dicts (`layout`, `phase`, `file_complete`); pair this with Rich or tqdm-style handlers.
+- Keep **`.cursor/hooks/state/`** out of git: add it to **`.gitignore`** so hook state and the continual-learning index stay local.
+- Ingestion and zarr writes from **network-mounted beamtime roots** can be far slower than from a **local replica**; validate progress UX against a local tree when iterating.

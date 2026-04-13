@@ -191,5 +191,8 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/python
 python/pyref/data/.pyref_catalog.db
 
+# Cursor agent hook state (local; not for version control)
+.cursor/hooks/state/
+
 # Macos metadata
 .DS_Store

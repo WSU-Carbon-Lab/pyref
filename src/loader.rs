@@ -141,10 +141,8 @@ pub fn read_multiple_fits_headers_only_rows(
     header_items: &[String],
 ) -> Result<Vec<BtIngestRow>, FitsError> {
     if file_paths.is_empty() {
-        return Err(
-            FitsError::validation("No files provided")
-                .with_context("operation", "read_multiple_fits_headers_only_rows"),
-        );
+        return Err(FitsError::validation("No files provided")
+            .with_context("operation", "read_multiple_fits_headers_only_rows"));
     }
     for path in &file_paths {
         if !path.exists() {

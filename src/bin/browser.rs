@@ -30,10 +30,7 @@ fn resolve_existing_dir(path: &Path) -> Result<String, String> {
         ));
     }
     if !path.is_dir() {
-        return Err(format!(
-            "Path is not a directory: {}.",
-            path.display()
-        ));
+        return Err(format!("Path is not a directory: {}.", path.display()));
     }
     let canonical = path
         .canonicalize()

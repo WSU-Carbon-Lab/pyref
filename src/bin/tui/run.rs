@@ -565,12 +565,7 @@ fn table_row_at(rect: Rect, row: u16, len: usize) -> usize {
     idx.min(len.saturating_sub(1))
 }
 
-fn expanded_file_index_at(
-    rect: Rect,
-    row: u16,
-    scroll_offset: usize,
-    file_count: usize,
-) -> usize {
+fn expanded_file_index_at(rect: Rect, row: u16, scroll_offset: usize, file_count: usize) -> usize {
     let data_y = rect.y + 3;
     if row < data_y || file_count == 0 {
         return 0;
@@ -704,7 +699,9 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         return handle_explorer_event(app, key);
     }
 
-    if app.current_screen() == super::app::Screen::Beamtime && app.mode() == super::app::AppMode::Normal {
+    if app.current_screen() == super::app::Screen::Beamtime
+        && app.mode() == super::app::AppMode::Normal
+    {
         let action = keymap::from_key_event(key, &app.keymap);
         if action == Action::Cancel {
             if app.app_error.is_some() {
@@ -717,7 +714,9 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             }
             // Phase 4: Cancel ingest if in progress
             #[cfg(feature = "catalog")]
-            if let Some(super::navigator::ScreenState::Beamtime(bt)) = app.navigator.stack.last_mut() {
+            if let Some(super::navigator::ScreenState::Beamtime(bt)) =
+                app.navigator.stack.last_mut()
+            {
                 if bt.loading_state == super::app::LoadingState::IngestingDirectory {
                     if let Some(ref flag) = bt.cancel_flag {
                         flag.store(true, std::sync::atomic::Ordering::Relaxed);

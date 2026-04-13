@@ -28,6 +28,7 @@ tensor_index = ["xx", "yy", "zz"]  # Indexing for later definitions
 
 # ==============/ Base Classes /===================
 
+
 class Structure(UserList):
     r"""
     Represents the slab structure of a reflective sample.
@@ -532,8 +533,7 @@ class Structure(UserList):
         # parameters to plot
         zed, prof = self.sld_profile(align=align)
         iso = prof.sum(axis=1) / 3
-        ax.plot(zed, np.real(iso), color="C0",
-                zorder=20, label="δ", linewidth=0.9)
+        ax.plot(zed, np.real(iso), color="C0", zorder=20, label="δ", linewidth=0.9)
         ax.plot(
             zed,
             np.real(prof[:, 0]),
@@ -550,8 +550,7 @@ class Structure(UserList):
             label="δzz",
             linestyle=":",
         )
-        ax.plot(zed, np.imag(iso), color="C2",
-                zorder=20, label="β", linewidth=0.9)
+        ax.plot(zed, np.imag(iso), color="C2", zorder=20, label="β", linewidth=0.9)
         ax.plot(
             zed,
             np.imag(prof[:, 0]),
@@ -1018,10 +1017,8 @@ class SLD(Scatterer):
 
         # Create parameters
         self._parameters = Parameters(name=name)
-        self.delta = Parameter(np.average(
-            n).real, name=f"{name}_diso")  # type: ignore
-        self.beta = Parameter(np.average(
-            n).imag, name=f"{name}_biso")  # type: ignore
+        self.delta = Parameter(np.average(n).real, name=f"{name}_diso")  # type: ignore
+        self.beta = Parameter(np.average(n).imag, name=f"{name}_biso")  # type: ignore
 
         self.xx = Parameter(n[0].real, name=f"{name}_{tensor_index[0]}")
         self.ixx = Parameter(n[0].imag, name=f"{name}_i{tensor_index[0]}")
@@ -1030,10 +1027,8 @@ class SLD(Scatterer):
         self.zz = Parameter(n[2].real, name=f"{name}_{tensor_index[2]}")
         self.izz = Parameter(n[2].imag, name=f"{name}_i{tensor_index[2]}")
 
-        self.birefringence = Parameter(
-            (n[0].real - n[2].real), name=f"{name}_bire")
-        self.dichroism = Parameter(
-            (n[1].imag - n[2].imag), name=f"{name}_dichro")
+        self.birefringence = Parameter((n[0].real - n[2].real), name=f"{name}_bire")
+        self.dichroism = Parameter((n[1].imag - n[2].imag), name=f"{name}_dichro")
 
         self._parameters.extend(
             [
@@ -1461,11 +1456,9 @@ class MixedMaterialSlab(PXR_Component):
             else:
                 self.sld.append(SLD(s))  # type: ignore
 
-            self._sld_parameters.append(
-                self.sld[-1].parameters)  # type: ignore
+            self._sld_parameters.append(self.sld[-1].parameters)  # type: ignore
 
-            vf = possibly_create_parameter(
-                v, name=f"vf{i} - {name}", bounds=(0.0, 1.0))
+            vf = possibly_create_parameter(v, name=f"vf{i} - {name}", bounds=(0.0, 1.0))
             self.vf.append(vf)
             self._vf_parameters.append(vf)
 
@@ -1550,8 +1543,7 @@ class MixedMaterialSlab(PXR_Component):
             self.sld.energy = energy
 
         combinetensor = np.sum(
-            [sld.tensor * vf / sum_vfs for sld,
-                vf in zip(self.sld, vfs, strict=False)],  # type: ignore
+            [sld.tensor * vf / sum_vfs for sld, vf in zip(self.sld, vfs, strict=False)],  # type: ignore
             axis=0,
         )
 
@@ -1648,8 +1640,7 @@ class Stack(PXR_Component, UserList):
 
         repeats = round(abs(self.repeats.value))  # type: ignore
 
-        slabs = np.concatenate([c.slabs(structure=self)
-                               for c in self.components])
+        slabs = np.concatenate([c.slabs(structure=self) for c in self.components])
 
         if repeats > 1:
             slabs = np.concatenate([slabs] * repeats)

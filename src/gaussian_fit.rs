@@ -11,16 +11,7 @@ pub struct Gaussian2DFit {
     pub baseline: f64,
 }
 
-fn gaussian_2d(
-    r: f64,
-    c: f64,
-    mu_r: f64,
-    mu_c: f64,
-    sr: f64,
-    sc: f64,
-    a: f64,
-    b: f64,
-) -> f64 {
+fn gaussian_2d(r: f64, c: f64, mu_r: f64, mu_c: f64, sr: f64, sc: f64, a: f64, b: f64) -> f64 {
     if sr <= 0.0 || sc <= 0.0 {
         return b;
     }
@@ -187,13 +178,18 @@ fn solve_6x6(a: &[[f64; 6]; 6], b: &[f64; 6]) -> Option<[f64; 6]> {
 mod tests {
     use super::*;
 
-    fn synthetic_gaussian(nr: usize, nc: usize, mu_r: f64, mu_c: f64, sr: f64, sc: f64) -> Array2<f64> {
+    fn synthetic_gaussian(
+        nr: usize,
+        nc: usize,
+        mu_r: f64,
+        mu_c: f64,
+        sr: f64,
+        sc: f64,
+    ) -> Array2<f64> {
         let mut arr = Array2::zeros((nr, nc));
         for r in 0..nr {
             for c in 0..nc {
-                arr[[r, c]] = gaussian_2d(
-                    r as f64, c as f64, mu_r, mu_c, sr, sc, 100.0, 0.0,
-                );
+                arr[[r, c]] = gaussian_2d(r as f64, c as f64, mu_r, mu_c, sr, sc, 100.0, 0.0);
             }
         }
         arr

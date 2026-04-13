@@ -285,11 +285,7 @@ pub const TRIM_COLS: usize = 5;
 pub const ROW_BG_STRIP_WIDTH: usize = 10;
 pub const DARK_BAND_HEIGHT: usize = 10;
 
-pub fn trim_image_interior(
-    data: &Array2<i64>,
-    trim_rows: usize,
-    trim_cols: usize,
-) -> Array2<i64> {
+pub fn trim_image_interior(data: &Array2<i64>, trim_rows: usize, trim_cols: usize) -> Array2<i64> {
     let rows = data.nrows();
     let cols = data.ncols();
     if rows < 2 * trim_rows || cols < 2 * trim_cols {
@@ -584,7 +580,11 @@ pub fn build_bt_ingest_row(
         .to_str()
         .ok_or_else(|| FitsError::validation("Invalid UTF-8 in path"))?
         .to_string();
-    let file_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let file_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
     let (sample_name, tag, scan_number, frame_number) = match parse_fits_stem(&file_name) {
         Some(p) => (p.sample_name, p.tag.clone(), p.scan_number, p.frame_number),
         None => (String::new(), None, 0i64, 0i64),
@@ -621,10 +621,7 @@ pub fn build_bt_ingest_row(
     };
     for key in header_items {
         if key == "DATE" {
-            row.date_iso = primary
-                .header
-                .get_card("DATE")
-                .map(|c| c.value.to_string());
+            row.date_iso = primary.header.get_card("DATE").map(|c| c.value.to_string());
             continue;
         }
         let v = header_float(primary, key);
@@ -651,7 +648,10 @@ pub fn process_file_name(path: std::path::PathBuf) -> Vec<Column> {
     let mut columns = vec![Column::new("file_name".into(), vec![file_name.to_string()])];
     match parse_fits_stem(file_name) {
         Some(p) => {
-            columns.push(Column::new("sample_name".into(), vec![p.sample_name.clone()]));
+            columns.push(Column::new(
+                "sample_name".into(),
+                vec![p.sample_name.clone()],
+            ));
             let tag_series = Series::from_iter(std::iter::once(p.tag.as_deref()))
                 .with_name("tag".into())
                 .into_column();
@@ -803,13 +803,31 @@ mod tests {
     fn test_subtract_background_row_strips_whole_row_corrected() {
         let data = Array2::from_shape_vec(
             (2, 30),
-            (0..60).map(|i| if i < 10 { 5i64 } else if i >= 20 { 5i64 } else { 100 }).collect(),
+            (0..60)
+                .map(|i| {
+                    if i < 10 {
+                        5i64
+                    } else if i >= 20 {
+                        5i64
+                    } else {
+                        100
+                    }
+                })
+                .collect(),
         )
         .unwrap();
         let result = subtract_background_row_strips(&data);
         for c in 0..30 {
-            assert!(result[[0, c]] <= 100 - 5, "row 0 col {} should be corrected", c);
-            assert!(result[[1, c]] <= 100 - 5, "row 1 col {} should be corrected", c);
+            assert!(
+                result[[0, c]] <= 100 - 5,
+                "row 0 col {} should be corrected",
+                c
+            );
+            assert!(
+                result[[1, c]] <= 100 - 5,
+                "row 1 col {} should be corrected",
+                c
+            );
         }
     }
 

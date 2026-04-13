@@ -1,10 +1,10 @@
-use regex::Regex;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     text::{Line, Span},
     widgets::{Block, Paragraph},
     Frame,
 };
+use regex::Regex;
 use std::path::PathBuf;
 
 use super::heuristic::ExptPolicy;
@@ -44,7 +44,10 @@ impl ModalState {
                 pattern: Some(pat),
                 depth,
             } => (depth.to_string(), pat.clone()),
-            ExptPolicy::Custom { pattern: None, depth } => (depth.to_string(), "".to_string()),
+            ExptPolicy::Custom {
+                pattern: None,
+                depth,
+            } => (depth.to_string(), "".to_string()),
             ExptPolicy::Ignored => ("2".to_string(), "".to_string()),
         };
 
@@ -208,10 +211,8 @@ pub fn render_modal(f: &mut Frame, area: Rect, state: &ModalState, _theme: &str)
     };
 
     // Draw outer block
-    let outer_block = Block::bordered().title(format!(
-        " Configure: {} ",
-        state.target_experimentalist
-    ));
+    let outer_block =
+        Block::bordered().title(format!(" Configure: {} ", state.target_experimentalist));
     f.render_widget(outer_block, modal_rect);
 
     let inner = Rect {
@@ -237,7 +238,10 @@ pub fn render_modal(f: &mut Frame, area: Rect, state: &ModalState, _theme: &str)
     } else {
         "   "
     };
-    let depth_line = Line::from(format!("{}Depth (default 2): {}", depth_style, state.depth_input));
+    let depth_line = Line::from(format!(
+        "{}Depth (default 2): {}",
+        depth_style, state.depth_input
+    ));
     f.render_widget(Paragraph::new(depth_line), chunks[0]);
 
     // Pattern input
@@ -256,7 +260,10 @@ pub fn render_modal(f: &mut Frame, area: Rect, state: &ModalState, _theme: &str)
         if state.pattern_valid {
             Span::raw(pattern_color_text)
         } else {
-            Span::styled(pattern_color_text, ratatui::style::Style::new().fg(ratatui::style::Color::Red))
+            Span::styled(
+                pattern_color_text,
+                ratatui::style::Style::new().fg(ratatui::style::Color::Red),
+            )
         },
     ]);
     f.render_widget(Paragraph::new(pattern_line), chunks[1]);
@@ -280,19 +287,28 @@ pub fn render_modal(f: &mut Frame, area: Rect, state: &ModalState, _theme: &str)
     let choice_text = vec![
         Line::from(vec![
             if state.choice == ModalChoice::CustomPattern {
-                Span::styled("[1] Custom pattern", ratatui::style::Style::new().fg(ratatui::style::Color::Cyan))
+                Span::styled(
+                    "[1] Custom pattern",
+                    ratatui::style::Style::new().fg(ratatui::style::Color::Cyan),
+                )
             } else {
                 Span::raw("[1] Custom pattern")
             },
             Span::raw("  "),
             if state.choice == ModalChoice::MarkIgnored {
-                Span::styled("[2] Mark ignored", ratatui::style::Style::new().fg(ratatui::style::Color::Cyan))
+                Span::styled(
+                    "[2] Mark ignored",
+                    ratatui::style::Style::new().fg(ratatui::style::Color::Cyan),
+                )
             } else {
                 Span::raw("[2] Mark ignored")
             },
             Span::raw("  "),
             if state.choice == ModalChoice::AcceptDefault {
-                Span::styled("[3] Accept default", ratatui::style::Style::new().fg(ratatui::style::Color::Cyan))
+                Span::styled(
+                    "[3] Accept default",
+                    ratatui::style::Style::new().fg(ratatui::style::Color::Cyan),
+                )
             } else {
                 Span::raw("[3] Accept default")
             },

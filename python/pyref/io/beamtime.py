@@ -91,9 +91,7 @@ def _ingest_beamtime_rich(
                 phase = str(d.get("phase", ""))
                 progress.update(
                     main_id,
-                    description=(
-                        f"[bold cyan]ingest[/bold cyan] [dim]({phase})[/dim]"
-                    ),
+                    description=(f"[bold cyan]ingest[/bold cyan] [dim]({phase})[/dim]"),
                 )
                 return
             if ev != "file_complete":

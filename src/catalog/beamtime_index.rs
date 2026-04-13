@@ -2,7 +2,7 @@ use diesel::connection::SimpleConnection;
 use diesel::deserialize::{self, QueryableByName};
 use diesel::sql_types::{BigInt, Nullable, Text};
 use diesel::sqlite::{Sqlite, SqliteConnection};
-use diesel::{Connection, RunQueryDsl, sql_query};
+use diesel::{sql_query, Connection, RunQueryDsl};
 use std::path::{Path, PathBuf};
 
 use crate::catalog::{CatalogError, Result};
@@ -32,11 +32,10 @@ pub fn ensure_beamtime_index_dir() -> Result<()> {
 pub fn open_beamtime_index_db() -> Result<SqliteConnection> {
     ensure_beamtime_index_dir()?;
     let path = beamtime_index_dir().join(BEAMTIME_INDEX_DB_NAME);
-    let s = path.to_str().ok_or_else(|| {
-        CatalogError::Validation("beamtime index path is not valid UTF-8".into())
-    })?;
-    let mut conn =
-        SqliteConnection::establish(s).map_err(CatalogError::DieselConnection)?;
+    let s = path
+        .to_str()
+        .ok_or_else(|| CatalogError::Validation("beamtime index path is not valid UTF-8".into()))?;
+    let mut conn = SqliteConnection::establish(s).map_err(CatalogError::DieselConnection)?;
     conn.batch_execute(BEAMTIMES_TABLE)
         .map_err(CatalogError::Diesel)?;
     Ok(conn)
@@ -58,11 +57,10 @@ impl QueryableByName<Sqlite> for BeamtimeIdxEntry {
 
 pub fn list_beamtimes() -> Result<Vec<(PathBuf, i64)>> {
     let mut conn = open_beamtime_index_db()?;
-    let rows: Vec<BeamtimeIdxEntry> = sql_query(
-        "SELECT path, last_indexed_at FROM beamtimes ORDER BY last_indexed_at DESC",
-    )
-    .load(&mut conn)
-    .map_err(CatalogError::Diesel)?;
+    let rows: Vec<BeamtimeIdxEntry> =
+        sql_query("SELECT path, last_indexed_at FROM beamtimes ORDER BY last_indexed_at DESC")
+            .load(&mut conn)
+            .map_err(CatalogError::Diesel)?;
     Ok(rows
         .into_iter()
         .map(|r| (PathBuf::from(r.path), r.last_indexed_at))

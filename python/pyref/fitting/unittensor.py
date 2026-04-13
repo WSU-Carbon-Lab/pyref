@@ -1,3 +1,5 @@
+"""Unit-scaled tensor helpers for anisotropic reflectivity models (refnx-backed)."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

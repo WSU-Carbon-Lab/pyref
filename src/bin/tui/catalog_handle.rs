@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "catalog")]
 use pyref::catalog::{
-    list_experimentalists, list_beamtimes_for_expt, catalog_status_for_path,
-    list_beamtime_entries_v2, query_scan_points,
-    ExptMeta, BeamtimeMeta, DbCatalogStatus, BeamtimeEntries, FileRow, CatalogFilter,
+    catalog_status_for_path, list_beamtime_entries_v2, list_beamtimes_for_expt,
+    list_experimentalists, query_scan_points, BeamtimeEntries, BeamtimeMeta, CatalogFilter,
+    DbCatalogStatus, ExptMeta, FileRow,
 };
 
 #[derive(Debug)]
@@ -33,7 +33,11 @@ impl CatalogHandle {
     }
 
     #[cfg(feature = "catalog")]
-    pub fn query_scan_points(&self, beamtime_path: &Path, filter: Option<&CatalogFilter>) -> Vec<FileRow> {
+    pub fn query_scan_points(
+        &self,
+        beamtime_path: &Path,
+        filter: Option<&CatalogFilter>,
+    ) -> Vec<FileRow> {
         query_scan_points(&self.db_path, beamtime_path, filter).unwrap_or_default()
     }
 

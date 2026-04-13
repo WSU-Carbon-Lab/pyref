@@ -26,6 +26,7 @@ use crate::io::BtIngestRow;
 use crate::loader::read_multiple_fits_headers_only_rows;
 use crate::schema::{beamtimes, file_tags, files, frames, samples, scans, tags};
 
+use super::discover_paths_for_catalog_ingest;
 use super::ingest_progress::{
     layout_and_groups_from_paths, BeamtimeIngestLayout, IngestProgress, IngestProgressSink,
 };
@@ -33,7 +34,6 @@ use super::layout::BeamtimeLayout;
 use super::parallelism::IngestParallelism;
 use super::zarr_write::{open_zarr_store, write_frame_raw};
 use super::{db, paths, CatalogError, Result};
-use super::discover_paths_for_catalog_ingest;
 
 pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "DATE",
@@ -310,16 +310,11 @@ fn ingest_beamtime_inner(
         .map_err(CatalogError::FitsReadFailed)?;
     let mut rows: Vec<BtIngestRow> = header_groups.into_iter().flatten().collect();
     rows.sort_by(|a, b| {
-        (
-            a.scan_number,
-            a.frame_number,
-            a.file_path.as_str(),
-        )
-            .cmp(&(
-                b.scan_number,
-                b.frame_number,
-                b.file_path.as_str(),
-            ))
+        (a.scan_number, a.frame_number, a.file_path.as_str()).cmp(&(
+            b.scan_number,
+            b.frame_number,
+            b.file_path.as_str(),
+        ))
     });
 
     if let Some(ref sink) = progress {
@@ -328,7 +323,8 @@ fn ingest_beamtime_inner(
         });
     }
 
-    let zstore = open_zarr_store(&zarr_path).map_err(|e| CatalogError::Validation(e.to_string()))?;
+    let zstore =
+        open_zarr_store(&zarr_path).map_err(|e| CatalogError::Validation(e.to_string()))?;
 
     let mut sample_cache: HashMap<String, i32> = HashMap::new();
     let mut scan_cache: HashMap<i32, i32> = HashMap::new();
@@ -376,8 +372,13 @@ fn ingest_beamtime_inner(
         }
         let unique_scans: HashSet<i32> = rows.iter().map(|r| r.scan_number as i32).collect();
         for sn in &unique_scans {
-            let sk = scan_first_sample.get(sn).cloned().unwrap_or_else(|| "_".to_string());
-            let rep_sample = *sample_cache.get(&sk).ok_or_else(|| diesel::result::Error::NotFound)?;
+            let sk = scan_first_sample
+                .get(sn)
+                .cloned()
+                .unwrap_or_else(|| "_".to_string());
+            let rep_sample = *sample_cache
+                .get(&sk)
+                .ok_or_else(|| diesel::result::Error::NotFound)?;
             diesel::insert_into(scans::table)
                 .values((
                     scans::beamtime_id.eq(beamtime_id),
@@ -431,12 +432,10 @@ fn ingest_beamtime_inner(
                     files::scan_number.eq(scan_no),
                     files::frame_number.eq(row.frame_number as i32),
                     files::nas_uri.eq(row.file_path.as_str()),
-                    files::filename.eq(
-                        Path::new(&row.file_path)
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or(""),
-                    ),
+                    files::filename.eq(Path::new(&row.file_path)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")),
                     files::parse_flag.eq(parse_flag.as_deref()),
                     files::data_offset.eq(row.data_offset),
                     files::naxis1.eq(row.naxis1 as i32),
@@ -478,10 +477,7 @@ fn ingest_beamtime_inner(
                     .optional()?;
                 if ft_exists.is_none() {
                     diesel::insert_into(file_tags::table)
-                        .values((
-                            file_tags::file_id.eq(file_id),
-                            file_tags::tag_id.eq(tid),
-                        ))
+                        .values((file_tags::file_id.eq(file_id), file_tags::tag_id.eq(tid)))
                         .execute(conn)?;
                 }
             }
@@ -542,10 +538,7 @@ fn ingest_beamtime_inner(
         .collect();
     let mut by_scan: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (i, r) in rows.iter().enumerate() {
-        by_scan
-            .entry(r.scan_number as i32)
-            .or_default()
-            .push(i);
+        by_scan.entry(r.scan_number as i32).or_default().push(i);
     }
     let scan_order: Vec<i32> = by_scan.keys().copied().collect();
 
@@ -554,8 +547,7 @@ fn ingest_beamtime_inner(
             .par_iter()
             .map(|&sn| -> Result<Vec<(usize, Array2<i32>)>> {
                 let idxs: Vec<usize> = by_scan.get(&sn).cloned().unwrap_or_default();
-                idxs
-                    .into_iter()
+                idxs.into_iter()
                     .map(|row_i| read_image_i32(&rows[row_i]).map(|img| (row_i, img)))
                     .collect::<std::result::Result<Vec<_>, _>>()
             })
@@ -569,13 +561,8 @@ fn ingest_beamtime_inner(
     let global_total = rows.len() as u32;
     for (i, img) in flat {
         let row = &rows[i];
-        write_frame_raw(
-            &zstore,
-            row.scan_number,
-            row.frame_number,
-            &img,
-        )
-        .map_err(|e| CatalogError::Validation(e.to_string()))?;
+        write_frame_raw(&zstore, row.scan_number, row.frame_number, &img)
+            .map_err(|e| CatalogError::Validation(e.to_string()))?;
         let sn = row.scan_number as i32;
         let e = scan_done.entry(sn).or_insert(0);
         *e += 1;

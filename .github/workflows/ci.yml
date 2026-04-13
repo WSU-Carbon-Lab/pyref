@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (ruff, ty, pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dev environment
+        run: uv sync --frozen --no-default-groups --group dev --python 3.12
+
+      - name: Build extension (maturin develop)
+        run: >-
+          uv run --python 3.12 maturin develop
+          --features "pyo3/extension-module,catalog,parallel_ingest,zarr"
+
+      - name: Ruff lint
+        run: uv run --python 3.12 ruff check .
+
+      - name: Ruff format
+        run: uv run --python 3.12 ruff format --check .
+
+      - name: ty typecheck
+        run: uv run --python 3.12 ty check
+
+      - name: pytest
+        run: uv run --python 3.12 pytest tests/ -q
+
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        env:
+          PYO3_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: cargo clippy --locked --all-targets
+
+      - name: cargo test
+        env:
+          PYO3_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: cargo test --locked

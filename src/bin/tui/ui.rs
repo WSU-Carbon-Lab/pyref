@@ -299,7 +299,12 @@ fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: Th
     let entry_names: Vec<String> = app
         .open_dir_entries()
         .iter()
-        .map(|p| p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string())
+        .map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?")
+                .to_string()
+        })
         .collect();
     for name in &entry_names {
         items.push(ListItem::new(name.clone()));
@@ -629,7 +634,12 @@ fn list_style(active: bool, theme: ThemeMode) -> ratatui::style::Style {
     }
 }
 
-fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
+fn render_sample_list(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    theme: ThemeMode,
+) -> Option<Rect> {
     let content_len = app.samples.len();
     let viewport = (area.height.saturating_sub(2)).max(1) as usize;
     let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
@@ -751,7 +761,12 @@ fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
     }
 }
 
-fn render_scan_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
+fn render_scan_list(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    theme: ThemeMode,
+) -> Option<Rect> {
     let content_len = app.scans.len();
     let viewport = (area.height.saturating_sub(2)).max(1) as usize;
     let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
@@ -833,18 +848,21 @@ fn beamspot_mean_std(beamspots: &[(i64, i64)]) -> (f64, f64, f64, f64) {
     if n == 0.0 {
         return (0.0, 0.0, 0.0, 0.0);
     }
-    let (row_sum, col_sum): (i64, i64) =
-        beamspots.iter().fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
+    let (row_sum, col_sum): (i64, i64) = beamspots
+        .iter()
+        .fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
     let row_mean = row_sum as f64 / n;
     let col_mean = col_sum as f64 / n;
     if n < 2.0 {
         return (row_mean, 0.0, col_mean, 0.0);
     }
-    let (row_var, col_var) = beamspots.iter().fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
-        let dr = ri as f64 - row_mean;
-        let dc = ci as f64 - col_mean;
-        (rv + dr * dr, cv + dc * dc)
-    });
+    let (row_var, col_var) = beamspots
+        .iter()
+        .fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
+            let dr = ri as f64 - row_mean;
+            let dc = ci as f64 - col_mean;
+            (rv + dr * dr, cv + dc * dc)
+        });
     let row_std = (row_var / (n - 1.0)).sqrt();
     let col_std = (col_var / (n - 1.0)).sqrt();
     (row_mean, row_std, col_mean, col_std)
@@ -880,8 +898,8 @@ fn render_expanded_file_list(
     let start = offset.min(display_order.len());
     let take = (display_order.len().saturating_sub(start)).min(visible_rows);
     frame.render_widget(block, area);
-    let needs_scrollbar = inner.width > SCROLLBAR_WIDTH
-        && file_count > app.last_expanded_files_visible;
+    let needs_scrollbar =
+        inner.width > SCROLLBAR_WIDTH && file_count > app.last_expanded_files_visible;
     let (table_inner, scrollbar_area) = if needs_scrollbar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -1201,7 +1219,9 @@ fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
             let kind_str = match entry.kind {
                 super::explorer::EntryKind::DataRoot => "DATA",
                 super::explorer::EntryKind::Experimentalist => {
-                    if entry.expt_resolution == Some(super::explorer::ExptResolution::NeedsResolution) {
+                    if entry.expt_resolution
+                        == Some(super::explorer::ExptResolution::NeedsResolution)
+                    {
                         "Expt ⚑"
                     } else {
                         "Expt"
@@ -1248,7 +1268,11 @@ fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
 
-    frame.render_stateful_widget(list, area, &mut app.explorer_state_mut().unwrap().list_state);
+    frame.render_stateful_widget(
+        list,
+        area,
+        &mut app.explorer_state_mut().unwrap().list_state,
+    );
 }
 
 fn render_explorer_bottom(frame: &mut Frame, area: Rect, theme: ThemeMode) {

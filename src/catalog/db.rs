@@ -24,8 +24,7 @@ pub fn establish_connection(database_url: &Path) -> Result<SqliteConnection> {
     let mut conn = SqliteConnection::establish(path_str).map_err(CatalogError::DieselConnection)?;
     conn.batch_execute("PRAGMA foreign_keys = ON;")
         .map_err(CatalogError::Diesel)?;
-    conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
-        CatalogError::Migrations(format!("{e:?}"))
-    })?;
+    conn.run_pending_migrations(MIGRATIONS)
+        .map_err(|e| CatalogError::Migrations(format!("{e:?}")))?;
     Ok(conn)
 }

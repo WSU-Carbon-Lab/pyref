@@ -81,8 +81,8 @@ fn load_preview_data(
     roi: Option<(usize, usize, usize, usize)>,
     profile_sigma: Option<f64>,
 ) -> Result<PreviewData, String> {
-    let (_, subtracted) = pyref::io::image_mmap::materialize_image_from_path(path)
-        .map_err(|e| e.to_string())?;
+    let (_, subtracted) =
+        pyref::io::image_mmap::materialize_image_from_path(path).map_err(|e| e.to_string())?;
     let height = subtracted.nrows();
     let width = subtracted.ncols();
     let subtracted_f64: Array2<f64> = subtracted.mapv(|x| x as f64);
@@ -106,20 +106,22 @@ fn load_preview_data(
         .max(1.0);
     let left_rgba = pyref::colormap::array2_i64_to_rgba(&subtracted, Some((0, left_max)), true)
         .ok_or("Colormap failed")?;
-    let mid_rgba =
-        pyref::colormap::array2_f32_to_rgba(&filtered, Some((0.0, mid_max)), true)
-            .ok_or("Colormap failed")?;
+    let mid_rgba = pyref::colormap::array2_f32_to_rgba(&filtered, Some((0.0, mid_max)), true)
+        .ok_or("Colormap failed")?;
     let (crop, cw, ch, _) = crop_4sigma(&filtered, fit, height, width);
     let right_max = crop
         .iter()
         .copied()
         .fold(f32::NEG_INFINITY, f32::max)
         .max(1.0);
-    let right_rgba =
-        pyref::colormap::array2_f32_to_rgba(&crop, Some((0.0, right_max)), true)
-            .ok_or("Colormap failed")?;
-    let crop_col_sum = (0..cw).map(|j| (0..ch).map(|i| crop[[i, j]]).sum()).collect();
-    let crop_row_sum = (0..ch).map(|i| (0..cw).map(|j| crop[[i, j]]).sum()).collect();
+    let right_rgba = pyref::colormap::array2_f32_to_rgba(&crop, Some((0.0, right_max)), true)
+        .ok_or("Colormap failed")?;
+    let crop_col_sum = (0..cw)
+        .map(|j| (0..ch).map(|i| crop[[i, j]]).sum())
+        .collect();
+    let crop_row_sum = (0..ch)
+        .map(|i| (0..cw).map(|j| crop[[i, j]]).sum())
+        .collect();
     Ok(PreviewData {
         path: path.to_path_buf(),
         left_rgba,
@@ -160,7 +162,12 @@ fn crop_4sigma(
     fit: Option<pyref::gaussian_fit::Gaussian2DFit>,
     height: usize,
     width: usize,
-) -> (Array2<f32>, usize, usize, Option<pyref::gaussian_fit::Gaussian2DFit>) {
+) -> (
+    Array2<f32>,
+    usize,
+    usize,
+    Option<pyref::gaussian_fit::Gaussian2DFit>,
+) {
     let (cr, cc, half_r, half_c) = if let Some(f) = fit {
         let hr = (CROP_SIGMA_MULT * f.sigma_row).ceil() as i32;
         let hc = (CROP_SIGMA_MULT * f.sigma_col).ceil() as i32;
@@ -192,8 +199,8 @@ fn crop_4sigma(
             let (ch, cw) = (crop.nrows(), crop.ncols());
             return (crop, cw, ch, fit);
         }
-        let fallback = Array2::from_shape_vec((2, 2), vec![0.0f32; 4])
-            .expect("fallback 2x2 shape is valid");
+        let fallback =
+            Array2::from_shape_vec((2, 2), vec![0.0f32; 4]).expect("fallback 2x2 shape is valid");
         return (fallback, 2, 2, fit);
     }
     let crop = filtered.slice(ndarray::s![r0..r1, c0..c1]).to_owned();
@@ -242,7 +249,12 @@ pub fn run_preview_window_on_first_path(
         "FITS preview",
         native_options,
         Box::new(move |cc| {
-            Ok(Box::new(PreviewApp::new(cc, forward_rx, beamspot_tx, cmd_tx)))
+            Ok(Box::new(PreviewApp::new(
+                cc,
+                forward_rx,
+                beamspot_tx,
+                cmd_tx,
+            )))
         }),
     );
 }
@@ -524,11 +536,8 @@ impl PreviewApp {
             {
                 let image =
                     egui::ColorImage::from_rgba_unmultiplied([self.right_w, self.right_h], rgba);
-                self.tex_right = Some(ctx.load_texture(
-                    "preview_right",
-                    image,
-                    egui::TextureOptions::default(),
-                ));
+                self.tex_right =
+                    Some(ctx.load_texture("preview_right", image, egui::TextureOptions::default()));
             }
         }
     }
@@ -675,8 +684,7 @@ impl eframe::App for PreviewApp {
                         panel_w * (self.left_h as f32 / self.left_w as f32).min(2.0),
                     );
                     let response = ui.add(
-                        egui::Image::from_texture((tex.id(), size))
-                            .sense(egui::Sense::drag()),
+                        egui::Image::from_texture((tex.id(), size)).sense(egui::Sense::drag()),
                     );
                     let rect = response.rect;
                     if response.drag_started() {
@@ -692,10 +700,7 @@ impl eframe::App for PreviewApp {
                                 .as_ref()
                                 .and_then(|p| self.zoom_per_path.get(p))
                                 .map(|(r0, r1, c0, c1)| {
-                                    (
-                                        c1.saturating_sub(*c0).max(1),
-                                        r1.saturating_sub(*r0).max(1),
-                                    )
+                                    (c1.saturating_sub(*c0).max(1), r1.saturating_sub(*r0).max(1))
                                 })
                                 .unwrap_or((self.left_w, self.left_h));
                             self.marquee_img_w = img_w;
@@ -719,8 +724,7 @@ impl eframe::App for PreviewApp {
                                     self.marquee_rect,
                                 ) {
                                     if self.marquee_img_w > 0 && self.marquee_img_h > 0 {
-                                        let visible =
-                                            self.zoom_per_path.get(&path).copied();
+                                        let visible = self.zoom_per_path.get(&path).copied();
                                         let (r0, c0) = Self::screen_to_image(
                                             start,
                                             rect,
@@ -785,10 +789,8 @@ impl eframe::App for PreviewApp {
                                         && fr >= r0 as f32
                                         && fr < r1 as f32;
                                     if in_view {
-                                        let cx = rect.min.x
-                                            + (fc - c0 as f32) / zw * rect.width();
-                                        let cy = rect.min.y
-                                            + (fr - r0 as f32) / zh * rect.height();
+                                        let cx = rect.min.x + (fc - c0 as f32) / zw * rect.width();
+                                        let cy = rect.min.y + (fr - r0 as f32) / zh * rect.height();
                                         let half = (CROP_SIGMA_MULT * f.sigma_row.max(f.sigma_col))
                                             .ceil()
                                             .max(2.0)
@@ -798,10 +800,8 @@ impl eframe::App for PreviewApp {
                                         let cr1 = (fr + half).max(r0 as f32).min(r1 as f32 - 1.0);
                                         let cc0 = (fc - half).max(c0 as f32).min(c1 as f32 - 1.0);
                                         let cc1 = (fc + half).max(c0 as f32).min(c1 as f32 - 1.0);
-                                        let x0 =
-                                            rect.min.x + (cc0 - c0 as f32) / zw * rect.width();
-                                        let x1 =
-                                            rect.min.x + (cc1 - c0 as f32) / zw * rect.width();
+                                        let x0 = rect.min.x + (cc0 - c0 as f32) / zw * rect.width();
+                                        let x1 = rect.min.x + (cc1 - c0 as f32) / zw * rect.width();
                                         let y0 =
                                             rect.min.y + (cr0 - r0 as f32) / zh * rect.height();
                                         let y1 =
@@ -822,7 +822,8 @@ impl eframe::App for PreviewApp {
                                 let half = (CROP_SIGMA_MULT * f.sigma_row.max(f.sigma_col))
                                     .ceil()
                                     .max(2.0)
-                                    .min((self.left_h / 2).min(self.left_w / 2) as f64) as f32;
+                                    .min((self.left_h / 2).min(self.left_w / 2) as f64)
+                                    as f32;
                                 let c0 = (f.center_col as f32 - half)
                                     .max(0.0)
                                     .min((self.left_w - 1) as f32);
@@ -842,10 +843,13 @@ impl eframe::App for PreviewApp {
                                 (cx, cy, Some((x0, y0, x1, y1)))
                             }
                         };
-                        if rect.width() > 0.0 && rect.height() > 0.0
+                        if rect.width() > 0.0
+                            && rect.height() > 0.0
                             && (zoom.is_none()
-                                || (cx >= rect.min.x && cx <= rect.max.x
-                                    && cy >= rect.min.y && cy <= rect.max.y))
+                                || (cx >= rect.min.x
+                                    && cx <= rect.max.x
+                                    && cy >= rect.min.y
+                                    && cy <= rect.max.y))
                         {
                             let stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
                             ui.painter().line_segment(
@@ -881,8 +885,7 @@ impl eframe::App for PreviewApp {
                         panel_w * (self.mid_h as f32 / self.mid_w as f32).min(2.0),
                     );
                     let response = ui.add(
-                        egui::Image::from_texture((tex.id(), size))
-                            .sense(egui::Sense::drag()),
+                        egui::Image::from_texture((tex.id(), size)).sense(egui::Sense::drag()),
                     );
                     let rect = response.rect;
                     if response.drag_started() {
@@ -898,10 +901,7 @@ impl eframe::App for PreviewApp {
                                 .as_ref()
                                 .and_then(|p| self.zoom_per_path.get(p))
                                 .map(|(r0, r1, c0, c1)| {
-                                    (
-                                        c1.saturating_sub(*c0).max(1),
-                                        r1.saturating_sub(*r0).max(1),
-                                    )
+                                    (c1.saturating_sub(*c0).max(1), r1.saturating_sub(*r0).max(1))
                                 })
                                 .unwrap_or((self.mid_w, self.mid_h));
                             self.marquee_img_w = img_w;
@@ -925,8 +925,7 @@ impl eframe::App for PreviewApp {
                                     self.marquee_rect,
                                 ) {
                                     if self.marquee_img_w > 0 && self.marquee_img_h > 0 {
-                                        let visible =
-                                            self.zoom_per_path.get(&path).copied();
+                                        let visible = self.zoom_per_path.get(&path).copied();
                                         let (r0, c0) = Self::screen_to_image(
                                             start,
                                             rect,
@@ -991,10 +990,8 @@ impl eframe::App for PreviewApp {
                                         && fr >= r0 as f32
                                         && fr < r1 as f32;
                                     if in_view {
-                                        let cx = rect.min.x
-                                            + (fc - c0 as f32) / zw * rect.width();
-                                        let cy = rect.min.y
-                                            + (fr - r0 as f32) / zh * rect.height();
+                                        let cx = rect.min.x + (fc - c0 as f32) / zw * rect.width();
+                                        let cy = rect.min.y + (fr - r0 as f32) / zh * rect.height();
                                         let half = (CROP_SIGMA_MULT * f.sigma_row.max(f.sigma_col))
                                             .ceil()
                                             .max(2.0)
@@ -1004,10 +1001,8 @@ impl eframe::App for PreviewApp {
                                         let cr1 = (fr + half).max(r0 as f32).min(r1 as f32 - 1.0);
                                         let cc0 = (fc - half).max(c0 as f32).min(c1 as f32 - 1.0);
                                         let cc1 = (fc + half).max(c0 as f32).min(c1 as f32 - 1.0);
-                                        let x0 =
-                                            rect.min.x + (cc0 - c0 as f32) / zw * rect.width();
-                                        let x1 =
-                                            rect.min.x + (cc1 - c0 as f32) / zw * rect.width();
+                                        let x0 = rect.min.x + (cc0 - c0 as f32) / zw * rect.width();
+                                        let x1 = rect.min.x + (cc1 - c0 as f32) / zw * rect.width();
                                         let y0 =
                                             rect.min.y + (cr0 - r0 as f32) / zh * rect.height();
                                         let y1 =
@@ -1028,7 +1023,8 @@ impl eframe::App for PreviewApp {
                                 let half = (CROP_SIGMA_MULT * f.sigma_row.max(f.sigma_col))
                                     .ceil()
                                     .max(2.0)
-                                    .min((self.mid_h / 2).min(self.mid_w / 2) as f64) as f32;
+                                    .min((self.mid_h / 2).min(self.mid_w / 2) as f64)
+                                    as f32;
                                 let c0 = (f.center_col as f32 - half)
                                     .max(0.0)
                                     .min((self.mid_w - 1) as f32);
@@ -1048,10 +1044,13 @@ impl eframe::App for PreviewApp {
                                 (cx, cy, Some((x0, y0, x1, y1)))
                             }
                         };
-                        if rect.width() > 0.0 && rect.height() > 0.0
+                        if rect.width() > 0.0
+                            && rect.height() > 0.0
                             && (zoom.is_none()
-                                || (cx >= rect.min.x && cx <= rect.max.x
-                                    && cy >= rect.min.y && cy <= rect.max.y))
+                                || (cx >= rect.min.x
+                                    && cx <= rect.max.x
+                                    && cy >= rect.min.y
+                                    && cy <= rect.max.y))
                         {
                             let stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
                             ui.painter().line_segment(
@@ -1089,73 +1088,59 @@ impl eframe::App for PreviewApp {
                     let trace_width = 48.0f32;
                     let crop_size = (panel_w - trace_width - ui.spacing().item_spacing.x).max(1.0);
 
-                    let draw_col_trace =
-                        |ui: &mut egui::Ui, data: &[f32], w: f32, h: f32| {
-                            let (rect, _) =
-                                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-                            let min_v =
-                                data.iter().copied().fold(f32::INFINITY, f32::min);
-                            let max_v =
-                                data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                            let range = (max_v - min_v).max(1e-6);
-                            let n = data.len();
-                            let mut pts: Vec<egui::Pos2> = (0..n)
-                                .map(|j| {
-                                    let x = rect.min.x
-                                        + (j as f32 / (n - 1).max(1) as f32)
-                                            * rect.width();
-                                    let t = (data[j] - min_v) / range;
-                                    let y = rect.max.y - t * rect.height();
-                                    egui::Pos2::new(x, y)
-                                })
-                                .collect();
-                            if pts.len() == 1 {
-                                pts.push(egui::Pos2::new(pts[0].x + 1.0, pts[0].y));
-                            }
-                            if pts.len() >= 2 {
-                                ui.painter().add(egui::Shape::line(
-                                    pts,
-                                    egui::Stroke::new(
-                                        1.5,
-                                        egui::Color32::from_rgb(0, 200, 200),
-                                    ),
-                                ));
-                            }
-                        };
+                    let draw_col_trace = |ui: &mut egui::Ui, data: &[f32], w: f32, h: f32| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                        let min_v = data.iter().copied().fold(f32::INFINITY, f32::min);
+                        let max_v = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                        let range = (max_v - min_v).max(1e-6);
+                        let n = data.len();
+                        let mut pts: Vec<egui::Pos2> = (0..n)
+                            .map(|j| {
+                                let x =
+                                    rect.min.x + (j as f32 / (n - 1).max(1) as f32) * rect.width();
+                                let t = (data[j] - min_v) / range;
+                                let y = rect.max.y - t * rect.height();
+                                egui::Pos2::new(x, y)
+                            })
+                            .collect();
+                        if pts.len() == 1 {
+                            pts.push(egui::Pos2::new(pts[0].x + 1.0, pts[0].y));
+                        }
+                        if pts.len() >= 2 {
+                            ui.painter().add(egui::Shape::line(
+                                pts,
+                                egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 200, 200)),
+                            ));
+                        }
+                    };
 
-                    let draw_row_trace =
-                        |ui: &mut egui::Ui, data: &[f32], w: f32, h: f32| {
-                            let (rect, _) =
-                                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-                            let min_v =
-                                data.iter().copied().fold(f32::INFINITY, f32::min);
-                            let max_v =
-                                data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                            let range = (max_v - min_v).max(1e-6);
-                            let n = data.len();
-                            let mut pts: Vec<egui::Pos2> = (0..n)
-                                .map(|i| {
-                                    let y = rect.min.y
-                                        + (i as f32 / (n - 1).max(1) as f32)
-                                            * rect.height();
-                                    let t = (data[i] - min_v) / range;
-                                    let x = rect.min.x + t * rect.width();
-                                    egui::Pos2::new(x, y)
-                                })
-                                .collect();
-                            if pts.len() == 1 {
-                                pts.push(egui::Pos2::new(pts[0].x, pts[0].y + 1.0));
-                            }
-                            if pts.len() >= 2 {
-                                ui.painter().add(egui::Shape::line(
-                                    pts,
-                                    egui::Stroke::new(
-                                        1.5,
-                                        egui::Color32::from_rgb(0, 200, 200),
-                                    ),
-                                ));
-                            }
-                        };
+                    let draw_row_trace = |ui: &mut egui::Ui, data: &[f32], w: f32, h: f32| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                        let min_v = data.iter().copied().fold(f32::INFINITY, f32::min);
+                        let max_v = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                        let range = (max_v - min_v).max(1e-6);
+                        let n = data.len();
+                        let mut pts: Vec<egui::Pos2> = (0..n)
+                            .map(|i| {
+                                let y =
+                                    rect.min.y + (i as f32 / (n - 1).max(1) as f32) * rect.height();
+                                let t = (data[i] - min_v) / range;
+                                let x = rect.min.x + t * rect.width();
+                                egui::Pos2::new(x, y)
+                            })
+                            .collect();
+                        if pts.len() == 1 {
+                            pts.push(egui::Pos2::new(pts[0].x, pts[0].y + 1.0));
+                        }
+                        if pts.len() >= 2 {
+                            ui.painter().add(egui::Shape::line(
+                                pts,
+                                egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 200, 200)),
+                            ));
+                        }
+                    };
 
                     let col_sum = self.crop_col_sum.clone();
                     let row_sum = self.crop_row_sum.clone();
@@ -1185,23 +1170,18 @@ impl eframe::App for PreviewApp {
                                             .map(|&(px, py)| {
                                                 egui::Pos2::new(
                                                     rect.min.x
-                                                        + (px / self.right_w as f64)
-                                                            as f32
-                                                        * rect.width(),
+                                                        + (px / self.right_w as f64) as f32
+                                                            * rect.width(),
                                                     rect.min.y
-                                                        + (py / self.right_h as f64)
-                                                            as f32
-                                                        * rect.height(),
+                                                        + (py / self.right_h as f64) as f32
+                                                            * rect.height(),
                                                 )
                                             })
                                             .collect();
                                         if screen_pts.len() >= 2 {
                                             ui.painter().add(egui::Shape::line(
                                                 screen_pts,
-                                                egui::Stroke::new(
-                                                    1.0,
-                                                    egui::Color32::WHITE,
-                                                ),
+                                                egui::Stroke::new(1.0, egui::Color32::WHITE),
                                             ));
                                         }
                                     }

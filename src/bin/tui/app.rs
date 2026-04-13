@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::thread;
 use std::time::Instant;
 
@@ -22,10 +22,10 @@ use super::scan_type::{classify_scan_type, ReflectivityScanType};
 use pyref::build_fits_stem;
 #[cfg(feature = "catalog")]
 use pyref::catalog::{
-    catalog_file_count, get_scan_point_uid_by_source_path,
-    list_beamtime_entries, list_beamtime_entries_v2, list_beamtimes, query_files, query_scan_points,
-    register_beamtime, rename_file_in_catalog, update_beamspot, update_beamspot_scan_point, FileRow,
-    DEFAULT_INGEST_HEADER_ITEMS, resolve_catalog_path,
+    catalog_file_count, get_scan_point_uid_by_source_path, list_beamtime_entries,
+    list_beamtime_entries_v2, list_beamtimes, query_files, query_scan_points, register_beamtime,
+    rename_file_in_catalog, resolve_catalog_path, update_beamspot, update_beamspot_scan_point,
+    FileRow, DEFAULT_INGEST_HEADER_ITEMS,
 };
 #[cfg(feature = "watch")]
 use pyref::catalog::{run_catalog_watcher, DEFAULT_DEBOUNCE_MS};
@@ -231,18 +231,21 @@ fn beamspot_stats(beamspots: &[(i64, i64)]) -> (f64, f64, f64, f64) {
     if n == 0.0 {
         return (0.0, 0.0, 0.0, 0.0);
     }
-    let (row_sum, col_sum): (i64, i64) =
-        beamspots.iter().fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
+    let (row_sum, col_sum): (i64, i64) = beamspots
+        .iter()
+        .fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
     let row_mean = row_sum as f64 / n;
     let col_mean = col_sum as f64 / n;
     if n < 2.0 {
         return (row_mean, 0.0, col_mean, 0.0);
     }
-    let (row_var, col_var) = beamspots.iter().fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
-        let dr = ri as f64 - row_mean;
-        let dc = ci as f64 - col_mean;
-        (rv + dr * dr, cv + dc * dc)
-    });
+    let (row_var, col_var) = beamspots
+        .iter()
+        .fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
+            let dr = ri as f64 - row_mean;
+            let dc = ci as f64 - col_mean;
+            (rv + dr * dr, cv + dc * dc)
+        });
     let row_std = (row_var / (n - 1.0)).sqrt();
     let col_std = (col_var / (n - 1.0)).sqrt();
     (row_mean, row_std, col_mean, col_std)
@@ -370,7 +373,9 @@ fn beamspot_mean_std(rows: &[FileRow]) -> (f64, f64, f64, f64) {
         return (0.0, 0.0, 0.0, 0.0);
     }
     let n = vals.len() as f64;
-    let (row_sum, col_sum) = vals.iter().fold((0.0, 0.0), |(sr, sc), (r, c)| (sr + r, sc + c));
+    let (row_sum, col_sum) = vals
+        .iter()
+        .fold((0.0, 0.0), |(sr, sc), (r, c)| (sr + r, sc + c));
     let row_mean = row_sum / n;
     let col_mean = col_sum / n;
     let (row_var, col_var) = vals.iter().fold((0.0, 0.0), |(vr, vc), (r, c)| {
@@ -1049,16 +1054,18 @@ impl App {
                 db_path: PathBuf::new(),
             },
         );
-        navigator.stack.push(super::navigator::ScreenState::Launcher(
-            super::navigator::LauncherScreenState {
-                launcher_state: Some(launcher_state),
-                open_dir_active: false,
-                open_dir_path: String::new(),
-                open_dir_entries: vec![],
-                open_dir_list_state: ListState::default(),
-                open_dir_focus: OpenDirFocus::PathInput,
-            },
-        ));
+        navigator
+            .stack
+            .push(super::navigator::ScreenState::Launcher(
+                super::navigator::LauncherScreenState {
+                    launcher_state: Some(launcher_state),
+                    open_dir_active: false,
+                    open_dir_path: String::new(),
+                    open_dir_entries: vec![],
+                    open_dir_list_state: ListState::default(),
+                    open_dir_focus: OpenDirFocus::PathInput,
+                },
+            ));
 
         App {
             navigator,
@@ -1150,7 +1157,9 @@ impl App {
             beamtime_state,
             super::catalog_handle::CatalogHandle::new(catalog_db),
         );
-        navigator.stack.push(super::navigator::ScreenState::Explorer(explorer_state));
+        navigator
+            .stack
+            .push(super::navigator::ScreenState::Explorer(explorer_state));
 
         let mut app = App {
             navigator,
@@ -1201,7 +1210,10 @@ impl App {
 
     pub fn clear_status_if_stale(&mut self) {
         const STATUS_TTL_SECS: u64 = 3;
-        if let (Some(_), Some(at)) = (self.status_message().as_ref(), *self.status_message_set_at()) {
+        if let (Some(_), Some(at)) = (
+            self.status_message().as_ref(),
+            *self.status_message_set_at(),
+        ) {
             if at.elapsed().as_secs() >= STATUS_TTL_SECS {
                 *self.status_message_mut() = None;
                 *self.status_message_set_at_mut() = None;
@@ -1252,19 +1264,21 @@ impl App {
         if !beamtimes.is_empty() {
             list_state.select(Some(0));
         }
-        self.navigator.stack.push(super::navigator::ScreenState::Launcher(
-            super::navigator::LauncherScreenState {
-                launcher_state: Some(LauncherState {
-                    beamtimes,
-                    list_state,
-                }),
-                open_dir_active: false,
-                open_dir_path: String::new(),
-                open_dir_entries: vec![],
-                open_dir_list_state: ListState::default(),
-                open_dir_focus: OpenDirFocus::PathInput,
-            },
-        ));
+        self.navigator
+            .stack
+            .push(super::navigator::ScreenState::Launcher(
+                super::navigator::LauncherScreenState {
+                    launcher_state: Some(LauncherState {
+                        beamtimes,
+                        list_state,
+                    }),
+                    open_dir_active: false,
+                    open_dir_path: String::new(),
+                    open_dir_entries: vec![],
+                    open_dir_list_state: ListState::default(),
+                    open_dir_focus: OpenDirFocus::PathInput,
+                },
+            ));
         #[cfg(feature = "watch")]
         {
             *self.catalog_watcher_mut() = None;
@@ -1820,7 +1834,9 @@ impl App {
     pub fn expanded_files_display_order(&self, group: &GroupedProfileRow) -> Vec<usize> {
         use super::beamspot;
         let sort_col = self.expanded_files_sort_column.unwrap_or(1);
-        let sort_ord = self.expanded_files_sort_ordering.unwrap_or(cmp::Ordering::Less);
+        let sort_ord = self
+            .expanded_files_sort_ordering
+            .unwrap_or(cmp::Ordering::Less);
         let files = &group.file_rows;
         let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(files);
         let fit = beamspot::fit_beamspot_linear(files, group.scan_type);
@@ -1862,17 +1878,19 @@ impl App {
                     col_std,
                 )
                 .1
-                .cmp(&beamspot::beamspot_status(
-                    rb.beam_row,
-                    rb.beam_col,
-                    beamspot::domain_for_row(rb, group.scan_type),
-                    fit.as_ref(),
-                    row_mean,
-                    row_std,
-                    col_mean,
-                    col_std,
-                )
-                .1),
+                .cmp(
+                    &beamspot::beamspot_status(
+                        rb.beam_row,
+                        rb.beam_col,
+                        beamspot::domain_for_row(rb, group.scan_type),
+                        fit.as_ref(),
+                        row_mean,
+                        row_std,
+                        col_mean,
+                        col_std,
+                    )
+                    .1,
+                ),
                 _ => cmp::Ordering::Equal,
             };
             if sort_ord == cmp::Ordering::Greater {
@@ -1909,10 +1927,7 @@ impl App {
     }
 
     #[cfg(feature = "catalog")]
-    fn problem_display_indices(
-        group: &GroupedProfileRow,
-        display_order: &[usize],
-    ) -> Vec<usize> {
+    fn problem_display_indices(group: &GroupedProfileRow, display_order: &[usize]) -> Vec<usize> {
         use super::beamspot;
         let files = &group.file_rows;
         let (row_mean, row_std, col_mean, col_std) = beamspot_mean_std(files);
@@ -2143,10 +2158,7 @@ impl App {
         let ok_ix = match Self::next_ok_display_index(group, &order, cur) {
             Some(ix) => ix,
             None => {
-                self.set_status(
-                    "No next OK beamspot in this profile.".to_string(),
-                    false,
-                );
+                self.set_status("No next OK beamspot in this profile.".to_string(), false);
                 return;
             }
         };
@@ -2244,22 +2256,22 @@ impl App {
         }
         let file_path = path.to_string_lossy().into_owned();
         if let Err(e) = update_beamspot(&db_path, &file_path, beam_row, beam_col, beam_sigma) {
-            self.set_status(format!("Failed to store beamspot from preview: {}", e), true);
+            self.set_status(
+                format!("Failed to store beamspot from preview: {}", e),
+                true,
+            );
             return;
         }
         if let Ok(Some(uid)) = get_scan_point_uid_by_source_path(&db_path, &file_path) {
-            let _ = update_beamspot_scan_point(
-                &db_path,
-                &uid,
-                beam_row,
-                beam_col,
-                beam_sigma,
-            );
+            let _ = update_beamspot_scan_point(&db_path, &uid, beam_row, beam_col, beam_sigma);
         }
         let was_expanded = self.expanded_table_row.is_some();
         let restore_selection = self.expanded_table_row.or(self.table_state.selected());
         self.reload_from_catalog_impl(was_expanded, restore_selection);
-        self.set_status("Beamspot from preview stored; table updated.".to_string(), false);
+        self.set_status(
+            "Beamspot from preview stored; table updated.".to_string(),
+            false,
+        );
     }
 
     pub fn send_preview_path_if_selected(&mut self) {
@@ -2274,10 +2286,7 @@ impl App {
                     if let Some(row) = g.file_rows.get(real_ix) {
                         let frame1 = g.file_rows.iter().min_by_key(|r| r.frame_number);
                         let profile_sigma = frame1.and_then(|r| r.beam_sigma);
-                        let _ = tx.send((
-                            PathBuf::from(&row.file_path),
-                            profile_sigma,
-                        ));
+                        let _ = tx.send((PathBuf::from(&row.file_path), profile_sigma));
                     }
                 }
             }
@@ -2313,36 +2322,22 @@ impl App {
             match pyref::io::image_mmap::materialize_image_from_path(path) {
                 Ok((_, subtracted)) => {
                     let (r, c) = pyref::beamfinding::locate_beam_simple(&subtracted);
-                    let subtracted_f64: ndarray::Array2<f64> =
-                        subtracted.mapv(|x| x as f64);
-                    let beam_sigma = pyref::gaussian_fit::fit_2d_gaussian(
-                        &subtracted_f64,
-                        None,
-                    )
-                    .map(|f| (f.sigma_row + f.sigma_col) / 2.0)
-                    .map(|s| s.clamp(0.5, 20.0));
-                    if let Err(e) = update_beamspot(
-                        &db_path,
-                        file_path,
-                        r as i64,
-                        c as i64,
-                        beam_sigma,
-                    ) {
+                    let subtracted_f64: ndarray::Array2<f64> = subtracted.mapv(|x| x as f64);
+                    let beam_sigma = pyref::gaussian_fit::fit_2d_gaussian(&subtracted_f64, None)
+                        .map(|f| (f.sigma_row + f.sigma_col) / 2.0)
+                        .map(|s| s.clamp(0.5, 20.0));
+                    if let Err(e) =
+                        update_beamspot(&db_path, file_path, r as i64, c as i64, beam_sigma)
+                    {
                         self.set_status(
                             format!("Failed to store beamspot for {}: {}", file_path, e),
                             true,
                         );
                         return;
                     }
-                    if let Ok(Some(uid)) =
-                        get_scan_point_uid_by_source_path(&db_path, file_path)
-                    {
+                    if let Ok(Some(uid)) = get_scan_point_uid_by_source_path(&db_path, file_path) {
                         let _ = update_beamspot_scan_point(
-                            &db_path,
-                            &uid,
-                            r as i64,
-                            c as i64,
-                            beam_sigma,
+                            &db_path, &uid, r as i64, c as i64, beam_sigma,
                         );
                     }
                     beamspots.push((r as i64, c as i64));
@@ -2350,21 +2345,11 @@ impl App {
                 }
                 Err(e) => {
                     err_count += 1;
-                    self.set_status(
-                        format!("Failed to load {}: {}", file_path, e),
-                        true,
-                    );
+                    self.set_status(format!("Failed to load {}: {}", file_path, e), true);
                 }
             }
         }
-        self.reload_from_catalog_impl(
-            was_expanded,
-            if was_expanded {
-                None
-            } else {
-                Some(idx)
-            },
-        );
+        self.reload_from_catalog_impl(was_expanded, if was_expanded { None } else { Some(idx) });
         let msg = if beamspots.is_empty() {
             if err_count == 0 {
                 format!("Materialized {} file(s); beamspots stored.", ok)
@@ -2446,7 +2431,9 @@ impl App {
     ) {
         #[cfg(feature = "catalog")]
         {
-            let saved_expanded_row = preserve_expansion.then_some(self.expanded_table_row).flatten();
+            let saved_expanded_row = preserve_expansion
+                .then_some(self.expanded_table_row)
+                .flatten();
             let saved_expanded_file_ix = if preserve_expansion {
                 self.expanded_selected_file_index
             } else {
@@ -2630,7 +2617,9 @@ impl App {
         // Handle ingest for top BeamtimeState on stack (including ingest-in-progress from Explorer)
         // Extract what we need from the mutable state first
         let (ingest_result, bt_path_cloned, data_root_cloned) = {
-            if let Some(super::navigator::ScreenState::Beamtime(bt_state)) = self.navigator.stack.last_mut() {
+            if let Some(super::navigator::ScreenState::Beamtime(bt_state)) =
+                self.navigator.stack.last_mut()
+            {
                 let mut progress_updates = Vec::new();
                 if let Some(ref progress_rx) = bt_state.ingest_progress_rx {
                     while let Ok((cur, tot)) = progress_rx.try_recv() {
@@ -2652,7 +2641,11 @@ impl App {
                     bt_state.ingest_progress_rx = None;
                     bt_state.ingest_progress = None;
                     bt_state.loading_state = LoadingState::Idle;
-                    (Some(result), bt_state.beamtime_path.clone(), bt_state.data_root.clone())
+                    (
+                        Some(result),
+                        bt_state.beamtime_path.clone(),
+                        bt_state.data_root.clone(),
+                    )
                 } else {
                     (None, PathBuf::new(), None)
                 };
@@ -2673,18 +2666,38 @@ impl App {
                     let _ = register_beamtime(&bt_path_cloned, file_count);
 
                     // Reload from DATA catalog and apply it
-                    if let Some((groups, samples, tags, scans)) =
-                        self.load_beamtime_from_catalog(&bt_path_cloned, data_root_cloned.as_ref(), &self.navigator.catalog)
-                    {
-                        if let Some(super::navigator::ScreenState::Beamtime(bt_state)) = self.navigator.stack.last_mut() {
+                    if let Some((groups, samples, tags, scans)) = self.load_beamtime_from_catalog(
+                        &bt_path_cloned,
+                        data_root_cloned.as_ref(),
+                        &self.navigator.catalog,
+                    ) {
+                        if let Some(super::navigator::ScreenState::Beamtime(bt_state)) =
+                            self.navigator.stack.last_mut()
+                        {
                             bt_state.all_groups = groups;
                             bt_state.samples = samples;
                             bt_state.tags = tags;
                             bt_state.scans = scans;
                             bt_state.has_catalog = true;
-                            bt_state.sample_state.select(if !bt_state.samples.is_empty() { Some(0) } else { None });
-                            bt_state.tag_state.select(if !bt_state.tags.is_empty() { Some(0) } else { None });
-                            bt_state.scan_list_state.select(if !bt_state.scans.is_empty() { Some(0) } else { None });
+                            bt_state
+                                .sample_state
+                                .select(if !bt_state.samples.is_empty() {
+                                    Some(0)
+                                } else {
+                                    None
+                                });
+                            bt_state.tag_state.select(if !bt_state.tags.is_empty() {
+                                Some(0)
+                            } else {
+                                None
+                            });
+                            bt_state
+                                .scan_list_state
+                                .select(if !bt_state.scans.is_empty() {
+                                    Some(0)
+                                } else {
+                                    None
+                                });
                             // Inline refresh to avoid self borrow conflict
                             bt_state.filtered_groups = Self::filter_groups(
                                 &bt_state.all_groups,
@@ -2704,12 +2717,15 @@ impl App {
                     self.sync_explorer_catalog_columns();
                 }
                 Err(e) => {
-                    if let Some(super::navigator::ScreenState::Beamtime(bt_state)) = self.navigator.stack.last_mut() {
+                    if let Some(super::navigator::ScreenState::Beamtime(bt_state)) =
+                        self.navigator.stack.last_mut()
+                    {
                         let path = bt_state
                             .pending_ingest_path
                             .take()
                             .unwrap_or_else(|| bt_state.beamtime_path.clone());
-                        bt_state.set_app_error(super::error::TuiError::ingest_failed(path, e, None));
+                        bt_state
+                            .set_app_error(super::error::TuiError::ingest_failed(path, e, None));
                     }
                 }
             }
@@ -2878,8 +2894,7 @@ impl App {
                 let len = self.tags.len();
                 if len > 0 {
                     let i = self.tag_state.selected().unwrap_or(0);
-                    self.tag_state
-                        .select(Some(if i == 0 { 0 } else { i - 1 }));
+                    self.tag_state.select(Some(if i == 0 { 0 } else { i - 1 }));
                 }
             }
             Focus::ScanList => {
@@ -2975,7 +2990,11 @@ impl App {
         let max_offset = self
             .expanded_table_row
             .and_then(|i| self.group_at_display_index(i))
-            .map(|g| g.file_rows.len().saturating_sub(self.last_expanded_files_visible.max(1)))
+            .map(|g| {
+                g.file_rows
+                    .len()
+                    .saturating_sub(self.last_expanded_files_visible.max(1))
+            })
             .unwrap_or(0);
         self.expanded_files_scroll_offset = pos.min(max_offset);
         self.needs_redraw = true;
@@ -3274,7 +3293,8 @@ impl App {
                     let bt_path = entry.path.clone();
                     let data_root = state.data_root.clone();
                     // Get experimentalist name from parent directory name
-                    let experimentalist = bt_path.parent()
+                    let experimentalist = bt_path
+                        .parent()
                         .and_then(|p| p.file_name())
                         .and_then(|n| n.to_str())
                         .map(|s| s.to_string());
@@ -3312,8 +3332,11 @@ impl App {
                     let data_root = state.data_root.clone();
                     let policy = state.layout_policy.policy_for(&entry.name).clone();
 
-                    let modal = super::explorer::modal::ModalState::new(&expt_name, data_root, &policy);
-                    self.navigator.stack.push(super::navigator::ScreenState::ConfigModal(modal));
+                    let modal =
+                        super::explorer::modal::ModalState::new(&expt_name, data_root, &policy);
+                    self.navigator
+                        .stack
+                        .push(super::navigator::ScreenState::ConfigModal(modal));
                     self.needs_redraw = true;
                 }
             }
@@ -3323,7 +3346,12 @@ impl App {
     /// Phase 4: Start auto-ingest of a beamtime directory.
     /// Spawns background ingest thread and pushes BeamtimeState with ingest in progress.
     #[cfg(feature = "catalog")]
-    fn start_beamtime_ingest(&mut self, bt_path: PathBuf, data_root: Option<PathBuf>, experimentalist: Option<String>) {
+    fn start_beamtime_ingest(
+        &mut self,
+        bt_path: PathBuf,
+        data_root: Option<PathBuf>,
+        experimentalist: Option<String>,
+    ) {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let (progress_tx, progress_rx) = mpsc::channel::<(u32, u32)>();
         let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
@@ -3416,22 +3444,42 @@ impl App {
 
         // If data_root is present, try to load from DATA catalog immediately
         if let Some(ref root) = data_root {
-            if let Some((groups, samples, tags, scans)) =
-                self.load_beamtime_from_catalog(&bt_state.beamtime_path, Some(root), &self.navigator.catalog)
-            {
+            if let Some((groups, samples, tags, scans)) = self.load_beamtime_from_catalog(
+                &bt_state.beamtime_path,
+                Some(root),
+                &self.navigator.catalog,
+            ) {
                 bt_state.all_groups = groups;
                 bt_state.samples = samples;
                 bt_state.tags = tags;
                 bt_state.scans = scans;
                 bt_state.has_catalog = true;
-                bt_state.sample_state.select(if !bt_state.samples.is_empty() { Some(0) } else { None });
-                bt_state.tag_state.select(if !bt_state.tags.is_empty() { Some(0) } else { None });
-                bt_state.scan_list_state.select(if !bt_state.scans.is_empty() { Some(0) } else { None });
+                bt_state
+                    .sample_state
+                    .select(if !bt_state.samples.is_empty() {
+                        Some(0)
+                    } else {
+                        None
+                    });
+                bt_state.tag_state.select(if !bt_state.tags.is_empty() {
+                    Some(0)
+                } else {
+                    None
+                });
+                bt_state
+                    .scan_list_state
+                    .select(if !bt_state.scans.is_empty() {
+                        Some(0)
+                    } else {
+                        None
+                    });
                 self.refresh_filtered_beamtime(&mut bt_state);
             }
         }
 
-        self.navigator.stack.push(super::navigator::ScreenState::Beamtime(bt_state));
+        self.navigator
+            .stack
+            .push(super::navigator::ScreenState::Beamtime(bt_state));
         self.needs_redraw = true;
     }
 
@@ -3442,7 +3490,12 @@ impl App {
         beamtime_path: &PathBuf,
         data_root: Option<&PathBuf>,
         catalog: &CatalogHandle,
-    ) -> Option<(Vec<GroupedProfileRow>, Vec<String>, Vec<String>, Vec<(u32, String)>)> {
+    ) -> Option<(
+        Vec<GroupedProfileRow>,
+        Vec<String>,
+        Vec<String>,
+        Vec<(u32, String)>,
+    )> {
         if data_root.is_none() {
             return None;
         }
@@ -3521,9 +3574,13 @@ impl App {
                 }
                 let st = handle.catalog_status(&e.path);
                 e.catalog_status = match st {
-                    pyref::catalog::DbCatalogStatus::Indexed => super::explorer::CatalogStatus::Indexed,
+                    pyref::catalog::DbCatalogStatus::Indexed => {
+                        super::explorer::CatalogStatus::Indexed
+                    }
                     pyref::catalog::DbCatalogStatus::Stale => super::explorer::CatalogStatus::Stale,
-                    pyref::catalog::DbCatalogStatus::NotIndexed => super::explorer::CatalogStatus::NotIndexed,
+                    pyref::catalog::DbCatalogStatus::NotIndexed => {
+                        super::explorer::CatalogStatus::NotIndexed
+                    }
                 };
             }
         }
@@ -3533,27 +3590,32 @@ impl App {
 
     #[cfg(feature = "catalog")]
     fn restart_explorer_fs_scan(&mut self) {
-        let snapshot = self.navigator.stack.iter().find_map(|s| {
-            if let super::navigator::ScreenState::Explorer(ex) = s {
-                Some(ex)
-            } else {
-                None
-            }
-        }).map(|ex| {
-            let at_root = ex.current_dir == ex.data_root;
-            let paths: Vec<PathBuf> = ex
-                .entries
-                .iter()
-                .filter(|e| e.kind == super::explorer::EntryKind::Experimentalist)
-                .map(|e| e.path.clone())
-                .collect();
-            (
-                at_root,
-                ex.data_root.clone(),
-                ex.layout_policy.clone(),
-                paths,
-            )
-        });
+        let snapshot = self
+            .navigator
+            .stack
+            .iter()
+            .find_map(|s| {
+                if let super::navigator::ScreenState::Explorer(ex) = s {
+                    Some(ex)
+                } else {
+                    None
+                }
+            })
+            .map(|ex| {
+                let at_root = ex.current_dir == ex.data_root;
+                let paths: Vec<PathBuf> = ex
+                    .entries
+                    .iter()
+                    .filter(|e| e.kind == super::explorer::EntryKind::Experimentalist)
+                    .map(|e| e.path.clone())
+                    .collect();
+                (
+                    at_root,
+                    ex.data_root.clone(),
+                    ex.layout_policy.clone(),
+                    paths,
+                )
+            });
         let Some((at_root, data_root, layout, paths)) = snapshot else {
             self.explorer_fs_rx = None;
             return;
@@ -3567,9 +3629,7 @@ impl App {
         thread::spawn(move || {
             for path in paths {
                 let (bt, fits) = super::explorer::heuristic::scan_experimentalist_subtree(
-                    &path,
-                    &data_root,
-                    &layout,
+                    &path, &data_root, &layout,
                 );
                 let _ = tx.send(ExplorerFsUpdate {
                     path,

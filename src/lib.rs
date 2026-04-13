@@ -3,9 +3,9 @@ use polars::prelude::*;
 
 pub mod beamfinding;
 pub mod colormap;
-pub mod gaussian_fit;
 pub mod errors;
 pub mod fits;
+pub mod gaussian_fit;
 pub mod io;
 pub mod loader;
 pub mod path_policy;
@@ -48,10 +48,10 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     use crate::catalog::{
-        beamtime_ingest_layout, classify_scan_type, get_overrides, ingest_beamtime_with_progress_sink,
-        list_beamtime_entries_v2, list_beamtimes_from_catalog,
+        beamtime_ingest_layout, classify_scan_type, get_overrides,
+        ingest_beamtime_with_progress_sink, list_beamtime_entries_v2, list_beamtimes_from_catalog,
         paths, scan_from_catalog, scan_from_catalog_for_beamtime, set_override, CatalogFilter,
-        IngestProgress, IngestParallelism, IngestProgressSink, ReflectivityScanType,
+        IngestParallelism, IngestProgress, IngestProgressSink, ReflectivityScanType,
     };
 
     #[global_allocator]
@@ -94,10 +94,7 @@ mod extension {
         file_paths: Vec<String>,
         header_items: Vec<String>,
     ) -> PyResult<PyDataFrame> {
-        let paths: Vec<_> = file_paths
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
+        let paths: Vec<_> = file_paths.iter().map(std::path::PathBuf::from).collect();
         match read_multiple_fits_headers_only(paths, &header_items) {
             Ok(df) => Ok(PyDataFrame(df)),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -403,9 +400,8 @@ mod extension {
         beamtime_path: &str,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use pyo3::types::{PyDict, PyList};
-        let layout = beamtime_ingest_layout(std::path::Path::new(beamtime_path)).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
+        let layout = beamtime_ingest_layout(std::path::Path::new(beamtime_path))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         let d = PyDict::new_bound(py);
         d.set_item("total_files", layout.total_files)?;
         let list = PyList::empty_bound(py);
@@ -522,9 +518,8 @@ mod extension {
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         let db = std::path::Path::new(db_path);
         let beam = std::path::Path::new(beamtime_path);
-        let e = list_beamtime_entries_v2(db, beam).map_err(|err| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string())
-        })?;
+        let e = list_beamtime_entries_v2(db, beam)
+            .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
         let d = pyo3::types::PyDict::new_bound(py);
         d.set_item("samples", e.samples)?;
         d.set_item("tags", e.tags)?;
@@ -538,9 +533,8 @@ mod extension {
     #[pyo3(signature = (db_path), text_signature = "(db_path)")]
     pub fn py_list_beamtimes(db_path: &str) -> PyResult<Vec<(String, i64)>> {
         let db = std::path::Path::new(db_path);
-        let rows = list_beamtimes_from_catalog(db).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
+        let rows = list_beamtimes_from_catalog(db)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         Ok(rows
             .into_iter()
             .map(|(p, id)| (p.to_string_lossy().into_owned(), id))
@@ -686,14 +680,12 @@ pub use extension::*;
 
 #[cfg(feature = "extension-module")]
 pub fn err_prop_div(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
-    ((lhs.clone() / rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2)))
-        .sqrt()
+    ((lhs.clone() / rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2))).sqrt()
 }
 
 #[cfg(feature = "extension-module")]
 pub fn err_prop_mult(lhs: Expr, rhs: Expr, lhs_err: Expr, rhs_err: Expr) -> Expr {
-    ((lhs.clone() * rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2)))
-        .sqrt()
+    ((lhs.clone() * rhs.clone()) * ((lhs_err / lhs.clone()).pow(2) + (rhs_err / rhs).pow(2))).sqrt()
 }
 
 #[cfg(feature = "extension-module")]

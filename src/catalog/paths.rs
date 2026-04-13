@@ -91,7 +91,8 @@ pub fn file_uri_for_path(path: &Path) -> Result<String> {
 /// Resolves the catalog database path. The beamtime argument is accepted for API compatibility;
 /// the catalog is global and the path does not depend on it.
 pub fn resolve_catalog_path(_beamtime_dir: &Path) -> PathBuf {
-    default_catalog_db_path().expect("catalog path: set PYREF_HOME or ensure a writable user data directory")
+    default_catalog_db_path()
+        .expect("catalog path: set PYREF_HOME or ensure a writable user data directory")
 }
 
 /// Legacy helper: returns the global catalog path (single-catalog layout).

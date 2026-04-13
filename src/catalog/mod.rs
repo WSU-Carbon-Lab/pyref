@@ -1,7 +1,9 @@
 #![cfg(feature = "catalog")]
 
+mod beamspot_qc;
 mod beamtime_index;
 pub mod db;
+mod explorer_query;
 mod ingest;
 mod ingest_progress;
 mod layout;
@@ -9,10 +11,8 @@ mod models;
 mod parallelism;
 pub mod paths;
 mod query;
-mod zarr_write;
-mod explorer_query;
 mod reflectivity_profile;
-mod beamspot_qc;
+mod zarr_write;
 
 #[cfg(feature = "watch")]
 mod watch;
@@ -21,29 +21,28 @@ pub use beamtime_index::{
     ensure_beamtime_index_dir, list_beamtimes, open_beamtime_index_db, register_beamtime,
 };
 
+pub use beamspot_qc::{beamspot_status, domain_for_row, fit_beamspot_linear, BeamspotLinearFit};
+pub use explorer_query::{
+    catalog_status_for_path, list_beamtimes_for_expt, list_experimentalists, BeamtimeMeta,
+    DbCatalogStatus, ExptMeta,
+};
 pub use ingest::{
     beamtime_ingest_layout, ingest_beamtime, ingest_beamtime_parallel,
-    ingest_beamtime_with_context, ingest_beamtime_with_progress_sink,
-    DEFAULT_INGEST_HEADER_ITEMS,
-};
-pub use ingest_progress::{
-    BeamtimeIngestLayout, IngestProgress, IngestProgressSink, ScanFileCount,
+    ingest_beamtime_with_context, ingest_beamtime_with_progress_sink, DEFAULT_INGEST_HEADER_ITEMS,
 };
 #[cfg(feature = "parallel_ingest")]
 pub use ingest::{ingest_beamtime_pipelined, ingest_beamtime_pipelined_with_context};
-pub use parallelism::IngestParallelism;
+pub use ingest_progress::{
+    BeamtimeIngestLayout, IngestProgress, IngestProgressSink, ScanFileCount,
+};
 pub use layout::{detect_beamtime_layout, discover_fits_for_layout, BeamtimeLayout};
+pub use parallelism::IngestParallelism;
 pub use query::{
     catalog_file_count, get_overrides, get_scan_point_uid_by_source_path, list_beamtime_entries,
     list_beamtime_entries_v2, list_beamtimes_from_catalog, query_files, query_scan_points,
     rename_file_in_catalog, scan_from_catalog, scan_from_catalog_for_beamtime, set_override,
     update_beamspot, update_beamspot_scan_point, BeamtimeEntries, CatalogFilter, FileRow,
 };
-pub use explorer_query::{
-    list_experimentalists, list_beamtimes_for_expt, catalog_status_for_path, BeamtimeMeta,
-    DbCatalogStatus, ExptMeta,
-};
-pub use beamspot_qc::{beamspot_status, domain_for_row, fit_beamspot_linear, BeamspotLinearFit};
 pub use reflectivity_profile::{
     classify_scan_type, segment_reflectivity_profiles, ProfileSegment, ReflectivityScanType,
 };

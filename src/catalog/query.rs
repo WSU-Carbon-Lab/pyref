@@ -1,9 +1,9 @@
-use diesel::dsl::count_star;
 use diesel::deserialize::{self, QueryableByName};
+use diesel::dsl::count_star;
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Double, Integer, Nullable, Text};
 use diesel::sqlite::{Sqlite, SqliteConnection};
-use diesel::{OptionalExtension, RunQueryDsl, sql_query};
+use diesel::{sql_query, OptionalExtension, RunQueryDsl};
 use polars::prelude::*;
 use std::path::Path;
 
@@ -383,7 +383,9 @@ impl QueryableByName<Sqlite> for CatalogScanSql {
             tag: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(row, "tag")?,
             scan_number: diesel::row::NamedRow::get::<Integer, i32>(row, "scan_number")?,
             frame_number: diesel::row::NamedRow::get::<Integer, i32>(row, "frame_number")?,
-            date_iso: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(row, "date_iso")?,
+            date_iso: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(
+                row, "date_iso",
+            )?,
             beamline_energy: diesel::row::NamedRow::get::<Double, f64>(row, "beamline_energy")?,
             sample_theta: diesel::row::NamedRow::get::<Double, f64>(row, "sample_theta")?,
             ccd_theta: diesel::row::NamedRow::get::<Double, f64>(row, "ccd_theta")?,
@@ -400,14 +402,14 @@ impl QueryableByName<Sqlite> for CatalogScanSql {
                 row,
                 "beam_sigma",
             )?,
-            reflectivity_profile_index: diesel::row::NamedRow::get::<
-                Nullable<Integer>,
-                Option<i32>,
-            >(row, "reflectivity_profile_index")?,
-            reflectivity_scan_type: diesel::row::NamedRow::get::<
-                Nullable<Text>,
-                Option<String>,
-            >(row, "reflectivity_scan_type")?,
+            reflectivity_profile_index: diesel::row::NamedRow::get::<Nullable<Integer>, Option<i32>>(
+                row,
+                "reflectivity_profile_index",
+            )?,
+            reflectivity_scan_type: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(
+                row,
+                "reflectivity_scan_type",
+            )?,
         })
     }
 }
@@ -570,11 +572,13 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
         Series::new("beam_row".into(), beam_row),
         Series::new("beam_col".into(), beam_col),
         Series::new("beam_sigma".into(), beam_sigma),
-        Series::new("reflectivity_profile_index".into(), reflectivity_profile_index),
+        Series::new(
+            "reflectivity_profile_index".into(),
+            reflectivity_profile_index,
+        ),
         Series::new("reflectivity_scan_type".into(), reflectivity_scan_type),
     ];
-    let columns: Vec<polars::prelude::Column> =
-        series.into_iter().map(|s| s.into()).collect();
+    let columns: Vec<polars::prelude::Column> = series.into_iter().map(|s| s.into()).collect();
     DataFrame::new(columns).map_err(|e| CatalogError::Validation(e.to_string()))
 }
 
@@ -641,9 +645,12 @@ pub fn update_beamspot(
             .execute(&mut conn)
             .map_err(CatalogError::Diesel)?;
         } else {
-            q.set((beam_finding::centroid_row.eq(br), beam_finding::centroid_col.eq(bc)))
-                .execute(&mut conn)
-                .map_err(CatalogError::Diesel)?;
+            q.set((
+                beam_finding::centroid_row.eq(br),
+                beam_finding::centroid_col.eq(bc),
+            ))
+            .execute(&mut conn)
+            .map_err(CatalogError::Diesel)?;
         }
     } else {
         diesel::insert_into(beam_finding::table)
@@ -694,9 +701,12 @@ pub fn update_beamspot_scan_point(
             .execute(&mut conn)
             .map_err(CatalogError::Diesel)?;
         } else {
-            q.set((beam_finding::centroid_row.eq(br), beam_finding::centroid_col.eq(bc)))
-                .execute(&mut conn)
-                .map_err(CatalogError::Diesel)?;
+            q.set((
+                beam_finding::centroid_row.eq(br),
+                beam_finding::centroid_col.eq(bc),
+            ))
+            .execute(&mut conn)
+            .map_err(CatalogError::Diesel)?;
         }
     } else {
         diesel::insert_into(beam_finding::table)
@@ -735,7 +745,8 @@ pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
     let mut sample_names = Vec::new();
     let mut tags = Vec::new();
     let mut notes = Vec::new();
-    let rows: Vec<(String, Option<String>, Option<String>, Option<String>)> = if let Some(p) = path {
+    let rows: Vec<(String, Option<String>, Option<String>, Option<String>)> = if let Some(p) = path
+    {
         file_overrides::table
             .filter(file_overrides::source_path.eq(p))
             .select((
@@ -790,11 +801,9 @@ pub fn set_override(
             "path not in catalog (no files.nas_uri match): {path}"
         )));
     }
-    diesel::delete(
-        file_overrides::table.filter(file_overrides::source_path.eq(path)),
-    )
-    .execute(&mut conn)
-    .map_err(CatalogError::Diesel)?;
+    diesel::delete(file_overrides::table.filter(file_overrides::source_path.eq(path)))
+        .execute(&mut conn)
+        .map_err(CatalogError::Diesel)?;
     diesel::insert_into(file_overrides::table)
         .values((
             file_overrides::source_path.eq(path),
@@ -833,19 +842,15 @@ pub fn rename_file_in_catalog(
         ))
         .execute(&mut conn)
         .map_err(CatalogError::Diesel)?;
-    diesel::update(
-        file_overrides::table.filter(file_overrides::source_path.eq(old_path)),
-    )
-    .set(file_overrides::source_path.eq(new_path))
-    .execute(&mut conn)
-    .map_err(CatalogError::Diesel)?;
-    if !new_sample_name.is_empty() || new_tag.is_some() {
-        let sn = (!new_sample_name.is_empty()).then_some(new_sample_name);
-        diesel::delete(
-            file_overrides::table.filter(file_overrides::source_path.eq(new_path)),
-        )
+    diesel::update(file_overrides::table.filter(file_overrides::source_path.eq(old_path)))
+        .set(file_overrides::source_path.eq(new_path))
         .execute(&mut conn)
         .map_err(CatalogError::Diesel)?;
+    if !new_sample_name.is_empty() || new_tag.is_some() {
+        let sn = (!new_sample_name.is_empty()).then_some(new_sample_name);
+        diesel::delete(file_overrides::table.filter(file_overrides::source_path.eq(new_path)))
+            .execute(&mut conn)
+            .map_err(CatalogError::Diesel)?;
         diesel::insert_into(file_overrides::table)
             .values((
                 file_overrides::source_path.eq(new_path),

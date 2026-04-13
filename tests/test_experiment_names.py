@@ -65,7 +65,7 @@ def test_discover_fits_recursive() -> None:
 
 def test_build_catalog_names_only() -> None:
     data_dir = get_data_path()
-    catalog = build_catalog(data_dir, headers=None, recursive=False)
+    catalog = build_catalog(data_dir, headers=None, recursive=True)
     assert isinstance(catalog, pl.DataFrame)
     assert not catalog.is_empty()
     for col in ("path", "file_stem", "sample_name", "tag", "scan_number", "frame_number"):
@@ -76,7 +76,7 @@ def test_build_catalog_names_only() -> None:
 
 def test_build_catalog_with_headers() -> None:
     data_dir = get_data_path()
-    paths = discover_fits(data_dir, recursive=False)
+    paths = discover_fits(data_dir, recursive=True)
     if not paths:
         pytest.skip("No FITS files in data dir")
     catalog = build_catalog(paths[:3], headers=["Beamline Energy", "Sample Theta", "DATE"])
@@ -89,7 +89,7 @@ def test_build_catalog_with_headers() -> None:
 
 def test_scan_view() -> None:
     data_dir = get_data_path()
-    catalog = build_catalog(data_dir, headers=None, recursive=False)
+    catalog = build_catalog(data_dir, headers=None, recursive=True)
     if catalog.is_empty():
         pytest.skip("No FITS files")
     view = scan_view(catalog)
@@ -102,7 +102,7 @@ def test_scan_view() -> None:
 
 def test_experiment_summary() -> None:
     data_dir = get_data_path()
-    summary = experiment_summary(data_dir, recursive=False, with_headers=False)
+    summary = experiment_summary(data_dir, recursive=True, with_headers=False)
     assert isinstance(summary, pl.DataFrame)
     if not summary.is_empty():
         assert "file_count" in summary.columns
@@ -110,10 +110,10 @@ def test_experiment_summary() -> None:
 
 def test_experiment_summary_with_headers() -> None:
     data_dir = get_data_path()
-    paths = discover_fits(data_dir, recursive=False)
+    paths = discover_fits(data_dir, recursive=True)
     if not paths:
         pytest.skip("No FITS files")
-    summary = experiment_summary(data_dir, recursive=False, with_headers=True)
+    summary = experiment_summary(data_dir, recursive=True, with_headers=True)
     assert isinstance(summary, pl.DataFrame)
     if not summary.is_empty() and "energy_min" in summary.columns:
         assert "Q_min" in summary.columns or "energy_min" in summary.columns
@@ -121,7 +121,7 @@ def test_experiment_summary_with_headers() -> None:
 
 def test_filter_catalog_paths() -> None:
     data_dir = get_data_path()
-    catalog = build_catalog(data_dir, headers=None, recursive=False)
+    catalog = build_catalog(data_dir, headers=None, recursive=True)
     if catalog.is_empty():
         pytest.skip("No FITS files")
     all_paths = filter_catalog_paths(catalog)
@@ -144,7 +144,7 @@ def test_read_fits_meta_has_parsed_columns() -> None:
     from pyref.pyref import py_read_fits_headers_only
 
     data_dir = get_data_path()
-    paths = discover_fits(data_dir, recursive=False)
+    paths = discover_fits(data_dir, recursive=True)
     if not paths:
         pytest.skip("No FITS files")
     meta = py_read_fits_headers_only(str(paths[0]), [])

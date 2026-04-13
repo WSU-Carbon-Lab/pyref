@@ -3,9 +3,9 @@
 use ndarray::Array2;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use zarrs::array::data_type;
 use zarrs::array::Array;
 use zarrs::array::ArrayBuilder;
-use zarrs::array::data_type;
 use zarrs::group::GroupBuilder;
 use zarrs::storage::{ReadableWritableListableStorage, ReadableWritableListableStorageTraits};
 
@@ -34,7 +34,9 @@ fn beamtime_key(beamtime_dir: &Path) -> String {
 }
 
 pub fn zarr_root(beamtime_dir: &Path) -> PathBuf {
-    catalog_parent(beamtime_dir).join(ZARR_SUBDIR).join(beamtime_key(beamtime_dir))
+    catalog_parent(beamtime_dir)
+        .join(ZARR_SUBDIR)
+        .join(beamtime_key(beamtime_dir))
 }
 
 pub fn detector_zarr_group(scan_uid: &str) -> String {
@@ -100,8 +102,8 @@ pub fn open_detector_array(
     scan_uid: &str,
 ) -> Result<Array<dyn ReadableWritableListableStorageTraits>, FitsError> {
     let path = format!("/scans/{}/{}", scan_uid, DETECTOR_ARRAY_NAME);
-    let array = Array::open(store.clone(), &path)
-        .map_err(|e| FitsError::validation(e.to_string()))?;
+    let array =
+        Array::open(store.clone(), &path).map_err(|e| FitsError::validation(e.to_string()))?;
     Ok(array)
 }
 

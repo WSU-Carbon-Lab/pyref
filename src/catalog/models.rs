@@ -2,8 +2,8 @@
 
 #![allow(dead_code)]
 
+use crate::schema::{files, frames, samples, scans};
 use diesel::prelude::*;
-use crate::schema::{files, frames, scans, samples};
 
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = frames)]

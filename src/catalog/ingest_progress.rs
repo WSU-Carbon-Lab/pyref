@@ -100,10 +100,7 @@ impl IngestProgressSink {
 }
 
 fn scan_number_for_path(path: &Path) -> i32 {
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     parse_fits_stem(stem)
         .map(|p| p.scan_number as i32)
         .unwrap_or(0)
@@ -120,7 +117,9 @@ pub(crate) fn partition_paths_by_scan(paths: &[PathBuf]) -> Vec<(i32, Vec<PathBu
 }
 
 /// Builds layout and scan groups from a path list (same partitioning ingest uses for parallel scans).
-pub(crate) fn layout_and_groups_from_paths(paths: &[PathBuf]) -> (BeamtimeIngestLayout, Vec<(i32, Vec<PathBuf>)>) {
+pub(crate) fn layout_and_groups_from_paths(
+    paths: &[PathBuf],
+) -> (BeamtimeIngestLayout, Vec<(i32, Vec<PathBuf>)>) {
     let groups = partition_paths_by_scan(paths);
     let scans: Vec<ScanFileCount> = groups
         .iter()

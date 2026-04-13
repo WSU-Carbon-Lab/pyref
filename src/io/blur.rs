@@ -47,10 +47,7 @@ pub fn gaussian_blur_f32_copy(
     Ok(dst)
 }
 
-pub fn blur_array2_i64(
-    image: &Array2<i64>,
-    sigma: f64,
-) -> Result<Array2<f32>, libblur::BlurError> {
+pub fn blur_array2_i64(image: &Array2<i64>, sigma: f64) -> Result<Array2<f32>, libblur::BlurError> {
     let f32_arr = i64_to_f32_array(image);
     let (h, w) = (f32_arr.nrows(), f32_arr.ncols());
     let slice = f32_arr

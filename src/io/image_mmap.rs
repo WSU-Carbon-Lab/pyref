@@ -7,7 +7,7 @@ use polars::prelude::*;
 
 use super::blur::{gaussian_blur_f32_copy, i64_to_f32_array};
 use super::{
-    subtract_background_edges, subtract_dark_cold_side, subtract_background_row_strips,
+    subtract_background_edges, subtract_background_row_strips, subtract_dark_cold_side,
     trim_image_interior, ImageInfo, TRIM_COLS, TRIM_ROWS,
 };
 use crate::errors::FitsError;

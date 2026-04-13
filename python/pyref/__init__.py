@@ -22,7 +22,6 @@ from pyref.io import (
 from pyref.io.readers import read_experiment, read_fits
 from pyref.loader import PrsoxrLoader
 from pyref.masking import InteractiveImageMasker
-from pyref.nexafs import accessor  # noqa: F401 - registers df.nexafs accessor
 from pyref.utils import err_prop_div, err_prop_mult, weighted_mean, weighted_std
 
 

@@ -43,11 +43,7 @@ fn rainbow_lut() -> &'static [[u8; 4]; LUT_LEN] {
     RAINBOW_LUT.get_or_init(build_rainbow_lut)
 }
 
-pub fn scalar_to_rgba(
-    data: &[f64],
-    min_max: Option<(f64, f64)>,
-    reversed: bool,
-) -> Vec<u8> {
+pub fn scalar_to_rgba(data: &[f64], min_max: Option<(f64, f64)>, reversed: bool) -> Vec<u8> {
     let (min, max) = match min_max {
         Some((lo, hi)) => (lo, hi),
         None => {
@@ -71,17 +67,11 @@ pub fn scalar_to_rgba(
     out
 }
 
-pub fn scalar_to_rgba_rainbow(
-    data: &[f64],
-    min_max: Option<(f64, f64)>,
-) -> Vec<u8> {
+pub fn scalar_to_rgba_rainbow(data: &[f64], min_max: Option<(f64, f64)>) -> Vec<u8> {
     scalar_to_rgba(data, min_max, false)
 }
 
-pub fn array2_to_rgba_rainbow(
-    data: &Array2<f64>,
-    min_max: Option<(f64, f64)>,
-) -> Option<Vec<u8>> {
+pub fn array2_to_rgba_rainbow(data: &Array2<f64>, min_max: Option<(f64, f64)>) -> Option<Vec<u8>> {
     let slice = data.as_slice()?;
     Some(scalar_to_rgba_rainbow(slice, min_max))
 }
@@ -121,7 +111,9 @@ pub fn array2_f32_to_rgba(
         Some((lo, hi)) => (lo as f64, hi as f64),
         None => {
             let min = slice.iter().fold(f64::INFINITY, |a, &b| a.min(b as f64));
-            let max = slice.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b as f64));
+            let max = slice
+                .iter()
+                .fold(f64::NEG_INFINITY, |a, &b| a.max(b as f64));
             (min, max)
         }
     };
@@ -162,11 +154,7 @@ mod tests {
         let out = scalar_to_rgba_rainbow(&data, Some((0.0, (LUT_LEN - 1) as f64)));
         assert_eq!(out.len(), LUT_LEN * 4);
         let first = [out[0], out[1], out[2]];
-        let last = [
-            out[out.len() - 4],
-            out[out.len() - 3],
-            out[out.len() - 2],
-        ];
+        let last = [out[out.len() - 4], out[out.len() - 3], out[out.len() - 2]];
         assert_ne!(first, last);
     }
 

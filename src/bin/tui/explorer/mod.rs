@@ -104,7 +104,8 @@ impl ExplorerState {
                             continue;
                         }
 
-                        let kind = heuristic::classify_entry(&path, &self.data_root, &self.layout_policy);
+                        let kind =
+                            heuristic::classify_entry(&path, &self.data_root, &self.layout_policy);
 
                         // Skip entries starting with dot (hidden files/dirs)
                         if name_str.starts_with('.') {
@@ -166,9 +167,7 @@ impl ExplorerState {
 
     /// Get the selected entry.
     pub fn selected_entry(&self) -> Option<&DirEntry> {
-        self.list_state
-            .selected()
-            .and_then(|i| self.entries.get(i))
+        self.list_state.selected().and_then(|i| self.entries.get(i))
     }
 
     /// Move selection down.
@@ -217,30 +216,24 @@ impl ExplorerState {
         self.entries.sort_by(|a, b| {
             let cmp = match self.sort_col {
                 ExplorerSort::Name => a.name.cmp(&b.name),
-                ExplorerSort::Modified => {
-                    match (a.modified, b.modified) {
-                        (Some(t_a), Some(t_b)) => t_a.cmp(&t_b),
-                        (Some(_), None) => std::cmp::Ordering::Greater,
-                        (None, Some(_)) => std::cmp::Ordering::Less,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                }
-                ExplorerSort::Size => {
-                    match (a.size_bytes, b.size_bytes) {
-                        (Some(sz_a), Some(sz_b)) => sz_a.cmp(&sz_b),
-                        (Some(_), None) => std::cmp::Ordering::Greater,
-                        (None, Some(_)) => std::cmp::Ordering::Less,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                }
-                ExplorerSort::FileCount => {
-                    match (a.fits_count, b.fits_count) {
-                        (Some(cnt_a), Some(cnt_b)) => cnt_a.cmp(&cnt_b),
-                        (Some(_), None) => std::cmp::Ordering::Greater,
-                        (None, Some(_)) => std::cmp::Ordering::Less,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                }
+                ExplorerSort::Modified => match (a.modified, b.modified) {
+                    (Some(t_a), Some(t_b)) => t_a.cmp(&t_b),
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                },
+                ExplorerSort::Size => match (a.size_bytes, b.size_bytes) {
+                    (Some(sz_a), Some(sz_b)) => sz_a.cmp(&sz_b),
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                },
+                ExplorerSort::FileCount => match (a.fits_count, b.fits_count) {
+                    (Some(cnt_a), Some(cnt_b)) => cnt_a.cmp(&cnt_b),
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                },
             };
 
             if self.sort_asc {

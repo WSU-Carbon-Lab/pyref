@@ -180,10 +180,7 @@ pub fn classify_entry(path: &Path, data_root: &Path, layout: &NasLayout) -> Entr
         2.. => {
             // Depth 2+: check parent experimentalist policy
             if let Some(parent) = path.parent() {
-                let parent_name = parent
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let parent_name = parent.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                 let policy = layout.policy_for(parent_name);
                 match policy {
@@ -197,8 +194,7 @@ pub fn classify_entry(path: &Path, data_root: &Path, layout: &NasLayout) -> Entr
                         }
                     }
                     ExptPolicy::Custom {
-                        pattern: Some(pat),
-                        ..
+                        pattern: Some(pat), ..
                     } => {
                         // Custom pattern provided
                         if let Ok(regex) = Regex::new(pat) {
@@ -229,10 +225,7 @@ pub fn classify_entry(path: &Path, data_root: &Path, layout: &NasLayout) -> Entr
 pub fn needs_resolution(experimentalist: &str, layout: &NasLayout) -> bool {
     matches!(
         layout.policy_for(experimentalist),
-        ExptPolicy::Custom {
-            pattern: None,
-            ..
-        }
+        ExptPolicy::Custom { pattern: None, .. }
     )
 }
 

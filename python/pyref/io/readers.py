@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import polars as pl
 
@@ -52,6 +52,20 @@ def _is_skippable_stem(stem: str) -> bool:
 
 
 def resolve_fits_paths(source: FilePath | FilePathList) -> list[str]:
+    """
+    Normalize ``source`` into a sorted list of absolute ``.fits`` paths.
+
+    Parameters
+    ----------
+    source : str, pathlib.Path, list, or tuple
+        A single FITS file, directory (recursive ``.fits`` discovery), glob-like path,
+        or a list/tuple of such paths.
+
+    Returns
+    -------
+    list of str
+        Unique absolute paths, sorted lexicographically.
+    """
     if isinstance(source, list | tuple):
         out: list[str] = []
         for p in source:
@@ -203,11 +217,11 @@ def scan_experiment(
 
 def beamtime_ingest_layout(beamtime_path: FilePath) -> dict[str, Any]:
     """
-    Summarize how many FITS files will be ingested per stem-derived scan (no FITS I/O).
+    Summarize ingest layout per scan without reading FITS pixels.
 
-    Use this before :func:`ingest_beamtime` to size a Rich ``Progress`` display (or custom
-    UI): one task with ``total=layout["total_files"]`` and one task per scan (see
-    ``progress_callback`` on :func:`ingest_beamtime`).
+    Use this before :func:`ingest_beamtime` to size a Rich ``Progress`` display (or
+    custom UI): one task with ``total=layout["total_files"]`` and one task per scan
+    (see ``progress_callback`` on :func:`ingest_beamtime`).
 
     Parameters
     ----------
@@ -217,8 +231,9 @@ def beamtime_ingest_layout(beamtime_path: FilePath) -> dict[str, Any]:
     Returns
     -------
     dict
-        ``total_files`` (int) and ``scans`` (list of per-scan dicts with ``scan_number`` and
-        ``files``), ordered by ``scan_number``. Unparseable stems use scan ``0``.
+        ``total_files`` (int) and ``scans`` (list of per-scan dicts with
+        ``scan_number`` and ``files``), ordered by ``scan_number``. Unparseable stems
+        use scan ``0``.
     """
     from pyref.pyref import py_beamtime_ingest_layout
 
@@ -228,8 +243,8 @@ def beamtime_ingest_layout(beamtime_path: FilePath) -> dict[str, Any]:
 def ingest_beamtime(
     beamtime_path: FilePath,
     header_items: list[str] | None = None,
-    incremental: bool = True,
     *,
+    incremental: bool = True,
     worker_threads: int | None = None,
     resource_fraction: float | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
@@ -360,11 +375,12 @@ def classify_reflectivity_scan_type(
     pairs: list[tuple[float | None, float | None]],
 ) -> tuple[str, float | None, float | None, float | None, float | None]:
     r"""
-    Classify a reflectivity acquisition from (beamline energy eV, sample theta deg) pairs.
+    Classify a reflectivity acquisition from (energy eV, sample theta deg) pairs.
 
     Wraps the Rust catalog classifier used by the TUI. ``scan_kind`` is one of
-    ``\"fixed_energy\"`` (theta scan at nearly fixed energy), ``\"fixed_angle\"``
-    (energy scan at nearly fixed theta), or ``\"single_point\"``.
+    ``\"fixed_energy\"`` (theta scan at nearly fixed energy),
+    ``\"fixed_angle\"`` (energy scan at nearly fixed theta), or
+    ``\"single_point\"``.
 
     Parameters
     ----------
@@ -392,6 +408,25 @@ def query_catalog(
     energy_min: float | None = None,
     energy_max: float | None = None,
 ) -> pl.DataFrame:
+    """
+    Query the global catalog for scan rows matching optional filters.
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Path to the catalog SQLite database.
+    sample_name, tag : str, optional
+        Exact-match filters when provided.
+    scan_numbers : list of int, optional
+        Restrict to these scan numbers.
+    energy_min, energy_max : float, optional
+        Inclusive beamline energy bounds in eV.
+
+    Returns
+    -------
+    polars.DataFrame
+        Rows returned by the Rust ``py_scan_from_catalog`` bridge.
+    """
     from pyref.pyref import py_scan_from_catalog
 
     filt = {}
@@ -413,12 +448,14 @@ def query_catalog(
 
 
 def get_image(meta_df: pl.DataFrame, row_index: int) -> object:
+    """Return raw detector pixels for ``row_index`` via the Rust image bridge."""
     from pyref.pyref import py_get_image
 
     return py_get_image(meta_df, row_index)
 
 
 def get_image_filtered(meta_df: pl.DataFrame, row_index: int, sigma: float) -> object:
+    """Return a Gaussian-filtered image for ``row_index`` (Rust-backed)."""
     from pyref.pyref import py_materialize_image_filtered
 
     return py_materialize_image_filtered(meta_df, row_index, sigma)
@@ -430,6 +467,9 @@ def get_image_corrected(
     bg_rows: int = 10,
     bg_cols: int = 10,
 ) -> object:
+    """
+    Return row/column background-subtracted pixels for ``row_index`` (Rust-backed).
+    """
     from pyref.pyref import py_get_image_corrected
 
     return py_get_image_corrected(meta_df, row_index, bg_rows, bg_cols)
@@ -442,6 +482,7 @@ def get_image_filtered_edges(
     bg_rows: int = 10,
     bg_cols: int = 10,
 ) -> object:
+    """Return filtered-edge-processed pixels for ``row_index`` (Rust-backed)."""
     from pyref.pyref import py_materialize_image_filtered_edges
 
     return py_materialize_image_filtered_edges(
@@ -457,11 +498,13 @@ def read_fits(
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
-    Anti-pattern: Equivalent to scan_experiment(...).collect(). Loads the full
-    scan result into memory and bypasses lazy optimizations (predicate pushdown,
-    projection pushdown, streaming). Prefer scan_experiment(source) with
-    .filter(), .select(), then .collect() only when needed; use this only when
-    you explicitly need the entire result in memory (e.g. small dirs or legacy scripts).
+    Load full scan metadata into memory (anti-pattern).
+
+    Equivalent to ``scan_experiment(...).collect()``: bypasses lazy optimizations
+    (predicate pushdown, projection pushdown, streaming). Prefer
+    ``scan_experiment(source)`` with ``.filter()``, ``.select()``, then
+    ``.collect()`` when possible; use this only when the entire result must be
+    materialized (e.g. small directories or legacy scripts).
     """
     if isinstance(file_path, list):
         file_paths_str = []
@@ -492,7 +535,10 @@ def read_fits(
             raise ValueError(msg)
         source = file_path_obj
     header_list = headers if headers is not None else []
-    polars_data = scan_experiment(source, header_items=header_list).collect()
+    polars_data = cast(
+        "pl.DataFrame",
+        scan_experiment(source, header_items=header_list).collect(),
+    )
     if engine == "pandas":
         return polars_data.to_pandas()
     return polars_data
@@ -508,10 +554,11 @@ def read_experiment(
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
-    Anti-pattern: Equivalent to scan_experiment(...).collect(). Loads the full
-    scan result into memory and bypasses lazy optimizations. Prefer
-    scan_experiment(source) with .filter(), .select(), and .collect() only when
-    needed; use this only when the full result is explicitly required.
+    Load a directory of FITS into memory (anti-pattern).
+
+    Equivalent to ``scan_experiment(...).collect()`` without lazy filtering.
+    Prefer ``scan_experiment`` with ``.filter()``, ``.select()``, and
+    ``.collect()`` unless the full result is explicitly required.
     """
     file_path_obj = Path(file_path)
     if not file_path_obj.is_dir():
@@ -540,7 +587,10 @@ def read_experiment(
             msg = f"{file_path_obj} does not contain any FITS files."
             raise FileNotFoundError(msg)
         source = file_path_obj
-    polars_data = scan_experiment(source, header_items=header_list).collect()
+    polars_data = cast(
+        "pl.DataFrame",
+        scan_experiment(source, header_items=header_list).collect(),
+    )
     if engine == "pandas":
         return polars_data.to_pandas()
     return polars_data

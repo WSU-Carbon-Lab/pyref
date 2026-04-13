@@ -1,15 +1,15 @@
-use super::catalog_handle::CatalogHandle;
 use super::app::{
-    AppMode, BeamtimeBodyRects, Focus, GroupedProfileRow, LoadingState, OpenDirFocus,
-    WatcherEvent, LauncherState,
+    AppMode, BeamtimeBodyRects, Focus, GroupedProfileRow, LauncherState, LoadingState,
+    OpenDirFocus, WatcherEvent,
 };
+use super::catalog_handle::CatalogHandle;
+use ratatui::layout::Rect;
+use ratatui::widgets::{ListState, ScrollbarState, TableState};
 use std::cmp;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
-use ratatui::layout::Rect;
-use ratatui::widgets::{ListState, ScrollbarState, TableState};
 
 #[cfg(feature = "watch")]
 use pyref::catalog::WatchHandle;

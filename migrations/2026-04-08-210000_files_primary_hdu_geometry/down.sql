@@ -1,0 +1,1 @@
+-- SQLite cannot drop columns without a table rebuild; omit destructive rollback.

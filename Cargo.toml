@@ -19,10 +19,21 @@ path = "src/bin/browser.rs"
 required-features = ["tui"]
 
 [features]
-default = ["extension-module", "catalog"]
-extension-module = ["dep:pyo3", "dep:pyo3-polars", "dep:numpy"]
-catalog = ["dep:rusqlite", "dep:walkdir"]
-tui = ["catalog", "watch", "dep:ratatui", "dep:crossterm", "dep:toml", "dep:fuzzy-matcher", "dep:log", "dep:eframe", "dep:plotters"]
+default = ["bindings", "catalog", "parallel_ingest"]
+bindings = ["dep:pyo3", "dep:pyo3-polars", "dep:numpy"]
+extension-module = ["bindings", "pyo3/extension-module", "pyo3/generate-import-lib"]
+catalog = [
+    "dep:diesel",
+    "dep:diesel_migrations",
+    "dep:directories",
+    "dep:libsqlite3-sys",
+    "dep:walkdir",
+    "dep:zarrs",
+    "dep:crossbeam-channel",
+]
+parallel_ingest = ["catalog"]
+zarr = ["catalog"]
+tui = ["catalog", "watch", "parallel_ingest", "dep:ratatui", "dep:crossterm", "dep:toml", "dep:fuzzy-matcher", "dep:log", "dep:eframe"]
 watch = ["dep:notify-debouncer-mini"]
 
 [dependencies]
@@ -35,7 +46,7 @@ ndarray = "0.16"
 numpy = {version = "0.22.0", optional = true}
 physical_constants = "0.5.0"
 polars = {version = "0.45.1", features = ["fmt", "dtype-u16", "lazy", "dtype-struct", "dtype-array", "dtype-datetime", "round_series", "ipc", "performant"]}
-pyo3 = {version = "0.22.0", optional = true, features = ["extension-module", "generate-import-lib", "abi3", "abi3-py312"]}
+pyo3 = {version = "0.22.0", optional = true, features = ["abi3", "abi3-py312"]}
 pyo3-polars = {version = "0.19.0", optional = true, features = ["lazy", "dtype-struct", "derive"]}
 rayon = "1.10"
 serde = {version = "1.0", features = ["derive"]}
@@ -44,13 +55,17 @@ ratatui = {version = "0.29", optional = true, features = ["crossterm"]}
 crossterm = {version = "0.28", optional = true}
 toml = {version = "0.8", optional = true}
 fuzzy-matcher = {version = "0.3", optional = true}
-rusqlite = {version = "0.32", optional = true, features = ["bundled"]}
 walkdir = {version = "2", optional = true}
+crossbeam-channel = {version = "0.5", optional = true}
+directories = {version = "6", optional = true}
 notify-debouncer-mini = {version = "0.4", optional = true}
 log = {version = "0.4", optional = true}
 eframe = {version = "0.28", optional = true, default-features = true}
-plotters = {version = "0.3", optional = true, default-features = false, features = ["bitmap_backend", "bitmap_encoder"]}
-
+zarrs = {version = "0.23", optional = true, default-features = false, features = ["filesystem", "ndarray"]}
+diesel = { version = "2.2", optional = true, features = ["sqlite", "returning_clauses_for_sqlite_3_35", "32-column-tables"] }
+diesel_migrations = {version = "2.2", optional = true, features = ["sqlite"]}
+libsqlite3-sys = {version = "0.28", optional = true, features = ["bundled"]}
+sha2 = "0.11.0"
 [dev-dependencies]
 tempfile = "3.14"
 rstest = "0.18"

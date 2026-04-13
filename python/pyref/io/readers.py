@@ -6,11 +6,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import polars as pl
 
+from pyref.io.catalog_path import NEW_CATALOG_DB_NAME, resolve_catalog_path
+
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     import pandas as pd
 
 type FilePath = str | Path
@@ -48,7 +52,21 @@ def _is_skippable_stem(stem: str) -> bool:
 
 
 def resolve_fits_paths(source: FilePath | FilePathList) -> list[str]:
-    if isinstance(source, (list, tuple)):
+    """
+    Normalize ``source`` into a sorted list of absolute ``.fits`` paths.
+
+    Parameters
+    ----------
+    source : str, pathlib.Path, list, or tuple
+        A single FITS file, directory (recursive ``.fits`` discovery), glob-like path,
+        or a list/tuple of such paths.
+
+    Returns
+    -------
+    list of str
+        Unique absolute paths, sorted lexicographically.
+    """
+    if isinstance(source, list | tuple):
         out: list[str] = []
         for p in source:
             path = Path(p).resolve()
@@ -106,32 +124,61 @@ def _scan_schema(header_items: list[str]) -> dict[str, Any]:
     return schema
 
 
-CATALOG_DB_NAME = ".pyref_catalog.db"
-
-
 def scan_experiment(
     source: FilePath | FilePathList,
     header_items: list[str] | None = None,
 ) -> pl.LazyFrame:
+    """
+    Lazy Polars metadata from a SQLite catalog or from FITS headers.
+
+    When ``source`` is a **single** path (not a list or tuple):
+
+    - File named ``catalog.db`` (typically under ``.pyref``): load via
+      :func:`pyref.pyref.py_scan_from_catalog`.
+    - Directory: resolve DB with :func:`pyref.io.catalog_path.resolve_catalog_path`;
+      if it exists, load with ``py_scan_from_catalog`` (Rust-aligned layouts).
+    - Else: discover ``.fits`` and stream header reads.
+
+    For a **list or tuple** ``source``, call :func:`resolve_fits_paths` only. Pass one
+    directory path to use catalog auto-resolution.
+
+    Missing ``py_scan_from_catalog`` falls through to FITS discovery without raising.
+
+    Parameters
+    ----------
+    source : str, pathlib.Path, or list thereof
+        Beamtime directory, catalog ``.db`` file, glob-like path, or FITS path list.
+    header_items : list of str, optional
+        Extra FITS header keys for disk reads (unused for pure catalog loads).
+
+    Returns
+    -------
+    polars.LazyFrame
+        Schema compatible with :data:`REQUIRED_SCAN_COLUMNS` and catalog scans.
+    """
     from pyref.pyref import py_read_multiple_fits_headers_only
 
     keys = header_items if header_items is not None else []
-    if not isinstance(source, (list, tuple)):
+    if not isinstance(source, list | tuple):
         path = Path(source).resolve()
-        if path.is_file() and path.name == CATALOG_DB_NAME:
+        if path.is_file() and path.name == NEW_CATALOG_DB_NAME:
             try:
                 from pyref.pyref import py_scan_from_catalog
+
                 df = py_scan_from_catalog(str(path), None)
                 return df.lazy()
             except (ImportError, AttributeError):
                 pass
-        if path.is_dir() and (path / CATALOG_DB_NAME).exists():
-            try:
-                from pyref.pyref import py_scan_from_catalog
-                df = py_scan_from_catalog(str(path / CATALOG_DB_NAME), None)
-                return df.lazy()
-            except (ImportError, AttributeError):
-                pass
+        if path.is_dir():
+            db = resolve_catalog_path(path)
+            if db.is_file():
+                try:
+                    from pyref.pyref import py_scan_from_catalog
+
+                    df = py_scan_from_catalog(str(db), None)
+                    return df.lazy()
+                except (ImportError, AttributeError):
+                    pass
     paths = resolve_fits_paths(source)
     if not paths:
         return pl.DataFrame(schema=pl.Schema(_scan_schema(keys))).lazy()
@@ -168,15 +215,90 @@ def scan_experiment(
     )
 
 
+def beamtime_ingest_layout(beamtime_path: FilePath) -> dict[str, Any]:
+    """
+    Summarize ingest layout per scan without reading FITS pixels.
+
+    Use this before :func:`ingest_beamtime` to size a Rich ``Progress`` display (or
+    custom UI): one task with ``total=layout["total_files"]`` and one task per scan
+    (see ``progress_callback`` on :func:`ingest_beamtime`).
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory (same layout rules as ingest).
+
+    Returns
+    -------
+    dict
+        ``total_files`` (int) and ``scans`` (list of per-scan dicts with
+        ``scan_number`` and ``files``), ordered by ``scan_number``. Unparseable stems
+        use scan ``0``.
+    """
+    from pyref.pyref import py_beamtime_ingest_layout
+
+    return dict(py_beamtime_ingest_layout(str(Path(beamtime_path).resolve())))
+
+
 def ingest_beamtime(
     beamtime_path: FilePath,
     header_items: list[str] | None = None,
+    *,
     incremental: bool = True,
+    worker_threads: int | None = None,
+    resource_fraction: float | None = None,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> Path:
+    """
+    Ingest a beamtime directory into the global catalog and local zarr cache.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Root directory of the beamtime (ALS layout with ``CCD`` or ``Axis Photonique``).
+    header_items : list of str, optional
+        FITS primary HDU keys to read during ingest; defaults to the same keys as
+        :data:`DEFAULT_HEADER_KEYS` extended by the Rust ingest list when omitted.
+    incremental : bool, optional
+        Reserved for future incremental ingest semantics; passed through to Rust.
+    worker_threads : int, optional
+        Parallel FITS reader worker count. Mutually exclusive with
+        ``resource_fraction``.
+    resource_fraction : float, optional
+        Fraction of ``available_parallelism()`` used for reader workers, in ``(0, 1]``.
+        Mutually exclusive with ``worker_threads``.
+    progress_callback : callable, optional
+        Invoked on the thread that runs Rust ingest (the GIL is released during heavy
+        work; the callback re-acquires it). Each call receives a mapping with:
+
+        - ``event == "layout"``: ``total_files``, ``scans`` (each with ``scan_number``,
+          ``files``).
+        - ``event == "phase"``: ``phase`` is ``headers``, ``catalog``, or ``zarr``.
+        - ``event == "file_complete"``: after each zarr write; includes ``scan_number``,
+          ``scan_done``, ``scan_total``, ``global_done``, ``global_total``.
+
+        For Rich ``Progress``: ``add_task`` for the main ingest total and one task per
+        ``scan_number`` from ``layout``; on ``file_complete`` call ``update`` with
+        ``advance=1`` on the matching tasks. Handle ``phase`` events so the UI stays
+        active during long ``headers`` or ``catalog`` work before ``file_complete``
+        events begin.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute path to the global ``catalog.db``.
+    """
     from pyref.pyref import py_ingest_beamtime
 
     keys = header_items if header_items is not None else list(DEFAULT_HEADER_KEYS)
-    out = py_ingest_beamtime(str(Path(beamtime_path).resolve()), keys, incremental)
+    out = py_ingest_beamtime(
+        str(Path(beamtime_path).resolve()),
+        keys,
+        incremental,
+        worker_threads,
+        resource_fraction,
+        progress_callback,
+    )
     return Path(out)
 
 
@@ -184,6 +306,24 @@ def get_overrides(
     catalog_path: FilePath,
     path: str | None = None,
 ) -> pl.DataFrame:
+    """
+    Read user metadata overrides from the ``file_overrides`` table.
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Path to the global catalog database (for example the return value of
+        :func:`ingest_beamtime`).
+    path : str, optional
+        When given, return only overrides whose ``source_path`` equals this string.
+        When omitted, return all override rows.
+
+    Returns
+    -------
+    polars.DataFrame
+        Zero or more rows with columns ``path``, ``sample_name``, ``tag``, and
+        ``notes``.
+    """
     from pyref.pyref import py_get_overrides
 
     return py_get_overrides(str(Path(catalog_path).resolve()), path)
@@ -196,6 +336,30 @@ def set_override(
     tag: str | None = None,
     notes: str | None = None,
 ) -> None:
+    """
+    Upsert sample name, tag, or notes for a row in ``file_overrides``.
+
+    The ``path`` must match ``files.nas_uri`` for an ingested file (use the
+    ``file_path`` column from :func:`scan_experiment`).
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Path to the catalog SQLite database.
+    path : str
+        Must match ``files.nas_uri`` for an existing file row.
+    sample_name : str, optional
+        Override sample name, or ``None`` to clear that field on upsert.
+    tag : str, optional
+        Override tag, or ``None`` to clear that field on upsert.
+    notes : str, optional
+        Free-form notes, or ``None`` to clear that field on upsert.
+
+    Raises
+    ------
+    RuntimeError
+        When ``path`` is not present in either ``files`` or ``bt_scan_points``.
+    """
     from pyref.pyref import py_set_override
 
     py_set_override(
@@ -207,6 +371,34 @@ def set_override(
     )
 
 
+def classify_reflectivity_scan_type(
+    pairs: list[tuple[float | None, float | None]],
+) -> tuple[str, float | None, float | None, float | None, float | None]:
+    r"""
+    Classify a reflectivity acquisition from (energy eV, sample theta deg) pairs.
+
+    Wraps the Rust catalog classifier used by the TUI. ``scan_kind`` is one of
+    ``\"fixed_energy\"`` (theta scan at nearly fixed energy),
+    ``\"fixed_angle\"`` (energy scan at nearly fixed theta), or
+    ``\"single_point\"``.
+
+    Parameters
+    ----------
+    pairs : list of (float or None, float or None)
+        One tuple per frame or scan point. Either coordinate may be omitted.
+
+    Returns
+    -------
+    scan_kind : str
+        ``fixed_energy``, ``fixed_angle``, or ``single_point``.
+    e_min, e_max, t_min, t_max : float or None
+        Extrema over finite samples; ``None`` when an axis has no data.
+    """
+    from pyref.pyref import py_classify_scan_type
+
+    return py_classify_scan_type(pairs)
+
+
 def query_catalog(
     catalog_path: FilePath,
     *,
@@ -216,6 +408,25 @@ def query_catalog(
     energy_min: float | None = None,
     energy_max: float | None = None,
 ) -> pl.DataFrame:
+    """
+    Query the global catalog for scan rows matching optional filters.
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Path to the catalog SQLite database.
+    sample_name, tag : str, optional
+        Exact-match filters when provided.
+    scan_numbers : list of int, optional
+        Restrict to these scan numbers.
+    energy_min, energy_max : float, optional
+        Inclusive beamline energy bounds in eV.
+
+    Returns
+    -------
+    polars.DataFrame
+        Rows returned by the Rust ``py_scan_from_catalog`` bridge.
+    """
     from pyref.pyref import py_scan_from_catalog
 
     filt = {}
@@ -237,12 +448,14 @@ def query_catalog(
 
 
 def get_image(meta_df: pl.DataFrame, row_index: int) -> object:
+    """Return raw detector pixels for ``row_index`` via the Rust image bridge."""
     from pyref.pyref import py_get_image
 
     return py_get_image(meta_df, row_index)
 
 
 def get_image_filtered(meta_df: pl.DataFrame, row_index: int, sigma: float) -> object:
+    """Return a Gaussian-filtered image for ``row_index`` (Rust-backed)."""
     from pyref.pyref import py_materialize_image_filtered
 
     return py_materialize_image_filtered(meta_df, row_index, sigma)
@@ -254,6 +467,9 @@ def get_image_corrected(
     bg_rows: int = 10,
     bg_cols: int = 10,
 ) -> object:
+    """
+    Return row/column background-subtracted pixels for ``row_index`` (Rust-backed).
+    """
     from pyref.pyref import py_get_image_corrected
 
     return py_get_image_corrected(meta_df, row_index, bg_rows, bg_cols)
@@ -266,6 +482,7 @@ def get_image_filtered_edges(
     bg_rows: int = 10,
     bg_cols: int = 10,
 ) -> object:
+    """Return filtered-edge-processed pixels for ``row_index`` (Rust-backed)."""
     from pyref.pyref import py_materialize_image_filtered_edges
 
     return py_materialize_image_filtered_edges(
@@ -281,11 +498,13 @@ def read_fits(
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
-    Anti-pattern: Equivalent to scan_experiment(...).collect(). Loads the full
-    scan result into memory and bypasses lazy optimizations (predicate pushdown,
-    projection pushdown, streaming). Prefer scan_experiment(source) with
-    .filter(), .select(), then .collect() only when needed; use this only when
-    you explicitly need the entire result in memory (e.g. small dirs or legacy scripts).
+    Load full scan metadata into memory (anti-pattern).
+
+    Equivalent to ``scan_experiment(...).collect()``: bypasses lazy optimizations
+    (predicate pushdown, projection pushdown, streaming). Prefer
+    ``scan_experiment(source)`` with ``.filter()``, ``.select()``, then
+    ``.collect()`` when possible; use this only when the entire result must be
+    materialized (e.g. small directories or legacy scripts).
     """
     if isinstance(file_path, list):
         file_paths_str = []
@@ -316,7 +535,10 @@ def read_fits(
             raise ValueError(msg)
         source = file_path_obj
     header_list = headers if headers is not None else []
-    polars_data = scan_experiment(source, header_items=header_list).collect()
+    polars_data = cast(
+        "pl.DataFrame",
+        scan_experiment(source, header_items=header_list).collect(),
+    )
     if engine == "pandas":
         return polars_data.to_pandas()
     return polars_data
@@ -332,10 +554,11 @@ def read_experiment(
     engine: Literal["pandas", "polars"] = "polars",
 ) -> pd.DataFrame | pl.DataFrame:
     """
-    Anti-pattern: Equivalent to scan_experiment(...).collect(). Loads the full
-    scan result into memory and bypasses lazy optimizations. Prefer
-    scan_experiment(source) with .filter(), .select(), and .collect() only when
-    needed; use this only when the full result is explicitly required.
+    Load a directory of FITS into memory (anti-pattern).
+
+    Equivalent to ``scan_experiment(...).collect()`` without lazy filtering.
+    Prefer ``scan_experiment`` with ``.filter()``, ``.select()``, and
+    ``.collect()`` unless the full result is explicitly required.
     """
     file_path_obj = Path(file_path)
     if not file_path_obj.is_dir():
@@ -364,7 +587,10 @@ def read_experiment(
             msg = f"{file_path_obj} does not contain any FITS files."
             raise FileNotFoundError(msg)
         source = file_path_obj
-    polars_data = scan_experiment(source, header_items=header_list).collect()
+    polars_data = cast(
+        "pl.DataFrame",
+        scan_experiment(source, header_items=header_list).collect(),
+    )
     if engine == "pandas":
         return polars_data.to_pandas()
     return polars_data

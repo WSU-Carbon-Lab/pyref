@@ -22,6 +22,8 @@ pub struct TuiConfig {
     #[serde(default)]
     pub last_root: Option<String>,
     #[serde(default)]
+    pub data_root: Option<String>,
+    #[serde(default)]
     pub recent_roots: Vec<String>,
     #[serde(default)]
     pub last_sample: Option<String>,
@@ -47,6 +49,10 @@ pub struct TuiConfig {
     pub layout: String,
     #[serde(default = "default_keybind_bar_lines")]
     pub keybind_bar_lines: u8,
+    #[serde(default)]
+    pub ingest_worker_threads: Option<usize>,
+    #[serde(default)]
+    pub ingest_resource_fraction: Option<f64>,
 }
 
 fn default_keymap() -> String {
@@ -66,6 +72,7 @@ impl Default for TuiConfig {
     fn default() -> Self {
         Self {
             last_root: None,
+            data_root: None,
             recent_roots: Vec::new(),
             last_sample: None,
             last_tag: None,
@@ -79,6 +86,8 @@ impl Default for TuiConfig {
             color_scheme: None,
             layout: default_layout(),
             keybind_bar_lines: default_keybind_bar_lines(),
+            ingest_worker_threads: None,
+            ingest_resource_fraction: None,
         }
     }
 }

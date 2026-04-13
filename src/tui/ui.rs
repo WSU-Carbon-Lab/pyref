@@ -41,6 +41,32 @@ fn layout_constraints(app: &App) -> [Constraint; 2] {
     }
 }
 
+const MIN_LIST_HEIGHT: u16 = 3;
+const SIDEBAR_GAPS: u16 = 2;
+
+fn left_sidebar_list_heights(
+    left_area_height: u16,
+    n_sample: usize,
+    n_tag: usize,
+    n_scan: usize,
+) -> (u16, u16, u16) {
+    let available = left_area_height.saturating_sub(SIDEBAR_GAPS);
+    let p_s = (n_sample as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    let p_t = (n_tag as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    let p_sc = (n_scan as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    if p_s.saturating_add(p_t).saturating_add(p_sc) <= available {
+        (p_s, p_t, p_sc)
+    } else {
+        let base = available / 3;
+        let third = available.saturating_sub(2 * base);
+        (
+            base.max(MIN_LIST_HEIGHT),
+            base.max(MIN_LIST_HEIGHT),
+            third.max(MIN_LIST_HEIGHT),
+        )
+    }
+}
+
 pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::BeamtimeBodyRects> {
     if !app.has_catalog {
         return None;
@@ -52,14 +78,20 @@ pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::Bea
         .split(body_area);
     let left_area = body_chunks[0];
     let right_area = body_chunks[2];
+    let (s_h, t_h, sc_h) = left_sidebar_list_heights(
+        left_area.height,
+        app.samples.len(),
+        app.tags.len(),
+        app.scans.len(),
+    );
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(s_h),
             Constraint::Length(1),
-            Constraint::Length(4),
+            Constraint::Length(t_h),
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Length(sc_h),
         ])
         .split(left_area);
     let right_block = Block::bordered().title(BROWSE_TITLE);
@@ -472,14 +504,20 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let left_area = body_chunks[0];
     let right_area = body_chunks[2];
 
+    let (s_h, t_h, sc_h) = left_sidebar_list_heights(
+        left_area.height,
+        app.samples.len(),
+        app.tags.len(),
+        app.scans.len(),
+    );
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(s_h),
             Constraint::Length(1),
-            Constraint::Length(4),
+            Constraint::Length(t_h),
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Length(sc_h),
         ])
         .split(left_area);
     render_sample_list(frame, app, left_chunks[0], theme);

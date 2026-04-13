@@ -1,10 +1,13 @@
 mod app;
-mod config;
-mod error;
-pub mod keymap;
-mod run;
 #[cfg(feature = "catalog")]
 mod beamspot;
+mod catalog_handle;
+mod config;
+mod error;
+mod explorer;
+pub mod keymap;
+mod navigator;
+mod run;
 #[cfg(feature = "catalog")]
 mod scan_type;
 pub mod terminal_guard;

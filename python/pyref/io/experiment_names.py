@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
 import polars as pl
 
 from pyref.io.readers import read_fits
@@ -48,7 +49,13 @@ def parse_fits_stem(stem: str) -> ParsedFitsName | None:
     >>> parse_fits_stem("ZnPc_rt81041-00001")
     ParsedFitsName(sample_name='ZnPc', tag='rt', scan_number=81041, frame_number=1, ...)
     >>> parse_fits_stem("monlayerjune 81041-00007")
-    ParsedFitsName(sample_name='monlayerjune', tag=None, scan_number=81041, frame_number=7, ...)
+    ParsedFitsName(
+        sample_name='monlayerjune',
+        tag=None,
+        scan_number=81041,
+        frame_number=7,
+        ...,
+    )
     """
     stem = stem.strip()
     m = STEM_PATTERN.match(stem)
@@ -74,7 +81,7 @@ def parse_fits_stem(stem: str) -> ParsedFitsName | None:
     )
 
 
-def discover_fits(root: Path, recursive: bool = True) -> list[Path]:
+def discover_fits(root: Path, *, recursive: bool = True) -> list[Path]:
     """
     Discover FITS files under a root path.
 
@@ -94,10 +101,7 @@ def discover_fits(root: Path, recursive: bool = True) -> list[Path]:
     root = Path(root).resolve()
     if not root.is_dir():
         return []
-    if recursive:
-        paths = sorted(root.rglob("*.fits"))
-    else:
-        paths = sorted(root.glob("*.fits"))
+    paths = sorted(root.rglob("*.fits")) if recursive else sorted(root.glob("*.fits"))
     return [p.resolve() for p in paths]
 
 
@@ -124,14 +128,16 @@ def _catalog_from_paths(paths: list[Path]) -> pl.DataFrame:
             tags.append(parsed.tag)
             exp_nums.append(parsed.scan_number)
             frame_nums.append(parsed.frame_number)
-    return pl.DataFrame({
-        "path": path_strs,
-        "file_stem": file_stems,
-        "sample_name": sample_names,
-        "tag": tags,
-        "scan_number": exp_nums,
-        "frame_number": frame_nums,
-    })
+    return pl.DataFrame(
+        {
+            "path": path_strs,
+            "file_stem": file_stems,
+            "sample_name": sample_names,
+            "tag": tags,
+            "scan_number": exp_nums,
+            "frame_number": frame_nums,
+        }
+    )
 
 
 def build_catalog(
@@ -194,8 +200,10 @@ def build_catalog(
 
 def scan_view(catalog: pl.DataFrame) -> pl.DataFrame:
     """
-    Aggregate catalog into a per-scan view: sample_name, tag, scan_number,
-    file_count, and optionally energy_min/max, Q_min/max.
+    Aggregate catalog into a per-scan view.
+
+    Groups by ``sample_name``, ``tag``, and ``scan_number``; includes
+    ``file_count`` and optionally ``energy_min``/``energy_max``, ``Q_min``/``Q_max``.
 
     Parameters
     ----------
@@ -211,21 +219,26 @@ def scan_view(catalog: pl.DataFrame) -> pl.DataFrame:
     group_cols = ["sample_name", "tag", "scan_number"]
     aggs = [pl.len().alias("file_count")]
     if "Beamline Energy" in catalog.columns:
-        aggs.extend([
-            pl.col("Beamline Energy").min().alias("energy_min"),
-            pl.col("Beamline Energy").max().alias("energy_max"),
-        ])
+        aggs.extend(
+            [
+                pl.col("Beamline Energy").min().alias("energy_min"),
+                pl.col("Beamline Energy").max().alias("energy_max"),
+            ]
+        )
     if "Q" in catalog.columns:
-        aggs.extend([
-            pl.col("Q").min().alias("Q_min"),
-            pl.col("Q").max().alias("Q_max"),
-        ])
+        aggs.extend(
+            [
+                pl.col("Q").min().alias("Q_min"),
+                pl.col("Q").max().alias("Q_max"),
+            ]
+        )
     aggs.append(pl.col("path").first().alias("path"))
     return catalog.group_by(group_cols).agg(aggs).sort(group_cols)
 
 
 def experiment_summary(
     root: Path,
+    *,
     recursive: bool = True,
     with_headers: bool = False,
     headers: list[str] | None = None,
@@ -243,7 +256,8 @@ def experiment_summary(
         If True, read minimal FITS headers to include energy and Q range in summary.
         Default False.
     headers : list[str] | None, optional
-        Header keys when with_headers is True. Defaults to Beamline Energy, Sample Theta, DATE.
+        Header keys when with_headers is True. Defaults to Beamline Energy,
+        Sample Theta, DATE.
 
     Returns
     -------
@@ -253,7 +267,11 @@ def experiment_summary(
     """
     if with_headers and headers is None:
         headers = ["Beamline Energy", "Sample Theta", "DATE"]
-    catalog = build_catalog(Path(root), headers=headers if with_headers else None, recursive=recursive)
+    catalog = build_catalog(
+        Path(root),
+        headers=headers if with_headers else None,
+        recursive=recursive,
+    )
     if catalog.is_empty():
         return pl.DataFrame()
     return scan_view(catalog)

@@ -71,14 +71,10 @@ class FitsFrame:
         """Return background-corrected and gaussian-filtered image(s) at idx."""
         _validate_fits_schema(self._df)
         if isinstance(idx, int):
-            arr = get_image_filtered_edges(
-                self._df, idx, sigma, bg_rows, bg_cols
-            )
+            arr = get_image_filtered_edges(self._df, idx, sigma, bg_rows, bg_cols)
             return np.asarray(arr)
         indices = _indices_from_slice(idx, len(self._df))
-        return _FitsFilteredIterator(
-            self._df, indices, sigma, bg_rows, bg_cols
-        )
+        return _FitsFilteredIterator(self._df, indices, sigma, bg_rows, bg_cols)
 
     def custom(
         self,
@@ -146,9 +142,7 @@ class _FitsCorrectedIterator:
 
     def __next__(self) -> np.ndarray:
         i = next(self._indices_iter)
-        arr = get_image_corrected(
-            self._df, i, self._bg_rows, self._bg_cols
-        )
+        arr = get_image_corrected(self._df, i, self._bg_rows, self._bg_cols)
         return np.asarray(arr)
 
 

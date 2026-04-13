@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "stacks": [
+    "general",
+    "python",
+    "rust",
+    "python-jupyter",
+    "python-pyo3",
+    "rust-tui",
+    "rust-pyo3"
+  ],
+  "updatedAt": "2026-04-07T20:38:00.571Z"
+}

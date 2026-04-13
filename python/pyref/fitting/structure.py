@@ -12,7 +12,7 @@ import periodictable as pt
 import periodictable.xsf as xsf
 from refnx.analysis import Parameter, Parameters, possibly_create_parameter
 from refnx.reflect.interface import Erf, Step
-from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import interp1d
 
 from pyref.fitting.model import reflectivity
 
@@ -25,60 +25,7 @@ hc = (speed_of_light * plank_constant) * 1e10  # ev*A
 
 tensor_index = ["xx", "yy", "zz"]  # Indexing for later definitions
 
-# ===============/ Helper Functions /===================
 
-
-def slice_range(
-    df: pd.DataFrame,
-    col: str,
-    center: float,
-    bounds: float,
-    min_length: int = 3,
-) -> pd.DataFrame:
-    """
-    Slice a DataFrame to rows within a given range around a center value,
-    ensuring at least `min_length` rows are returned.
-
-    Finds the row where 'col' is closest to the given `center` value, then
-    attempts to slice the DataFrame to all rows with 'col' between
-    `center - bounds` and `center + bounds`. If the number of such rows is
-    less than `min_length`, returns a symmetric window of
-    `min_length` rows centered on the closest row.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame to slice.
-    col : str
-        Name of the column to use for slicing.
-    center : float
-        Center value for the range.
-    bounds : float
-        Bounds on either side of the center (the range is [center - bounds, center + bounds]).
-    min_length : int, default=3
-        Minimum number of rows to return.
-
-    Returns
-    -------
-    pd.DataFrame
-        Sliced DataFrame with at least `min_length` rows in the specified range.
-    """
-    from math import floor, ceil
-
-    center_row = (df[col] - center).abs().idxmin()
-    mask = (df[col] >= center - bounds) & (df[col] <= center + bounds)
-    if mask.sum() < min_length:
-        start = max(center_row - floor(min_length / 2), 0)
-        end = start + min_length
-        # Ensure we don't go out of bounds
-        end = min(end, len(df))
-        start = max(end - min_length, 0)
-        return df.iloc[start:end]
-    mask_res = df[mask]
-    if isinstance(mask_res, pd.DataFrame):
-        return mask_res
-    raise TypeError(
-        f"Expected pd.DataFrame or pd.Series, got {type(mask_res)}")
 # ==============/ Base Classes /===================
 
 
@@ -586,8 +533,7 @@ class Structure(UserList):
         # parameters to plot
         zed, prof = self.sld_profile(align=align)
         iso = prof.sum(axis=1) / 3
-        ax.plot(zed, np.real(iso), color="C0",
-                zorder=20, label="δ", linewidth=0.9)
+        ax.plot(zed, np.real(iso), color="C0", zorder=20, label="δ", linewidth=0.9)
         ax.plot(
             zed,
             np.real(prof[:, 0]),
@@ -604,8 +550,7 @@ class Structure(UserList):
             label="δzz",
             linestyle=":",
         )
-        ax.plot(zed, np.imag(iso), color="C2",
-                zorder=20, label="β", linewidth=0.9)
+        ax.plot(zed, np.imag(iso), color="C2", zorder=20, label="β", linewidth=0.9)
         ax.plot(
             zed,
             np.imag(prof[:, 0]),
@@ -914,10 +859,7 @@ class Slab(PXR_Component):
     def __init__(self, thick, sld: Scatterer, rough, name=""):
         super().__init__(name=name)
         self.thick = possibly_create_parameter(thick, name=f"{name}_thick")
-        if isinstance(sld, Scatterer):
-            _sld = sld
-        else:
-            _sld = SLD(sld)
+        _sld = sld if isinstance(sld, Scatterer) else SLD(sld)
         self.sld: Scatterer = _sld
 
         self.rough = possibly_create_parameter(rough, name=f"{name}_rough")
@@ -1075,10 +1017,8 @@ class SLD(Scatterer):
 
         # Create parameters
         self._parameters = Parameters(name=name)
-        self.delta = Parameter(np.average(
-            n).real, name=f"{name}_diso")  # type: ignore
-        self.beta = Parameter(np.average(
-            n).imag, name=f"{name}_biso")  # type: ignore
+        self.delta = Parameter(np.average(n).real, name=f"{name}_diso")  # type: ignore
+        self.beta = Parameter(np.average(n).imag, name=f"{name}_biso")  # type: ignore
 
         self.xx = Parameter(n[0].real, name=f"{name}_{tensor_index[0]}")
         self.ixx = Parameter(n[0].imag, name=f"{name}_i{tensor_index[0]}")
@@ -1087,10 +1027,8 @@ class SLD(Scatterer):
         self.zz = Parameter(n[2].real, name=f"{name}_{tensor_index[2]}")
         self.izz = Parameter(n[2].imag, name=f"{name}_i{tensor_index[2]}")
 
-        self.birefringence = Parameter(
-            (n[0].real - n[2].real), name=f"{name}_bire")
-        self.dichroism = Parameter(
-            (n[1].imag - n[2].imag), name=f"{name}_dichro")
+        self.birefringence = Parameter((n[0].real - n[2].real), name=f"{name}_bire")
+        self.dichroism = Parameter((n[1].imag - n[2].imag), name=f"{name}_dichro")
 
         self._parameters.extend(
             [
@@ -1372,6 +1310,13 @@ class UniTensorSLD(Scatterer):
         energy_offset: float = 0,
         name: str = "",
     ):
+        # =================/ Input Validation /================
+        required_columns = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
+        if not all(col in ooc.columns for col in required_columns):
+            missing = [col for col in required_columns if col not in ooc.columns]
+            e = f"Optical constants dataframe missing required columns: {missing}"
+            raise ValueError(e)
+
         # =================/ Initialize /================
         self._parameters = Parameters(name=name)
         super().__init__(name=name)
@@ -1389,30 +1334,13 @@ class UniTensorSLD(Scatterer):
             energy_offset, name=f"{name}_energy_offset", vary=True, bounds=(-0.01, 0.01)
         )
         # store the optical constants as n_xx n_ixx, n_zz, n_izz
-        self._load_ooc(ooc)
+        self.n_xx = interp1d(ooc["energy"], ooc["n_xx"], bounds_error=False)
+        self.n_ixx = interp1d(ooc["energy"], ooc["n_ixx"], bounds_error=False)
+        self.n_zz = interp1d(ooc["energy"], ooc["n_zz"], bounds_error=False)
+        self.n_izz = interp1d(ooc["energy"], ooc["n_izz"], bounds_error=False)
+
         # Add parameters to parameter set
-        self._parameters.extend(
-            [self.density, self.rotation, self.energy_offset])
-
-    def _load_ooc(self, ooc: pd.DataFrame):
-        """Loac Optical Constants from a DataFrame."""
-
-        # Validate the DataFrame
-        required_columns = ["energy", "n_xx", "n_ixx", "n_zz", "n_izz"]
-        if not all(col in ooc.columns for col in required_columns):
-            missing = [
-                col for col in required_columns if col not in ooc.columns]
-            e = f"Optical constants dataframe missing required columns: {missing}"
-            raise ValueError(e)
-        cropped_tensor = slice_range(ooc, "energy", self.energy, 0.5)
-        self.n_xx = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_xx"])
-        self.n_ixx = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_ixx"])
-        self.n_zz = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_zz"])
-        self.n_izz = PchipInterpolator(
-            cropped_tensor["energy"], cropped_tensor["n_izz"])
+        self._parameters.extend([self.density, self.rotation, self.energy_offset])
 
     def __complex__(self):
         """Complex representation of the scatterer."""
@@ -1422,6 +1350,25 @@ class UniTensorSLD(Scatterer):
     def __repr__(self):
         """Representation of the scatterer."""
         return "Index of Refraction = (name={name!r})".format(**self.__dict__)
+
+    @property
+    def n(self) -> NDArray[np.complex128]:
+        """
+        Optical constants of the material.
+
+        Returns
+        -------
+        n : np.ndarray
+            Optical constants of the material.
+        """
+        e = self.get_energy()
+        return np.array(
+            [
+                [self.n_xx(e) + self.n_ixx(e) * 1j, 0],
+                [0, self.n_zz(e) + self.n_izz(e) * 1j],
+            ],
+            dtype=np.complex128,
+        )
 
     @property
     def parameters(self):
@@ -1441,22 +1388,12 @@ class UniTensorSLD(Scatterer):
             out : np.ndarray (3x3)
                 complex tensor index of refraction
         """
-
+        n: np.ndarray = self.get_density() * self.n
         cos_squared: float = np.square(np.cos(self.get_rotation()))
         sin_squared: float = 1 - cos_squared
 
-        n_xx = complex(
-            self.n_xx(self.energy + self.energy_offset)
-            + 1j*self.n_ixx(self.energy + self.energy_offset)
-        )
-        n_zz = complex(
-            self.n_zz(self.energy + self.energy_offset)
-            + 1j*self.n_izz(self.energy + self.energy_offset)
-        )
-
-        n_o: complex = (n_xx * (1 + cos_squared) +
-                        n_zz * sin_squared) / 2
-        n_e: complex = n_xx * sin_squared + n_zz * cos_squared
+        n_o: complex = (n[0, 0] * (1 + cos_squared) + n[1, 1] * sin_squared) / 2
+        n_e: complex = n[0, 0] * sin_squared + n[1, 1] * cos_squared
 
         self._tensor = np.array(
             [
@@ -1466,7 +1403,7 @@ class UniTensorSLD(Scatterer):
             ],
             dtype=np.complex128,
         )
-        return self._tensor * self.get_density()
+        return self._tensor
 
 
 class MixedMaterialSlab(PXR_Component):
@@ -1519,11 +1456,9 @@ class MixedMaterialSlab(PXR_Component):
             else:
                 self.sld.append(SLD(s))  # type: ignore
 
-            self._sld_parameters.append(
-                self.sld[-1].parameters)  # type: ignore
+            self._sld_parameters.append(self.sld[-1].parameters)  # type: ignore
 
-            vf = possibly_create_parameter(
-                v, name=f"vf{i} - {name}", bounds=(0.0, 1.0))
+            vf = possibly_create_parameter(v, name=f"vf{i} - {name}", bounds=(0.0, 1.0))
             self.vf.append(vf)
             self._vf_parameters.append(vf)
 
@@ -1608,8 +1543,7 @@ class MixedMaterialSlab(PXR_Component):
             self.sld.energy = energy
 
         combinetensor = np.sum(
-            [sld.tensor * vf / sum_vfs for sld,
-                vf in zip(self.sld, vfs, strict=False)],  # type: ignore
+            [sld.tensor * vf / sum_vfs for sld, vf in zip(self.sld, vfs, strict=False)],  # type: ignore
             axis=0,
         )
 
@@ -1706,8 +1640,7 @@ class Stack(PXR_Component, UserList):
 
         repeats = round(abs(self.repeats.value))  # type: ignore
 
-        slabs = np.concatenate([c.slabs(structure=self)
-                               for c in self.components])
+        slabs = np.concatenate([c.slabs(structure=self) for c in self.components])
 
         if repeats > 1:
             slabs = np.concatenate([slabs] * repeats)

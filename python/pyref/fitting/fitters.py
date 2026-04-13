@@ -20,6 +20,7 @@ from refnx._lib.emcee.moves.de import DEMove
 from refnx._lib.util import getargspec
 from refnx.analysis import (
     CurveFitter,
+    Interval,
     Objective,
     is_parameter,
     process_chain,
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
     import xarray as xr
-    from refnx.analysis import GlobalObjective, Interval, Parameter
+    from refnx.analysis import GlobalObjective, Parameter
 
     from pyref.fitting import ReflectModel
 
@@ -625,7 +626,8 @@ def rounded_values(
 ) -> tuple[float, float]:
     """Round the values and errors to n significant figures."""
     if parameter.value is None:
-        raise ValueError("Parameter value is None; cannot round value.")
+        msg = "Parameter value is None; cannot round value."
+        raise ValueError(msg)
     x = float(parameter.value)
     xerr: Literal[0] | float = parameter.stderr if parameter.stderr else 0
     if xerr > 0:
@@ -640,8 +642,8 @@ def rounded_values(
 def _fix_bound(parameter: Parameter, nsigma=5, *, by_bounds=False) -> None:
     val, err = rounded_values(parameter)
     if parameter.bounds is not Interval:
-        raise ValueError("Parameter bounds are None; cannot fix bounds.")
-    bounds: Interval = parameter.bounds
+        msg = "Parameter bounds are None; cannot fix bounds."
+        raise ValueError(msg)
     # round err and value to proper sig figs
     min_val: float = float(sigfig.round(val - nsigma * err, 1))  # type: ignore
     max_val: float = float(sigfig.round(val + nsigma * err, 1))  # type: ignore

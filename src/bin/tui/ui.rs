@@ -54,6 +54,32 @@ fn layout_constraints(app: &App) -> [Constraint; 2] {
     }
 }
 
+const MIN_LIST_HEIGHT: u16 = 3;
+const SIDEBAR_GAPS: u16 = 2;
+
+fn left_sidebar_list_heights(
+    left_area_height: u16,
+    n_sample: usize,
+    n_tag: usize,
+    n_scan: usize,
+) -> (u16, u16, u16) {
+    let available = left_area_height.saturating_sub(SIDEBAR_GAPS);
+    let p_s = (n_sample as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    let p_t = (n_tag as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    let p_sc = (n_scan as u16).saturating_add(2).max(MIN_LIST_HEIGHT);
+    if p_s.saturating_add(p_t).saturating_add(p_sc) <= available {
+        (p_s, p_t, p_sc)
+    } else {
+        let base = available / 3;
+        let third = available.saturating_sub(2 * base);
+        (
+            base.max(MIN_LIST_HEIGHT),
+            base.max(MIN_LIST_HEIGHT),
+            third.max(MIN_LIST_HEIGHT),
+        )
+    }
+}
+
 #[allow(dead_code)]
 pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::BeamtimeBodyRects> {
     if !app.has_catalog {
@@ -66,14 +92,20 @@ pub fn beamtime_body_rects(body_area: Rect, app: &App) -> Option<super::app::Bea
         .split(body_area);
     let left_area = body_chunks[0];
     let right_area = body_chunks[2];
+    let (s_h, t_h, sc_h) = left_sidebar_list_heights(
+        left_area.height,
+        app.samples.len(),
+        app.tags.len(),
+        app.scans.len(),
+    );
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(s_h),
             Constraint::Length(1),
-            Constraint::Length(4),
+            Constraint::Length(t_h),
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Length(sc_h),
         ])
         .split(left_area);
     let right_block = Block::bordered().title(BROWSE_TITLE);
@@ -129,14 +161,22 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let bottom_area = chunks[2];
 
     frame.render_widget(outer_block, area);
-    if app.screen == Screen::Launcher {
+    if app.current_screen() == Screen::Launcher {
         #[cfg(feature = "catalog")]
         render_launcher_nav(frame, nav_area, app, theme);
         render_launcher_body(frame, app, body_area, theme);
         render_launcher_bottom(frame, bottom_area, theme);
         #[cfg(feature = "catalog")]
-        if app.open_dir_active {
+        if app.open_dir_active() {
             render_open_dir_modal(frame, app, inner, theme);
+        }
+    } else if app.current_screen() == Screen::Explorer {
+        render_explorer_nav(frame, nav_area, app, theme);
+        render_explorer(frame, app, body_area, theme);
+        render_explorer_bottom(frame, bottom_area, theme);
+        // Check if ConfigModal is on the stack
+        if let Some(modal_state) = app.modal_state() {
+            super::explorer::modal::render_modal(frame, inner, modal_state, &app.theme);
         }
     } else {
         render_nav(frame, app, nav_area, theme);
@@ -180,7 +220,7 @@ fn render_launcher_nav(frame: &mut Frame, area: Rect, app: &App, theme: ThemeMod
 
 #[cfg(feature = "catalog")]
 fn render_launcher_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
-    let state = match &mut app.launcher_state {
+    let state = match app.launcher_state_mut() {
         Some(s) => s,
         None => return,
     };
@@ -221,13 +261,13 @@ const OPEN_DIR_TITLE_EDIT: &str = " [EDIT] type path  Enter apply  Esc back ";
 
 #[cfg(feature = "catalog")]
 fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
-    let w = area.width.min(70).max(40);
-    let h = area.height.min(25).max(10);
+    let w = area.width.clamp(40, 70);
+    let h = area.height.clamp(10, 25);
     let x = area.x + area.width.saturating_sub(w) / 2;
     let y = area.y + area.height.saturating_sub(h) / 2;
     let modal = Rect::new(x, y, w, h);
     let border_style = ratatui::style::Style::default();
-    let title = if app.open_dir_focus == OpenDirFocus::PathInput {
+    let title = if app.open_dir_focus() == OpenDirFocus::PathInput {
         OPEN_DIR_TITLE_EDIT
     } else {
         OPEN_DIR_TITLE
@@ -239,28 +279,37 @@ fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: Th
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(3)])
         .split(inner);
-    let path_style = if app.open_dir_focus == OpenDirFocus::PathInput {
+    let path_style = if app.open_dir_focus() == OpenDirFocus::PathInput {
         super::theme::focus_border_style(theme)
     } else {
         ratatui::style::Style::default()
     };
-    let path_spans: Vec<Span> = if app.open_dir_focus == OpenDirFocus::PathInput {
+    let path_spans: Vec<Span> = if app.open_dir_focus() == OpenDirFocus::PathInput {
         vec![
-            Span::styled(app.open_dir_path.as_str(), path_style),
+            Span::styled(app.open_dir_path(), path_style),
             Span::styled("_", super::theme::spinner_style(theme)),
         ]
     } else {
-        vec![Span::styled(app.open_dir_path.as_str(), path_style)]
+        vec![Span::styled(app.open_dir_path(), path_style)]
     };
     let path_line = Line::from(path_spans);
     let path_para = Paragraph::new(path_line);
     frame.render_widget(path_para, chunks[0]);
     let mut items: Vec<ListItem> = vec![ListItem::new("..")];
-    for p in &app.open_dir_entries {
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-        items.push(ListItem::new(name));
+    let entry_names: Vec<String> = app
+        .open_dir_entries()
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?")
+                .to_string()
+        })
+        .collect();
+    for name in &entry_names {
+        items.push(ListItem::new(name.clone()));
     }
-    let list_border = if app.open_dir_focus == OpenDirFocus::List {
+    let list_border = if app.open_dir_focus() == OpenDirFocus::List {
         super::theme::focus_border_style(theme)
     } else {
         ratatui::style::Style::default()
@@ -269,7 +318,7 @@ fn render_open_dir_modal(frame: &mut Frame, app: &mut App, area: Rect, theme: Th
         .block(Block::bordered().border_style(list_border))
         .highlight_style(list_style(true, theme))
         .highlight_symbol("  ");
-    frame.render_stateful_widget(list, chunks[1], &mut app.open_dir_list_state);
+    frame.render_stateful_widget(list, chunks[1], app.open_dir_list_state_mut());
 }
 
 const SPINNER_FRAMES: &str = "\u{2801}\u{2801}\u{2809}\u{2819}\u{281a}\u{2812}\u{2802}\u{2802}\u{2812}\u{2832}\u{2834}\u{2824}\u{2804}\u{2804}\u{2824}\u{2820}\u{2820}\u{2824}\u{2826}\u{2816}\u{2812}\u{2810}\u{2810}\u{2812}\u{2813}\u{280b}\u{2809}\u{2808}\u{2808}";
@@ -492,14 +541,20 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
     let left_area = body_chunks[0];
     let right_area = body_chunks[2];
 
+    let (s_h, t_h, sc_h) = left_sidebar_list_heights(
+        left_area.height,
+        app.samples.len(),
+        app.tags.len(),
+        app.scans.len(),
+    );
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(s_h),
             Constraint::Length(1),
-            Constraint::Length(4),
+            Constraint::Length(t_h),
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Length(sc_h),
         ])
         .split(left_area);
     let sample_scrollbar = render_sample_list(frame, app, left_chunks[0], theme);
@@ -579,7 +634,12 @@ fn list_style(active: bool, theme: ThemeMode) -> ratatui::style::Style {
     }
 }
 
-fn render_sample_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
+fn render_sample_list(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    theme: ThemeMode,
+) -> Option<Rect> {
     let content_len = app.samples.len();
     let viewport = (area.height.saturating_sub(2)).max(1) as usize;
     let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
@@ -701,7 +761,12 @@ fn render_tag_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMod
     }
 }
 
-fn render_scan_list(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) -> Option<Rect> {
+fn render_scan_list(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    theme: ThemeMode,
+) -> Option<Rect> {
     let content_len = app.scans.len();
     let viewport = (area.height.saturating_sub(2)).max(1) as usize;
     let needs_scrollbar = area.width > SCROLLBAR_WIDTH && content_len > viewport;
@@ -783,18 +848,21 @@ fn beamspot_mean_std(beamspots: &[(i64, i64)]) -> (f64, f64, f64, f64) {
     if n == 0.0 {
         return (0.0, 0.0, 0.0, 0.0);
     }
-    let (row_sum, col_sum): (i64, i64) =
-        beamspots.iter().fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
+    let (row_sum, col_sum): (i64, i64) = beamspots
+        .iter()
+        .fold((0i64, 0i64), |(r, c), &(ri, ci)| (r + ri, c + ci));
     let row_mean = row_sum as f64 / n;
     let col_mean = col_sum as f64 / n;
     if n < 2.0 {
         return (row_mean, 0.0, col_mean, 0.0);
     }
-    let (row_var, col_var) = beamspots.iter().fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
-        let dr = ri as f64 - row_mean;
-        let dc = ci as f64 - col_mean;
-        (rv + dr * dr, cv + dc * dc)
-    });
+    let (row_var, col_var) = beamspots
+        .iter()
+        .fold((0.0f64, 0.0f64), |(rv, cv), &(ri, ci)| {
+            let dr = ri as f64 - row_mean;
+            let dc = ci as f64 - col_mean;
+            (rv + dr * dr, cv + dc * dc)
+        });
     let row_std = (row_var / (n - 1.0)).sqrt();
     let col_std = (col_var / (n - 1.0)).sqrt();
     (row_mean, row_std, col_mean, col_std)
@@ -807,9 +875,7 @@ fn render_expanded_file_list(
     theme: ThemeMode,
     app: &mut super::app::App,
 ) -> Option<Rect> {
-    let Some(i) = app.expanded_table_row else {
-        return None;
-    };
+    let i = app.expanded_table_row?;
     let file_count = app
         .group_at_display_index(i)
         .map(|g| g.file_rows.len())
@@ -825,18 +891,15 @@ fn render_expanded_file_list(
     if app.expanded_files_scroll_offset > max_offset {
         app.expanded_files_scroll_offset = max_offset;
     }
-    let group = match app.group_at_display_index(i) {
-        Some(g) => g,
-        None => return None,
-    };
+    let group = app.group_at_display_index(i)?;
     let file_rows = &group.file_rows;
     let display_order = app.expanded_files_display_order(group);
     let offset = app.expanded_files_scroll_offset;
     let start = offset.min(display_order.len());
     let take = (display_order.len().saturating_sub(start)).min(visible_rows);
     frame.render_widget(block, area);
-    let needs_scrollbar = inner.width > SCROLLBAR_WIDTH
-        && file_count > app.last_expanded_files_visible;
+    let needs_scrollbar =
+        inner.width > SCROLLBAR_WIDTH && file_count > app.last_expanded_files_visible;
     let (table_inner, scrollbar_area) = if needs_scrollbar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -867,7 +930,8 @@ fn render_expanded_file_list(
         table_header_cell("E (eV)", sort_col, sort_ord, 3),
         table_header_cell("\u{03B8} (\u{00B0})", sort_col, sort_ord, 4),
         table_header_cell("Beamspot", sort_col, sort_ord, 5),
-        table_header_cell("Status", sort_col, sort_ord, 6),
+        table_header_cell("\u{03C3}", sort_col, sort_ord, 6),
+        table_header_cell("Status", sort_col, sort_ord, 7),
     ])
     .style(header_style)
     .bottom_margin(1);
@@ -896,6 +960,10 @@ fn render_expanded_file_list(
                 (Some(row), Some(col)) => format!("{},{}", row, col),
                 _ => "-".to_string(),
             };
+            let sigma = r
+                .beam_sigma
+                .map(|s| format!("{:.2}", s))
+                .unwrap_or_else(|| "-".to_string());
             let status = super::beamspot::beamspot_status(
                 r.beam_row,
                 r.beam_col,
@@ -920,6 +988,7 @@ fn render_expanded_file_list(
                 Cell::from(energy),
                 Cell::from(theta),
                 Cell::from(beamspot),
+                Cell::from(sigma),
                 Cell::from(Span::styled(status, status_style)),
             ])
             .style(row_style)
@@ -932,6 +1001,7 @@ fn render_expanded_file_list(
         Constraint::Length(8),
         Constraint::Length(8),
         Constraint::Length(10),
+        Constraint::Length(7),
         Constraint::Length(8),
     ];
     let table = Table::new(rows, widths).header(header).column_spacing(1);
@@ -1037,11 +1107,12 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
 
     let order = app.compute_display_order();
     let expanded = app.expanded_table_row;
+    let filtered_groups = app.filtered_groups.clone();
     let rows: Vec<Row> = order
         .iter()
         .enumerate()
         .map(|(disp_idx, &orig_idx)| {
-            let r = &app.filtered_groups[orig_idx];
+            let r = &filtered_groups[orig_idx];
             let caret = if expanded == Some(disp_idx) { "v" } else { ">" };
             let mut cells = vec![Cell::from(caret)];
             cells.extend(grouped_row_to_cells(r));
@@ -1114,4 +1185,100 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) 
     } else {
         None
     }
+}
+
+// ---- Explorer rendering functions ----
+
+fn render_explorer_nav(frame: &mut Frame, area: Rect, app: &App, theme: ThemeMode) {
+    let explorer_state = match app.explorer_state() {
+        Some(state) => state,
+        None => return,
+    };
+
+    let breadcrumb = format!("pyref browser  {}", explorer_state.current_dir.display());
+    let path_display = truncate_path(&breadcrumb, NAV_PATH_TRUNCATE);
+
+    let line = Line::from(ratatui::text::Span::styled(
+        path_display,
+        super::theme::header_style(theme),
+    ));
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect, theme: ThemeMode) {
+    let explorer_state = match app.explorer_state() {
+        Some(state) => state,
+        None => return,
+    };
+
+    // Build list of entries with highlights
+    let items: Vec<ListItem> = explorer_state
+        .entries
+        .iter()
+        .map(|entry| {
+            let kind_str = match entry.kind {
+                super::explorer::EntryKind::DataRoot => "DATA",
+                super::explorer::EntryKind::Experimentalist => {
+                    if entry.expt_resolution
+                        == Some(super::explorer::ExptResolution::NeedsResolution)
+                    {
+                        "Expt ⚑"
+                    } else {
+                        "Expt"
+                    }
+                }
+                super::explorer::EntryKind::Beamtime => "Beamtime",
+                super::explorer::EntryKind::Directory => "Dir",
+            };
+            let modified_str = entry
+                .modified
+                .and_then(|st| {
+                    if let Ok(duration) = st.elapsed() {
+                        Some(format!("{:.0}d ago", duration.as_secs() as f64 / 86400.0))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "--".to_string());
+            let bt_str = entry
+                .beamtime_count
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "--".to_string());
+            let fits_str = entry
+                .fits_count
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "--".to_string());
+            let status_str = match entry.catalog_status {
+                super::explorer::CatalogStatus::Indexed => "✓",
+                super::explorer::CatalogStatus::Stale => "~",
+                super::explorer::CatalogStatus::NotIndexed => "✗",
+                super::explorer::CatalogStatus::NotApplicable => "--",
+            };
+
+            let line = format!(
+                "{:<28} {:<10} {:<10} {:<8} {:<8} {}",
+                entry.name, kind_str, bt_str, fits_str, modified_str, status_str
+            );
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::bordered().title(" Name  Kind  Bt  Fits  Age  Cat "))
+        .highlight_style(list_style(true, theme))
+        .highlight_symbol("  ");
+
+    frame.render_stateful_widget(
+        list,
+        area,
+        &mut app.explorer_state_mut().unwrap().list_state,
+    );
+}
+
+fn render_explorer_bottom(frame: &mut Frame, area: Rect, theme: ThemeMode) {
+    let style = super::theme::keybind_bar_style(theme);
+    let hints = " ↑↓ select  → enter  ← back  r resolve  x ignore  / search  q quit ";
+    let line = Line::from(ratatui::text::Span::styled(hints, style));
+    let para = Paragraph::new(line).alignment(Alignment::Center);
+    frame.render_widget(para, area);
 }

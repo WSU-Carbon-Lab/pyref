@@ -1,3 +1,5 @@
+"""Re-export image reduction helpers from the sibling ``image.py`` implementation."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -15,5 +17,9 @@ else:
     apply_mask = None
     locate_beam = None
     reduction = None
+
+assert apply_mask is not None
+assert locate_beam is not None
+assert reduction is not None
 
 __all__ = ["apply_mask", "locate_beam", "reduction"]

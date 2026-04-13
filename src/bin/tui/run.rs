@@ -7,6 +7,118 @@ use std::time::Duration;
 use super::app::{App, OpenDirFocus, ScrollbarDragTarget};
 use super::keymap::{self, Action};
 
+fn handle_explorer_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::KeyCode;
+
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.explorer_list_up();
+            return false;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.explorer_list_down();
+            return false;
+        }
+        KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') => {
+            app.explorer_enter();
+            return false;
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.explorer_back();
+            return false;
+        }
+        KeyCode::Char('r') => {
+            app.explorer_resolve();
+            return false;
+        }
+        KeyCode::Char('x') => {
+            // Placeholder for Phase 4: toggle ignore
+            return false;
+        }
+        KeyCode::Char('/') => {
+            // Placeholder for Phase 4: start filter input
+            return false;
+        }
+        KeyCode::Char('q') | KeyCode::Esc => {
+            return true; // Quit
+        }
+        _ => {}
+    }
+
+    false
+}
+
+fn handle_modal_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::KeyCode;
+
+    match key.code {
+        KeyCode::Esc => {
+            // Pop the modal
+            app.navigator.stack.pop();
+            app.needs_redraw = true;
+            return false;
+        }
+        KeyCode::Tab => {
+            if let Some(modal) = app.modal_state_mut() {
+                modal.on_tab();
+                app.needs_redraw = true;
+            }
+            return false;
+        }
+        KeyCode::Backspace => {
+            if let Some(modal) = app.modal_state_mut() {
+                modal.on_backspace();
+                app.needs_redraw = true;
+            }
+            return false;
+        }
+        KeyCode::Char(c) => {
+            if c.is_ascii_digit() {
+                if let Some(num) = c.to_digit(10) {
+                    if let Some(modal) = app.modal_state_mut() {
+                        modal.on_number(num as u8);
+                        app.needs_redraw = true;
+                    }
+                    return false;
+                }
+            } else if c.is_ascii() && !c.is_control() {
+                if let Some(modal) = app.modal_state_mut() {
+                    modal.on_char(c);
+                    app.needs_redraw = true;
+                }
+                return false;
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(modal) = app.modal_state() {
+                let policy = modal.confirm();
+                let expt_name = modal.target_experimentalist.clone();
+                let data_root = modal.data_root.clone();
+
+                // Pop modal
+                app.navigator.stack.pop();
+
+                // Update layout policy
+                if let Some(explorer) = app.explorer_state_mut() {
+                    explorer.layout_policy.set_policy(expt_name, policy);
+                    let _ = explorer.layout_policy.save(&data_root);
+                    let current_dir = explorer.current_dir.clone();
+                    explorer.load_dir(current_dir);
+                }
+
+                #[cfg(feature = "catalog")]
+                app.explorer_after_nav();
+
+                app.needs_redraw = true;
+            }
+            return false;
+        }
+        _ => {}
+    }
+
+    false
+}
+
 #[cfg(feature = "catalog")]
 fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     let confirm_mod = key
@@ -26,17 +138,17 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
     }
     if key.code == crossterm::event::KeyCode::Char('e')
         && key.modifiers.is_empty()
-        && app.open_dir_focus == OpenDirFocus::List
+        && app.open_dir_focus() == OpenDirFocus::List
     {
-        app.open_dir_focus = OpenDirFocus::PathInput;
+        app.set_open_dir_focus(OpenDirFocus::PathInput);
         app.needs_redraw = true;
         return false;
     }
     let action = keymap::from_key_event(key, &app.keymap);
     match action {
         Action::Cancel => {
-            if app.open_dir_focus == OpenDirFocus::PathInput {
-                app.open_dir_focus = OpenDirFocus::List;
+            if app.open_dir_focus() == OpenDirFocus::PathInput {
+                app.set_open_dir_focus(OpenDirFocus::List);
                 app.needs_redraw = true;
             } else {
                 app.open_dir_cancel();
@@ -44,9 +156,9 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
             return false;
         }
         Action::Open => {
-            if app.open_dir_focus == OpenDirFocus::PathInput {
+            if app.open_dir_focus() == OpenDirFocus::PathInput {
                 app.refresh_open_dir_entries();
-                app.open_dir_focus = OpenDirFocus::List;
+                app.set_open_dir_focus(OpenDirFocus::List);
             } else {
                 app.open_dir_list_enter();
             }
@@ -63,7 +175,7 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
         _ => {}
     }
     if key.code == crossterm::event::KeyCode::Tab {
-        if app.open_dir_focus == OpenDirFocus::PathInput {
+        if app.open_dir_focus() == OpenDirFocus::PathInput {
             app.open_dir_autocomplete();
         } else {
             app.open_dir_focus_toggle();
@@ -74,7 +186,7 @@ fn handle_open_dir_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool
         app.open_dir_focus_toggle();
         return false;
     }
-    if app.open_dir_focus == OpenDirFocus::PathInput {
+    if app.open_dir_focus() == OpenDirFocus::PathInput {
         if key.code == crossterm::event::KeyCode::Backspace {
             app.open_dir_path_pop();
         } else if let crossterm::event::KeyCode::Char(c) = key.code {
@@ -93,7 +205,13 @@ pub fn run<B: Backend>(
 ) -> io::Result<()> {
     loop {
         app.try_recv_ingest();
+        #[cfg(feature = "catalog")]
+        app.try_recv_explorer_fs_updates();
         app.try_recv_watcher();
+        #[cfg(feature = "catalog")]
+        app.try_recv_beamspot_updates();
+        #[cfg(feature = "catalog")]
+        app.try_recv_preview_cmd();
         app.clear_status_if_stale();
         if app.loading_state != super::app::LoadingState::Idle {
             app.needs_redraw = true;
@@ -158,15 +276,16 @@ fn handle_mouse(
     _width: u16,
     _height: u16,
 ) -> bool {
-    if app.screen != super::app::Screen::Beamtime
-        || app.mode != super::app::AppMode::Normal
-        || app.open_dir_active
+    if app.current_screen() != super::app::Screen::Beamtime
+        || app.mode() != super::app::AppMode::Normal
+        || app.open_dir_active()
     {
         return false;
     }
-    let Some((_, rects)) = app.last_body_rects.as_ref() else {
+    let has_body_rects = app.last_body_rects.is_some();
+    if !has_body_rects {
         return false;
-    };
+    }
     let col = mouse_event.column;
     let row = mouse_event.row;
 
@@ -176,13 +295,15 @@ fn handle_mouse(
         }
     }
 
-    if let Some(drag_target) = app.scrollbar_drag {
+    let rects = match &app.last_body_rects {
+        Some((_, r)) => r.clone(),
+        None => return false,
+    };
+
+    let drag_target_opt = app.scrollbar_drag;
+    if let Some(drag_target) = drag_target_opt {
         if let MouseEventKind::Drag(MouseButton::Left) = mouse_event.kind {
             let (sb_rect, content_len, viewport) = {
-                let rects = match &app.last_body_rects {
-                    Some((_, r)) => r,
-                    None => return false,
-                };
                 match drag_target {
                     ScrollbarDragTarget::SampleList => {
                         let r = match rects.sample_scrollbar {
@@ -399,7 +520,7 @@ fn handle_mouse(
         if rect_contains(rects.table, col, row) {
             if row == rects.table.y {
                 if let Some(layout_col) = table_header_column_at(rects.table, col) {
-                    if layout_col >= 1 && layout_col <= 10 {
+                    if (1..=10).contains(&layout_col) {
                         app.cycle_table_sort(layout_col - 1);
                         return true;
                     }
@@ -444,12 +565,7 @@ fn table_row_at(rect: Rect, row: u16, len: usize) -> usize {
     idx.min(len.saturating_sub(1))
 }
 
-fn expanded_file_index_at(
-    rect: Rect,
-    row: u16,
-    scroll_offset: usize,
-    file_count: usize,
-) -> usize {
+fn expanded_file_index_at(rect: Rect, row: u16, scroll_offset: usize, file_count: usize) -> usize {
     let data_y = rect.y + 3;
     if row < data_y || file_count == 0 {
         return 0;
@@ -475,7 +591,7 @@ const TABLE_WIDTHS: [Constraint; 11] = [
 
 const EXPANDED_FILES_TABLE_COLUMN_SPACING: u16 = 1;
 
-const EXPANDED_FILES_TABLE_LAYOUT: [Constraint; 13] = [
+const EXPANDED_FILES_TABLE_LAYOUT: [Constraint; 15] = [
     Constraint::Length(7),
     Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
     Constraint::Length(7),
@@ -487,6 +603,8 @@ const EXPANDED_FILES_TABLE_LAYOUT: [Constraint; 13] = [
     Constraint::Length(8),
     Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
     Constraint::Length(10),
+    Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
+    Constraint::Length(7),
     Constraint::Length(EXPANDED_FILES_TABLE_COLUMN_SPACING),
     Constraint::Length(8),
 ];
@@ -542,9 +660,14 @@ fn table_header_column_at(rect: Rect, col: u16) -> Option<usize> {
 }
 
 pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
-    if app.screen == super::app::Screen::Launcher {
+    // Handle ConfigModal first (highest priority)
+    if app.modal_state().is_some() {
+        return handle_modal_event(app, key);
+    }
+
+    if app.current_screen() == super::app::Screen::Launcher {
         #[cfg(feature = "catalog")]
-        if app.open_dir_active {
+        if app.open_dir_active() {
             return handle_open_dir_event(app, key);
         }
         let action = keymap::from_key_event(key, &app.keymap);
@@ -572,7 +695,13 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         return quit;
     }
 
-    if app.screen == super::app::Screen::Beamtime && app.mode == super::app::AppMode::Normal {
+    if app.current_screen() == super::app::Screen::Explorer {
+        return handle_explorer_event(app, key);
+    }
+
+    if app.current_screen() == super::app::Screen::Beamtime
+        && app.mode() == super::app::AppMode::Normal
+    {
         let action = keymap::from_key_event(key, &app.keymap);
         if action == Action::Cancel {
             if app.app_error.is_some() {
@@ -582,6 +711,21 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             if app.app_warning.is_some() {
                 app.clear_app_warning();
                 return false;
+            }
+            // Phase 4: Cancel ingest if in progress
+            #[cfg(feature = "catalog")]
+            if let Some(super::navigator::ScreenState::Beamtime(bt)) =
+                app.navigator.stack.last_mut()
+            {
+                if bt.loading_state == super::app::LoadingState::IngestingDirectory {
+                    if let Some(ref flag) = bt.cancel_flag {
+                        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // Pop the beamtime state to return to explorer
+                    app.navigator.stack.pop();
+                    app.needs_redraw = true;
+                    return false;
+                }
             }
         }
         if let Some(ref e) = app.app_error {
@@ -597,15 +741,27 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     }
 
     #[cfg(feature = "catalog")]
-    if app.screen == super::app::Screen::Beamtime
-        && app.mode == super::app::AppMode::Normal
+    if app.current_screen() == super::app::Screen::Beamtime
+        && app.mode() == super::app::AppMode::Normal
         && keymap::from_key_event(key, &app.keymap) == Action::Cancel
     {
-        app.go_to_launcher();
+        // Phase 4: Pop BeamtimeState if it came from Explorer (has data_root set)
+        if let Some(super::navigator::ScreenState::Beamtime(bt)) = app.navigator.stack.last() {
+            if bt.data_root.is_some() && bt.loading_state == super::app::LoadingState::Idle {
+                app.navigator.stack.pop();
+                app.needs_redraw = true;
+                return false;
+            }
+        }
+        // Otherwise go to launcher (if launcher still exists)
+        #[cfg(not(feature = "tui"))]
+        {
+            app.go_to_launcher();
+        }
         return false;
     }
 
-    if app.mode == super::app::AppMode::Search {
+    if app.mode() == super::app::AppMode::Search {
         let action = keymap::from_key_event(key, &app.keymap);
         match action {
             Action::Cancel => {
@@ -686,6 +842,19 @@ pub fn handle_event(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         Action::NavFwd => app.nav_fwd(),
         Action::PreviewImage => app.send_preview_path_if_selected(),
         Action::BeamPosition => app.materialize_profile_beamspots(),
+        #[cfg(feature = "catalog")]
+        Action::NextProblem => app.go_to_next_problem(),
+        #[cfg(feature = "catalog")]
+        Action::PrevProblem => app.go_to_prev_problem(),
+        #[cfg(feature = "catalog")]
+        Action::UseLastOkBeamspot => app.use_last_ok_beamspot(),
+        #[cfg(feature = "catalog")]
+        Action::UseNextOkBeamspot => app.use_next_ok_beamspot(),
+        #[cfg(not(feature = "catalog"))]
+        Action::NextProblem
+        | Action::PrevProblem
+        | Action::UseLastOkBeamspot
+        | Action::UseNextOkBeamspot => {}
         Action::Open => {
             if matches!(
                 app.focus,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, overload
 
 import hvplot.polars  # noqa: F401
 import ipywidgets as widgets
@@ -25,9 +25,6 @@ DEFAULT_ROI = 10
 
 if TYPE_CHECKING:
     from typing import Literal
-
-
-from typing import overload
 
 
 @pl.api.register_series_namespace("image")
@@ -127,7 +124,7 @@ class ImageSeries:
     def mean(self):
         """Return the mean image across all images in the series."""
         images = np.stack([np.array(img) for img in self._s])
-        mean_image = np.mean(images, axis=0)  # type: ignore
+        mean_image = np.mean(images, axis=0)
         return mean_image.reshape((mean_image.shape[1], mean_image.shape[0]))
 
     @overload
@@ -260,8 +257,16 @@ class PrsoxrLoader:
             if not path_list:
                 msg = "paths must not be empty."
                 raise ValueError(msg)
-            self.path = Path(directory).resolve() if directory is not None else path_list[0].parent
-            meta = read_fits(path_list, headers=default_keys, engine="polars")  # type: ignore[arg-type]
+            self.path = (
+                Path(directory).resolve()
+                if directory is not None
+                else path_list[0].parent
+            )
+            meta = read_fits(
+                path_list,
+                headers=default_keys,
+                engine="polars",
+            )  # type: ignore[arg-type]
             self.meta = cast("pl.DataFrame", meta)
         else:
             if directory is None:
@@ -310,14 +315,16 @@ class PrsoxrLoader:
             r = float(db_sum / bg_sum) if bg_sum else 0.0
             dr = float(np.sqrt(r))
             row = self.meta.row(i, named=True)
-            refl_rows.append({
-                "file_name": row["file_name"],
-                "EPU Polarization": row.get("EPU Polarization"),
-                "Beamline Energy": row.get("Beamline Energy"),
-                "Q": row.get("Q"),
-                "r": r,
-                "dr": dr,
-            })
+            refl_rows.append(
+                {
+                    "file_name": row["file_name"],
+                    "EPU Polarization": row.get("EPU Polarization"),
+                    "Beamline Energy": row.get("Beamline Energy"),
+                    "Q": row.get("Q"),
+                    "r": r,
+                    "dr": dr,
+                }
+            )
         self.refl = pl.DataFrame(refl_rows)
         self.shape = len(self.meta)
         self._polarization: Literal["s", "p"] | None = None
@@ -432,12 +439,10 @@ class PrsoxrLoader:
                 "connectionstyle": "angle,angleA=0,angleB=90,rad=20",
             }
             q_val = meta.get("Q", refl_row.get("Q", 0.0)) or 0.0
-            e_val = meta.get("Beamline Energy", refl_row.get("Beamline Energy", 0.0)) or 0.0
-            props = (
-                f"Reflectivity = {refl:.3e}\n"
-                f"Q = {q_val:.3f}\n"
-                f"E = {e_val:.1f}"
+            e_val = (
+                meta.get("Beamline Energy", refl_row.get("Beamline Energy", 0.0)) or 0.0
             )
+            props = f"Reflectivity = {refl:.3e}\nQ = {q_val:.3f}\nE = {e_val:.1f}"
             ax.annotate(
                 props,
                 xy=bs[::-1],

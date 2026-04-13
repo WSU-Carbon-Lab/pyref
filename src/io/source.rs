@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::FitsError;
 
 #[cfg(feature = "catalog")]
-use crate::catalog::{discover_fits_paths, CATALOG_DB_NAME};
+use crate::catalog::{discover_fits_paths, resolve_catalog_path as catalog_resolve_path};
 
 /// When the source could be satisfied from catalog or disk (e.g. beamtime dir with `.pyref_catalog.db`),
 /// this selects which to use.
@@ -41,7 +41,7 @@ pub enum FitsSource {
     Paths(Vec<PathBuf>),
     /// Directory: discover FITS files (and optionally use catalog if present).
     Dir(PathBuf),
-    /// Path to `.pyref_catalog.db` or to a beamtime directory that contains one.
+    /// Path to ``catalog.db`` (typically ``parent/.pyref/catalog.db``) or a beamtime directory.
     Catalog(PathBuf),
 }
 
@@ -73,7 +73,7 @@ impl FitsSource {
 
 #[cfg(feature = "catalog")]
 fn resolve_dir(dir: PathBuf, preference: ResolvePreference) -> Result<ResolvedSource, FitsError> {
-    let catalog_db = dir.join(CATALOG_DB_NAME);
+    let catalog_db = catalog_resolve_path(&dir);
     let use_catalog = match preference {
         ResolvePreference::FromDisk => false,
         ResolvePreference::PreferDisk => false,
@@ -123,15 +123,15 @@ fn resolve_catalog_path(
     _preference: ResolvePreference,
 ) -> Result<ResolvedSource, FitsError> {
     let db_path = if path.is_file() {
-        if path.file_name().and_then(|n| n.to_str()) != Some(CATALOG_DB_NAME) {
+        if path.file_name().and_then(|n| n.to_str()) != Some("catalog.db") {
             return Err(FitsError::validation(
-                "catalog source must be .pyref_catalog.db or a directory",
+                "catalog source must be catalog.db or a beamtime directory",
             )
             .with_context("path", path.display().to_string()));
         }
         path
     } else if path.is_dir() {
-        path.join(CATALOG_DB_NAME)
+        catalog_resolve_path(&path)
     } else {
         return Err(
             FitsError::not_found(format!("path does not exist: {}", path.display()))

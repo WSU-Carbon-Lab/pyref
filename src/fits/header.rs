@@ -35,7 +35,6 @@ impl CardValue {
             _ => None,
         }
     }
-
 }
 
 impl fmt::Display for CardValue {

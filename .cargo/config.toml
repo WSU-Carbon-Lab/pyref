@@ -1,2 +1,3 @@
 [alias]
-browser = "run --bin browser --no-default-features --features tui"
+browser = "run --release --bin browser --no-default-features --features tui"
+browser-dev = "run --bin browser --no-default-features --features tui -- --dev"

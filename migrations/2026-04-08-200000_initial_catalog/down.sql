@@ -1,0 +1,16 @@
+DROP TABLE IF EXISTS reflectivity;
+DROP TABLE IF EXISTS stitch_corrections;
+DROP TABLE IF EXISTS beam_finding;
+DROP TABLE IF EXISTS profile_frames;
+DROP TABLE IF EXISTS profiles;
+DROP TABLE IF EXISTS frame_header_values;
+DROP TABLE IF EXISTS frames;
+DROP TABLE IF EXISTS header_cards;
+DROP TABLE IF EXISTS scans;
+DROP TABLE IF EXISTS file_tags;
+DROP TABLE IF EXISTS files;
+DROP TABLE IF EXISTS tags;
+DROP TABLE IF EXISTS samples;
+DROP TABLE IF EXISTS file_overrides;
+DROP TABLE IF EXISTS path_aliases;
+DROP TABLE IF EXISTS beamtimes;

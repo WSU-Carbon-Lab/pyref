@@ -1,0 +1,19 @@
+---
+author: dotagents
+description: Python defaults for uv, typing, scientific code, and tests
+globs:
+  - "**/*.py"
+alwaysApply: false
+---
+
+- Prefer Python 3.12+ unless the repository pins an older interpreter.
+- Treat PEP 8 as surface style only; **Ruff** settings in `pyproject.toml` override generic style advice.
+- Prefer readability over micro-optimizations; vectorize with library primitives instead of tight Python loops over large numeric data.
+- Use **uv** for environments, runs, and dependencies. Do not hand-edit version pins in `pyproject.toml`; use `uv add`, `uv remove`, and `uv add <pkg> --upgrade` as needed. Run `uv sync` after clone or when the lockfile changes; use `uv run …` for Python, tools, and tests; `uvx` is fine for one-off tools.
+- Run **`ruff check`** and **`ty check`** as configured; run **`ruff format`** when this project uses Ruff for formatting.
+- Prefer **fast, deterministic** tests; isolate I/O and timing-sensitive cases with markers or separate jobs when the project does. Add **regression tests** for fixed bugs. For numerics, assert **shapes**, **dtypes**, and stability expectations when science or reproducibility requires it. Run tests with `uv run pytest` (install via `uv add --dev pytest` or the project dev group).
+- Be explicit about **shapes**, **dtypes**, and **missing data** in NumPy/SciPy code. For **pandas**, make **index and column** semantics clear. For **Polars**, prefer **lazy** plans (`scan_*`, `lazy`) for heavy pipelines when the project standardizes on Polars.
+- Prefer **NumPy-style docstrings** on **public** APIs; keep implementations clear **without** long narrative inline comments—use names, small functions, and docstrings. For section layout (Parameters, Returns, Examples, etc.), use the **`numpy-docstrings`** skill.
+- When editing domain-heavy code, load **`numpy-scientific`**, **`dataframes`**, **`matplotlib-scientific`**, or **`lab-instrumentation`** (drivers, sockets, lab I/O, datasheets) as appropriate—see project Python spec / **`general-python`** hub.
+- For instruments and lab tooling, prefer **pyvisa** patterns that separate **resource lifecycle** (open, configure, close) from **command strings** and parsing; deeper guidance in **`lab-instrumentation`**.
+- Expanded patterns live in the **`general-python`** skill; delegate reviews, typing depth, and structure to subagents **`python-reviewer`**, **`python-types`**, and **`python-refactor`** when a focused pass helps.

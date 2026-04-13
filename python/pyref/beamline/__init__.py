@@ -15,6 +15,7 @@ from pyref.beamline.base_widgets import (
     pad_digits,
 )
 from pyref.beamline.beamline_scan_macros import (
+    XRR_lineup,
     add_comment,
     add_prompt,
     analog_from_file,
@@ -37,13 +38,13 @@ from pyref.beamline.beamline_scan_macros import (
     set_motor,
     time_scan,
     windows_path,
-    XRR_lineup,
 )
 
 __all__ = [
     "ALS_ExperimentWidget",
     "ALS_MeasurementWidget",
     "ALS_ScriptGenWidget",
+    "XRR_lineup",
     "add_comment",
     "add_prompt",
     "analog_from_file",
@@ -59,8 +60,8 @@ __all__ = [
     "piezo_toggle",
     "relative_generic_scan",
     "relative_photodiode_scan",
-    "run_dict_trajectory",
     "run_I0",
+    "run_dict_trajectory",
     "sample_photo",
     "save_trajectory",
     "set_DIO",
@@ -68,5 +69,4 @@ __all__ = [
     "set_motor",
     "time_scan",
     "windows_path",
-    "XRR_lineup",
 ]

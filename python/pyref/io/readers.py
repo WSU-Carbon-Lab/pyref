@@ -52,7 +52,7 @@ def _is_skippable_stem(stem: str) -> bool:
 
 
 def resolve_fits_paths(source: FilePath | FilePathList) -> list[str]:
-    if isinstance(source, (list, tuple)):
+    if isinstance(source, list | tuple):
         out: list[str] = []
         for p in source:
             path = Path(p).resolve()
@@ -145,7 +145,7 @@ def scan_experiment(
     from pyref.pyref import py_read_multiple_fits_headers_only
 
     keys = header_items if header_items is not None else []
-    if not isinstance(source, (list, tuple)):
+    if not isinstance(source, list | tuple):
         path = Path(source).resolve()
         if path.is_file() and path.name == NEW_CATALOG_DB_NAME:
             try:
@@ -359,7 +359,7 @@ def set_override(
 def classify_reflectivity_scan_type(
     pairs: list[tuple[float | None, float | None]],
 ) -> tuple[str, float | None, float | None, float | None, float | None]:
-    """
+    r"""
     Classify a reflectivity acquisition from (beamline energy eV, sample theta deg) pairs.
 
     Wraps the Rust catalog classifier used by the TUI. ``scan_kind`` is one of

@@ -95,10 +95,7 @@ def discover_fits(root: Path, recursive: bool = True) -> list[Path]:
     root = Path(root).resolve()
     if not root.is_dir():
         return []
-    if recursive:
-        paths = sorted(root.rglob("*.fits"))
-    else:
-        paths = sorted(root.glob("*.fits"))
+    paths = sorted(root.rglob("*.fits")) if recursive else sorted(root.glob("*.fits"))
     return [p.resolve() for p in paths]
 
 

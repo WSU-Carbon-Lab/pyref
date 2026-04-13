@@ -11,23 +11,21 @@ Requirements:
     PyQt6
 """
 # Base Packages
-import sys
-import os
+import contextlib
+import inspect
 import json
 import re
-import copy
-import inspect
+import tkinter as tk
 from pathlib import Path
+from tkinter import filedialog
+
+# Visualization Packages
+import ipywidgets as widgets
 
 # Math packages
 import numpy as np
 import pandas as pd
 
-# Visualization Packages
-import ipywidgets as widgets
-from IPython.display import display, clear_output
-import tkinter as tk
-from tkinter import filedialog
 
 class ALS_ScriptGenWidget:
     """
@@ -36,26 +34,25 @@ class ALS_ScriptGenWidget:
     This class provides basic functions for creating widgets that generate
     run scripts. It includes functionality for saving,
     loading, verifying, and managing experiment configurations.
-    
+
     """
-    
+
     default_button = widgets.Layout(width='200px')
     default_GUI = widgets.Layout(widget='1200px')
     banner_button_style = {'button_color':'#007681', 'text_color':'white'}
-    
-    
+
+
     def __init__(self, exp_name="", child_widget=None, path=None, tab_title=None, json_title=None, **kwargs):
         """
-        Initializes an ALS_ScriptGenWidget. This is a base class to create widgets specializing in run-script generation
+        Initializes an ALS_ScriptGenWidget. This is a base class to create widgets specializing in run-script generation.
         """
-
         self.child_widget = child_widget if child_widget is not None else ALS_ExperimentWidget
         self._save_dir = path if path is not None else ""
         self.tab_title = tab_title if tab_title is not None else "Experiment "
         self.json_title = json_title if json_title is not None else "Default"
 
         # Create a title banner for the full widget
-        self.title_banner = widgets.HTML(value=f"<h2>{exp_name} Script Generator</h2>") 
+        self.title_banner = widgets.HTML(value=f"<h2>{exp_name} Script Generator</h2>")
 
         # Default save / path generation
         # Name that will be used to save the
@@ -72,7 +69,7 @@ class ALS_ScriptGenWidget:
             style = self.banner_button_style
         )
         self.save_button_CCD.on_click(self.save_script)
-        
+
         self.save_button_beamline = widgets.Button(
             description = "Save Beamline Scan File",
             layout=self.default_button,
@@ -104,7 +101,7 @@ class ALS_ScriptGenWidget:
                 self.additional_buttons
             ]
         )
-        
+
         #self.control_buttons = widgets.VBox(
         #    [
         #        self.save_name,
@@ -134,7 +131,7 @@ class ALS_ScriptGenWidget:
         self.save_json_button.on_click(self.save_json)
         self.json_buttons = widgets.HBox([self.save_json_button, self.load_json_button])
 
-        self.GUI = widgets.VBox([self.title_banner, self.control_buttons, self.layout, self.json_buttons,self.save_buttons], layout=self.default_GUI)        
+        self.GUI = widgets.VBox([self.title_banner, self.control_buttons, self.layout, self.json_buttons,self.save_buttons], layout=self.default_GUI)
         #display(self.GUI)
 
     def __call__(self):
@@ -142,12 +139,12 @@ class ALS_ScriptGenWidget:
 
     def __len__(self):
         return 0
-    
+
 
     @property
     def save_dir(self):
         return self._save_dir
-    
+
     @save_dir.setter
     def save_dir(self, val):
         self._save_dir=val
@@ -159,11 +156,11 @@ class ALS_ScriptGenWidget:
             if widget_str in key:
                 df = getattr(value, "output_dict", lambda: value)()
                 self.new_tab(layout, widget, widget_str, **df)
-                
+
         if not layout.children:
             df = {}
             self.new_tab(layout, widget, widget_str, **df)
-            
+
         return layout
 
     def new_tab(self, layout, widget, widget_str, b=None,  **kwargs):
@@ -189,7 +186,7 @@ class ALS_ScriptGenWidget:
             df = {}
         setattr(self, widget_str + pad_digits(index), widget(scriptgen_widget=self, **df))
         self.update_experiment_tab(layout, widget_str)
-        
+
     def delete_tab(self, layout, widget, widget_str, b=None):
         try:
             index = self.layout.selected_index + 1
@@ -198,14 +195,14 @@ class ALS_ScriptGenWidget:
         widget_name = widget_str+pad_digits(index)
         if hasattr(self, widget_name):
             delattr(self, widget_name)
-            
+
             j = index + 1
             while hasattr(self, f"{widget_str}{pad_digits(j)}"):
                 setattr(self, f"{widget_str}{pad_digits(j-1)}", getattr(self, f"{widget_str}{pad_digits(j)}"))
                 delattr(self, f"{widget_str}{pad_digits(j)}")
                 j += 1
             self.update_experiment_tab(layout, widget_str)
-            
+
     def clean_slate(self):
         self.layout.children = ()
         for key in (key for key in dir(self) if not key.startswith("__")):
@@ -220,8 +217,8 @@ class ALS_ScriptGenWidget:
             display.extend([widget.display()])
         self.layout.children = display
         for tab in np.arange(len(layout.children)):
-            layout.set_title(tab, self.tab_title +str(tab+1)) 
-            
+            layout.set_title(tab, self.tab_title +str(tab+1))
+
     def save_script(self, ext='.txt', sep='\t', b=None):
         SAVEDIR = str(self.save_dir)
         SAVENAME = str(self.save_name.value)
@@ -232,7 +229,7 @@ class ALS_ScriptGenWidget:
 
         # Cleanup the output because the ALS requires specific things
         try:
-            with open(SAVEPATH, 'r') as f:
+            with open(SAVEPATH) as f:
                 lines = f.readlines()
             if not lines: # Empty file
                 return
@@ -267,10 +264,10 @@ class ALS_ScriptGenWidget:
             #    continue # Pass everything except a potential ALS_UTILITIY
             #if not hasattr(attr.WIDGET, 'ALS_NAME'):
             #    continue
-                
+
             #print(attr)
-            #save_dict[key] = self._process_attr_dict(attr) 
-                
+            #save_dict[key] = self._process_attr_dict(attr)
+
             if hasattr(attr, 'output_dict') and not inspect.isclass(attr): #not inspect.isclass(attr) and hasattr(attr, 'WIDGET') and
                 save_dict[key] = self._process_attr_dict(self, attr)
         return save_dict
@@ -299,7 +296,7 @@ class ALS_ScriptGenWidget:
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
-            
+
             initial_dir = str(self._save_dir) if self._save_dir else None
             selected_folder = filedialog.askdirectory(
                 title="Select Folder",
@@ -319,13 +316,11 @@ class ALS_ScriptGenWidget:
                     root.destroy()
                 except:
                     pass
-                try:
+                with contextlib.suppress(Exception):
                     root.quit()
-                except:
-                    pass
                 root = None
                 gc.collect()
-        
+
         if selected_folder:
             return Path(selected_folder)
         return None
@@ -335,13 +330,14 @@ class ALS_ScriptGenWidget:
         SAVEDIR = str(self.save_dir)
         SAVENAME = str(self.save_name.value)
         SAVEPATH = SAVEDIR + '/' + SAVENAME + '.json'
-            
+
         try:
             with open(SAVEPATH, 'w') as f:
                 f.write(f"# {self.json_title}\n")
                 json.dump(df, f, indent=4)
         except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(f"Error encoding to JSON: {e}")
+            msg = f"Error encoding to JSON: {e}"
+            raise json.JSONDecodeError(msg)
 
     def load_json(self, expected_title="", b=None):
         import gc
@@ -351,7 +347,7 @@ class ALS_ScriptGenWidget:
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
-            
+
             initial_dir = str(self._save_dir) if self._save_dir else None
             selected_file = filedialog.askopenfilename(
                 title="Select JSON File",
@@ -374,16 +370,14 @@ class ALS_ScriptGenWidget:
                     root.destroy()
                 except:
                     pass
-                try:
+                with contextlib.suppress(Exception):
                     root.quit()
-                except:
-                    pass
                 root = None
                 gc.collect()
-        
+
         if selected_file:
             try:
-                with open(selected_file, 'r') as f:
+                with open(selected_file) as f:
                     title_line = f.readline().strip()
                     if title_line == f"# {self.json_title}":
                         df = json.load(f)
@@ -398,7 +392,7 @@ class ALS_ScriptGenWidget:
                 traceback.print_exc()
                 return None
         return None
-            
+
 
 
 
@@ -415,7 +409,7 @@ class ALS_ExperimentWidget:
         # Initial conditions
         self.constants = constants if constants is not None else {}
         self.constants_titles = constants_titles if constants_titles is not None else {}
-        
+
         # Title of the widget
         self.widget_title = widgets.HTML(value=f"<b>{title}</b>")
 
@@ -437,7 +431,7 @@ class ALS_ExperimentWidget:
                             layout = self.default_FloatText,
                             style = self.default_FloatText_style
                         )
-                    )  
+                    )
                     temp_display.append(getattr(self, attr_title))
 
                 elif isinstance(attr_value, str): # THIS WILL NOT SAVE THIS VALUE. STRINGS SHOULD NOT BE PASSED
@@ -450,7 +444,7 @@ class ALS_ExperimentWidget:
                             layout = self.default_FloatText,
                             style = self.default_FloatText_style
                         )
-                    )   
+                    )
             self.menu_box = widgets.VBox(temp_display)
         else:
             self.menu_box = widgets.VBox([])
@@ -477,7 +471,7 @@ class ALS_ExperimentWidget:
             df = {}
         setattr(self, widget_str + pad_digits(index), widget(experiment_widget=self, **df))
         self.update_scan_tab(layout, widget_str)
-        
+
     def delete_scan(self, layout, widget, widget_str, b=None):
         try:
             index = self.layout.selected_index + 1
@@ -500,7 +494,7 @@ class ALS_ExperimentWidget:
             display.extend([widget.display()])
         self.layout.children = display
         for tab in np.arange(len(layout.children)):
-            layout.set_title(tab, widget_str +str(tab+1)) 
+            layout.set_title(tab, widget_str +str(tab+1))
 
     def output_dict(self):
         df = {}
@@ -521,22 +515,24 @@ class ALS_ExperimentWidget:
         match = re.match(pattern, input_str)
         return bool(match)
 
-        
-        
+
+
 class ALS_MeasurementWidget:
     LABEL_SIZE = widgets.Layout(width='150px')
     LABEL_STYLE = {'description_width': '150px'}
     CELL_SIZE = widgets.Layout(width='100px')
 
-    def __init__(self, constant_motor_title="Generic Measurement", update_options={}, experiment_widget=None):
-        # Set values and update if parameters are loaded -- 
+    def __init__(self, constant_motor_title="Generic Measurement", update_options=None, experiment_widget=None):
+        # Set values and update if parameters are loaded --
+        if update_options is None:
+            update_options = {}
         self.constant_motor_title = widgets.HTML(value=f"<b>{constant_motor_title}</b>") # All tables have a title
         self.constant_motor_attrs = [] # All tables will have some fixed values
         self.table = widgets.VBox(children=[])
         self.control_buttons = widgets.VBox(children=[])
-        
+
         self.ExperimentWidget = experiment_widget
-        
+
     def build_display_table(self):
         build_table = []
         build_table.extend([self.constant_motor_title]) # The title of fixed values
@@ -544,7 +540,7 @@ class ALS_MeasurementWidget:
         build_table.extend([self.table])  # table object if needed
         build_table.extend([self.control_buttons]) # optional buttons
         return widgets.VBox(build_table)
-        
+
     def display(self):
         return self.display_table
 
@@ -559,17 +555,17 @@ class ALS_MeasurementWidget:
     def update_table(self):
         if not hasattr(self, 'table_titles') or not self.table_titles:
             return []
-        
+
         if isinstance(self.table_titles[0], list):
             title_row = self.table_titles
         else:
             title_row = [self.table_titles]
-        
+
         fixed_content = [getattr(self, attr) for attr in dir(self) if attr.startswith('fixed_')]
         variable_content = [attr for attr in dir(self) if attr.startswith('variable_')]
         variable_content = self._sort_attrs(variable_content)
         variable_content = [getattr(self, attr) for attr in variable_content]
-        
+
         rows = title_row + fixed_content + variable_content
         output_table = []
         for row in rows:
@@ -581,12 +577,12 @@ class ALS_MeasurementWidget:
                 else:
                     output_table.append(widgets.HBox(row))
         return output_table
-        
+
     def _sort_attrs(self, attrs):
         def extract_number(s):
             return int(re.search(r'_(\d+)', s).group(1)) #finds the number after the underscore
         return sorted(attrs, key=extract_number)
-        
+
 
     def output_dict(self):
         df = {}
@@ -602,19 +598,19 @@ class ALS_MeasurementWidget:
                     else:
                         df[key] += [col.value]
         return df
-        
-        
-        
-        
-        
-        
+
+
+
+
+
+
 """
 other functions
 """
 def clean_script(file):
     # Cleanup the output because the ALS requires specific things
     try:
-        with open(file, 'r') as f:
+        with open(file) as f:
             lines = f.readlines()
         if not lines: # Empty file
             return
@@ -632,9 +628,9 @@ def clean_script(file):
     except Exception as e:
         print(f"An error occured: {e}")
     del lines #Remove it from memory (it can be large)
-    
-    
-    
+
+
+
 def pad_digits(number):
     """Pads a float or string representation of a float with leading zeros
     until it becomes a 4-digit number (before the decimal point).
@@ -642,7 +638,8 @@ def pad_digits(number):
     Args:
     number: A float or a string representing a float.
 
-    Returns:
+    Returns
+    -------
     A string representing the number padded with leading zeros to 4 digits
     before the decimal point. If the integer part already has 4 or more
     digits, it is returned as is (with any decimal part).

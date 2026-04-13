@@ -4,7 +4,7 @@ from pathlib import Path
 
 def card(keyword: str, value: str | int | float | bool) -> bytes:
     if isinstance(value, bool):
-        s = f"{keyword:8}= {str(value):>20}"
+        s = f"{keyword:8}= {value!s:>20}"
     elif isinstance(value, int):
         s = f"{keyword:8}= {value:20d}"
     elif isinstance(value, float):

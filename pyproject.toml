@@ -94,6 +94,9 @@ exclude = [
   ".venv",
   "docs",
   "src",
+  "notebooks",
+  "tests",
+  "python/pyref/beamline",
 ]
 fix = true
 line-length = 88

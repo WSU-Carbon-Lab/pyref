@@ -4,8 +4,8 @@ This module provides functions for generating beamline scan macros and run files
 for ALS beamline 11.0.1.2.
 """
 
-import os # For saving macros
-import warnings # For warning people
+import os  # For saving macros
+import warnings  # For warning people
 
 """
 Some Saved Motor Positions. Update here if needed.
@@ -21,7 +21,7 @@ Save macro to run file
 """
 
 def build_macro(name, path, macro):
-    
+
     if not os.path.exists(path):
         try:
             os.makedirs(path)
@@ -29,7 +29,7 @@ def build_macro(name, path, macro):
             print(f"Error in creating directory {path}: {e}")
             return
     file_path = os.path.join(path, f"{name}.txt")
-    
+
     try:
         with open(file_path, "w") as f:
             # Write the Description Line
@@ -41,8 +41,8 @@ def build_macro(name, path, macro):
                 f.write(str(step) + "\n") # Write the line and add a new line
     except Exception as e:
         print(f"Error creating file {name}.txt: {e}")
-    
-        
+
+
 
 """
 Basic Macros
@@ -50,20 +50,20 @@ Basic Macros
 
 def finish_line(s=600):
     # Added to every function to end the line. Not sure what this is for....
-    return f") [{str(s)}]"
-    
+    return f") [{s!s}]"
+
 def add_comment(comment):
     output = "Comment: "
     output += f"{comment}"
     return output
-    
+
 def add_prompt(prompt):
     output = "Prompt("
     output += f"{prompt}"
     output += finish_line(s=0.1)
     return output
 
-# The save_as condition determines whether or not 
+# The save_as condition determines whether or not
 def set_instrument(
         instrument,
         sync = "True",
@@ -76,7 +76,7 @@ def set_instrument(
     ):
     instrument_list = ["CCD", "Video", None]
     if instrument not in instrument_list:
-        warnings.warn(f"{instrument} is not part of instrument list. Returning blank line", UserWarning)
+        warnings.warn(f"{instrument} is not part of instrument list. Returning blank line", UserWarning, stacklevel=2)
         return ""
     if instrument is None:
         instrument = '""'
@@ -93,11 +93,11 @@ def set_instrument(
     output += sub_dark + ","
     output += str(num_to_sum)
     output += finish_line(s=0.5)
-    
+
     return output
-        
-        
-        
+
+
+
 def set_DIO(name, on_off, delay=0.1):
     output = "Set DIO("
     output += name + ","
@@ -105,7 +105,7 @@ def set_DIO(name, on_off, delay=0.1):
     output += str(on_off)
     output += finish_line(s=0.5)
     return output
-    
+
 def move_motor(motor, pos, delay=0.1):
     output = "Move Motor("
     output += motor+","
@@ -115,7 +115,7 @@ def move_motor(motor, pos, delay=0.1):
     output += "1"
     output += finish_line(s=5)
     return output
-    
+
 def set_motor(motor, pos, delay=0.1):
     output = "Move Motor("
     output += motor+","
@@ -125,7 +125,7 @@ def set_motor(motor, pos, delay=0.1):
     output += "1"
     output += finish_line(s=0.5)
     return output
-    
+
 def jog_motor(motor, pos, delay=0.1):
     output = "Move Motor("
     output += motor+","
@@ -144,18 +144,18 @@ def move_trajectory(name_of_traj, delay=0.1):
     output += "0"
     output += finish_line()
     return output
-    
+
 def save_trajectory(name, list_of_motors):
     output = "Save Trajectory("
     output += name +","
     output += "10.0" +"," # Days till it gets deleted
     for motor in list_of_motors:
         output += motor + "\t"
-    output = output[:-2] + "\r\n" # Remove the last tab and finish the list of motors    
+    output = output[:-2] + "\r\n" # Remove the last tab and finish the list of motors
     # A few other things need to go here
     output += finish_line()
     return output
-    
+
 def relative_photodiode_scan(motor, delta, incr,delay=0.1,count_time=0.3):
     # Order of inputs: motor, delta, "current position", incr, delay, count, other defaults"
     output = "Single Motor Relative Scan("
@@ -175,7 +175,7 @@ def relative_photodiode_scan(motor, delta, incr,delay=0.1,count_time=0.3):
     output += ")"
     output += " [600]"
     return output
-    
+
 def relative_generic_scan(
         motor,
         base_file_name,
@@ -211,7 +211,7 @@ def relative_generic_scan(
     # A few other things need to go here to wrap up the line
     output += finish_line()
     return output
-    
+
 def absolute_generic_scan(
         motor,
         start,
@@ -236,7 +236,7 @@ def absolute_generic_scan(
     output += "Min"
     output += finish_line()
     return output
-    
+
 def analog_from_file(name, path_to_scan, delay=0.1, count_time=0.5, move_sequential="false", dont_repeat="false", end_of_scan='Return', end_trajectory='""'):
     output  = "From File Scan("
     output += windows_path(path_to_scan) +","
@@ -249,10 +249,10 @@ def analog_from_file(name, path_to_scan, delay=0.1, count_time=0.5, move_sequent
     output += '""' + ","
     output += name
     output += finish_line()
-    
+
     return output
-    
-    
+
+
 def time_scan(name, time_between_points, total_time=1, number_of_samples=1, count_time=0.1, stop_condition='Samples Taken'):
     # Make sure the stop condition is one of the two options. 'Samples Taken' or 'Time Elapsed'
     if stop_condition=='Samples Taken':
@@ -261,7 +261,7 @@ def time_scan(name, time_between_points, total_time=1, number_of_samples=1, coun
         number_of_samples = total_time/time_between_points
     else:
         return ""
-    
+
     output = "Time Scan("
     output += str(total_time) + ","
     output += str(number_of_samples) + ","
@@ -270,7 +270,7 @@ def time_scan(name, time_between_points, total_time=1, number_of_samples=1, coun
     output += '""' + ","
     output += name
     output += finish_line()
-    
+
     return output
 
 """
@@ -278,7 +278,7 @@ Initialization macros that start everything
 """
 
 
-    
+
 """
 Experiment Specific macros
 """
@@ -288,43 +288,44 @@ clear_instruments = set_instrument(None, extension="")
 
 def begin_macro(name):
     macro = []
-    
+
     macro += [add_comment(f"{name} macro")]
     macro += [clear_instruments]
-    
+
     return macro
 
 
 # Built in trajectories
 def run_dict_trajectory(d):
-    
+
     if not isinstance(d, dict):
-        raise TypeError("Input must be a dictionary containing Motor:Position Pairs")
+        msg = "Input must be a dictionary containing Motor:Position Pairs"
+        raise TypeError(msg)
     trajectory_name = get_dict_name(d)
-    
+
     macro = []
     macro += [add_comment(f"Run Trajectory: {trajectory_name}")]
     for key, value in d.items():
         macro += [move_motor(key, value, 0.1)]
-    
+
     return macro
-    
+
 
 def piezo_toggle(in_out=0):
     """
     Toggle the Piezo position by bringing the shutter in or out
     Move the shutter in, in_out = 1
-    Move the shutter out, in_out = 0
+    Move the shutter out, in_out = 0.
     """
     macro = []
     if(in_out):
         macro += [move_motor("PiezoShutter Trans", piezo_in, delay=0.1)]
         macro += [set_DIO("Air Shutter Output", on_off="ON", delay=0.1)]
-    if(not in_out):  
+    if(not in_out):
         macro += [set_DIO("Air Shutter Output", on_off="OFF", delay=0.1)]
         macro += [move_motor("PiezoShutter Trans", piezo_out, delay=0.1)]
     return macro
-    
+
 
 # Auto-align sample-theta given a sample position
 def XRR_lineup(repeat=3):
@@ -339,7 +340,7 @@ def XRR_lineup(repeat=3):
     th = 1
     # Start building the scan
     macro = []
-    macro += [add_comment(f"Begin XRR_Lineup")]
+    macro += [add_comment("Begin XRR_Lineup")]
     macro += [clear_instruments] # Make sure the CCD is turned off for diode scans
     macro += piezo_toggle(in_out=0) # Move the Piezo motor out of the way to actuate the shutter
     macro += [move_motor("Higher Order Suppressor", HOS_in, 0.1)]
@@ -361,7 +362,7 @@ def XRR_lineup(repeat=3):
     macro += [shutter_off]
     macro += [jog_motor("Sample Theta", -th, 0.1)]
     macro += [jog_motor("CCD Theta", -2*th, 0.1)]
-    for i in range(repeat):
+    for _i in range(repeat):
         #th += 0.5
         macro += [shutter_on]
         macro += [fine_z_scan]
@@ -373,25 +374,25 @@ def XRR_lineup(repeat=3):
         macro += [shutter_off]
         macro += [jog_motor("Sample Theta", -th, 0.1)]
         macro += [jog_motor("CCD Theta", -2*th, 0.1)]
-        
+
     macro += [set_motor("Sample Theta", 0)]
     macro += [set_motor('Sample Z', 0)]
     macro += [shutter_off]
     macro += piezo_toggle(in_out=1)
-    
+
     return macro
-    
-# Take a photo of the sample  // will need to record pixel value of cursor 
+
+# Take a photo of the sample  // will need to record pixel value of cursor
 def sample_photo(name):
     macro = []
     macro += [add_comment(f"Taking photo of sample: {name}")]
     macro += [set_instrument("Video", exp=1, extension="png")] # Turn on camera as instrument
     macro += [set_DIO("Light Output", on_off="ON")] # Turn the light on
-    macro += [time_scan(name, time_between_points=1)] # Take one photo based on the current motor position 
+    macro += [time_scan(name, time_between_points=1)] # Take one photo based on the current motor position
     macro += [set_DIO("Light Output", on_off="OFF")] # Turn the light off before continuing
     macro += [clear_instruments] # Remove the camera from the instruments queue before continuing
     return macro
-    
+
 def run_I0(name, scan_file, posx, posy):
     macro = []
     macro += [add_comment(f"Running {name}")]
@@ -400,9 +401,9 @@ def run_I0(name, scan_file, posx, posy):
     macro += [move_motor('Sample X', posx, 0.1)]
     macro += [move_motor('Sample Y', posy, 0.1)]
     macro += [analog_from_file(name, scan_file)]
-    
+
     return macro
-    
+
 """
 Experiment Specific Trajectories that included during a full run.
 """
@@ -448,22 +449,23 @@ CCDClose_Edge_LowEn = {
     "CCD Y": 0.000,
     "Beam Stop": 10.490
 }
- 
+
 # Other functions...
 def get_dict_name(d, namespace=locals()):
     for name, value in namespace.items():
         if value is d and isinstance(value, dict):
             return name
     return None
-    
+
 def windows_path(path_string):
-    """
+    r"""
     Normalizes a path string by replacing all '/' and '\' separators with '\\'.
 
     Args:
         path_string: The input path string.
 
-    Returns:
+    Returns
+    -------
         The normalized path string with '\\' as the separator.
     """
     # Replace forward slashes with backslashes

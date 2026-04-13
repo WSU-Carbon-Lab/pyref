@@ -6,7 +6,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from pyref import get_data_path
 from pyref.io.experiment_names import (
     ParsedFitsName,

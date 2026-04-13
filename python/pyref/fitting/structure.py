@@ -860,10 +860,7 @@ class Slab(PXR_Component):
     def __init__(self, thick, sld: Scatterer, rough, name=""):
         super().__init__(name=name)
         self.thick = possibly_create_parameter(thick, name=f"{name}_thick")
-        if isinstance(sld, Scatterer):
-            _sld = sld
-        else:
-            _sld = SLD(sld)
+        _sld = sld if isinstance(sld, Scatterer) else SLD(sld)
         self.sld: Scatterer = _sld
 
         self.rough = possibly_create_parameter(rough, name=f"{name}_rough")

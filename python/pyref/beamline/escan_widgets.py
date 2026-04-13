@@ -4,27 +4,22 @@ This module provides widgets for generating energy scan run files for
 ALS beamline 11.0.1.2.
 """
 # Base Packages
-import sys
-import os
-import json
-import re
-import copy
+import contextlib
 import inspect
+import json
+import tkinter as tk
 from pathlib import Path
+from tkinter import filedialog
+
+# Visualization Packages
+import ipywidgets as widgets
 
 # Math packages
 import numpy as np
 import pandas as pd
-
-# Visualization Packages
-import ipywidgets as widgets
-from IPython.display import display, clear_output
-import tkinter as tk
-from tkinter import filedialog
+from IPython.display import display
 
 from pyref.beamline.base_widgets import (
-    ALS_ScriptGenWidget,
-    ALS_ExperimentWidget,
     ALS_MeasurementWidget,
 )
 
@@ -39,7 +34,7 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
         "Step 3":[284.0, 286.0, 0.1, 0.5],
         "Step 4":[286.0, 292.0, 0.2, 0.5],
         "Step 5":[292.0, 300.0, 1, 0.5],
-        "Step 6":[300.0, 370.0, 10, 1] 
+        "Step 6":[300.0, 370.0, 10, 1]
     }
     BUTTON_SIZE = widgets.Layout(width='10rem')
     LABEL_SIZE = widgets.Layout(width='5rem')
@@ -86,14 +81,14 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
         self.make_table(parameters)
 
         self.table = widgets.VBox(self.update_table())
-        
+
         # Create a button to add or remove columns and rows
         self.add_step_button = widgets.Button(description="Add step", layout=self.BUTTON_SIZE)
         self.add_step_button.on_click(self.add_step)
 
         self.remove_step_button = widgets.Button(description="Remove step", layout=self.BUTTON_SIZE)
         self.remove_step_button.on_click(self.remove_step)
-        
+
         # Additional options for the Escan
         self.repeat_title = widgets.HTML(
             value = "Number of Repeats: ",
@@ -135,20 +130,20 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
             style = self.OTHER_BUTTON_STYLE
         )
         self.save_for_rsoxs.on_click(self.save_rsoxs)
-        
+
         self.save_scan_buttons = widgets.HBox(children=[self.save_for_nexafs, self.save_for_rsoxs])
 
 
         # Style the table
         self.table.layout=self.TABLE_SIZE
-        
+
         self.display_table = self.build_display_table()
         display(self.display_table)
 
     @property
     def save_dir(self):
         return self._save_dir
-    
+
     @save_dir.setter
     def save_dir(self, val):
         self._save_dir=val
@@ -161,11 +156,11 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
                     self,
                     'variable_'+str(i+1),
                     [
-                        [widgets.Label(value=key, layout=self.LABEL_SIZE)] + 
+                        [widgets.Label(value=key, layout=self.LABEL_SIZE)] +
                         [widgets.FloatText(value=ii, layout=self.LABEL_SIZE) for ii in item]
                     ]
                 )
-    
+
     def add_step(self, b):
         total_cols = len(self.table_titles[0])-1
         # Add a new row with FloatText widgets
@@ -179,9 +174,9 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
                 [widgets.Label(value="Step "+str(num_steps+1), layout=self.LABEL_SIZE)] +
                 [widgets.FloatText(value=i, layout=self.LABEL_SIZE) for i in np.arange(total_cols)]
                 #[widgets.Dropdown(options=AVAILABLE_MOTORS, value=::)]
-            ]            
+            ]
         )
-        temp_motor = getattr(self, "variable_"+str(num_steps+1))
+        getattr(self, "variable_"+str(num_steps+1))
         self.table.children = self.update_table()
 
     def remove_step(self, b):
@@ -191,10 +186,9 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
             print("No steps to delete")
             return 0
         for motor in self.get_table():
-            if "variable_" in motor:
-                if str(final_step) in motor:
-                    delattr(self,motor)
-    
+            if "variable_" in motor and str(final_step) in motor:
+                delattr(self,motor)
+
         # Update the table
         self.table.children = self.update_table()
 
@@ -222,7 +216,7 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
-            
+
             initial_dir = str(self._save_dir) if self._save_dir else None
             selected_folder = filedialog.askdirectory(
                 title="Select Folder",
@@ -242,13 +236,11 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
                     root.destroy()
                 except:
                     pass
-                try:
+                with contextlib.suppress(Exception):
                     root.quit()
-                except:
-                    pass
                 root = None
                 gc.collect()
-        
+
         if selected_folder:
             return Path(selected_folder)
         return None
@@ -257,14 +249,15 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
         df = self.output_dict()
         SAVEDIR = str(self.save_dir)
         SAVENAME = str(self.save_name.value)
-        SAVEPATH = SAVEDIR + '/' + SAVENAME + '.json'   
+        SAVEPATH = SAVEDIR + '/' + SAVENAME + '.json'
 
         try:
             with open(SAVEPATH, 'w') as f:
                 f.write(f"# {self.JSON_TITLE}\n")
                 json.dump(df, f, indent=4)
         except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(f"Error encoding to JSON: {e}")
+            msg = f"Error encoding to JSON: {e}"
+            raise json.JSONDecodeError(msg)
 
     def load_json(self, expected_title="", b=None):
         import gc
@@ -274,7 +267,7 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
-            
+
             initial_dir = str(self._save_dir) if self._save_dir else None
             selected_file = filedialog.askopenfilename(
                 title="Select JSON File",
@@ -297,16 +290,14 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
                     root.destroy()
                 except:
                     pass
-                try:
+                with contextlib.suppress(Exception):
                     root.quit()
-                except:
-                    pass
                 root = None
                 gc.collect()
-        
+
         if selected_file:
             try:
-                with open(selected_file, 'r') as f:
+                with open(selected_file) as f:
                     title_line = f.readline().strip()
                     if title_line == f"# {self.JSON_TITLE}":
                         df = json.load(f)
@@ -338,7 +329,7 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
         np.savetxt(SAVEPATH, full_energy_scan, fmt='%.2f')
         # Cleanup the output because the ALS requires specific things
         try:
-            with open(SAVEPATH, 'r') as f:
+            with open(SAVEPATH) as f:
                 lines = f.readlines()
             if not lines: # Empty file
                 return
@@ -355,46 +346,46 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
         except Exception as e:
             print(f"An error occured: {e}")
         del lines #Remove it from memory (it can be large)
-        
+
     def save_rsoxs(self, b=None):
         SAVEDIR = str(self.save_dir)
         SAVENAME = str(self.save_name.value)
         SAVEPATH = SAVEDIR + '/' + SAVENAME + '.txt'
-        
+
         Motor_Order = ['Beamline Energy', 'CCD Camera Shutter Inhibit', 'Exposure']
 
         df = self.output_dict()
         escan_details = self._build_escan(df)
         Escan = escan_details[0] # The energies
         Exposure = escan_details[1] # The exposures
-        
+
         # Build the sample dataframe
         temp_scan = {}
         temp_scan['Beamline Energy'] = Escan
         temp_scan['Exposure'] = Exposure
         df_samp = pd.DataFrame(temp_scan)
-        
+
         # Add CCD Inhibit, first and last, all exposure times
         df_samp['CCD Camera Shutter Inhibit'] = np.full_like(Escan, 0) # Add the column
         for expo in np.unique(Exposure):
             df_samp = pd.concat([df_samp.loc[0].to_frame().T, df_samp], ignore_index=True) # Add a frame at the beginning of the sample
             df_samp = pd.concat([df_samp, df_samp.loc[df_samp.index[-1]].to_frame().T], axis=0, ignore_index=True) # Add a frame at the end of the sample
-            
-            df_samp.loc[0, 'CCD Camera Shutter Inhibit'] = 1 # Close the shutter 
+
+            df_samp.loc[0, 'CCD Camera Shutter Inhibit'] = 1 # Close the shutter
             df_samp.loc[df_samp.index[-1], 'CCD Camera Shutter Inhibit'] = 1
 
             df_samp.loc[0, 'Exposure'] = expo # Set exposure
             df_samp.loc[df_samp.index[-1], 'Exposure'] = expo
-            
+
         # Cleanup the output because the ALS requires specific things
         cols = list(df_samp.columns)
         Ordered_Cols = [item for item in Motor_Order if item in cols]
         df_samp = self._iterate_dataframe(df_samp[Ordered_Cols], self.repeat_value.value) # Repeat the scan if it is requested
-        
+
         df_samp.to_csv(SAVEPATH, index=False, sep='\t')
 
         try:
-            with open(SAVEPATH, 'r') as f:
+            with open(SAVEPATH) as f:
                 lines = f.readlines()
             if not lines: # Empty file
                 return
@@ -411,12 +402,12 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
         except Exception as e:
             print(f"An error occured: {e}")
         del lines #Remove it from memory (it can be large)
-        
+
     def _build_escan(self, d):
         energy_array = np.array([])
         exposure_array = np.array([])
         print(d)
-        for key, item in d.items():
+        for _key, item in d.items():
             if item[2] == 0:
                 energy_subset = np.array([item[0]])
             else:
@@ -425,15 +416,15 @@ class ESCAN_ScriptGen(ALS_MeasurementWidget):
             energy_array = np.concatenate((energy_array, energy_subset))
             exposure_array = np.concatenate((exposure_array, exposure_subset))
         return (np.round(energy_array, 2), exposure_array)
-        
+
     def _iterate_dataframe(self, df, n_duplicates):
         if not isinstance(n_duplicates, int) or n_duplicates < 1:
             n_duplicates = 1
-            
+
         df_duplicate = [df] * n_duplicates
         df_duplicate = pd.concat(df_duplicate, ignore_index=True)
         return df_duplicate
-        
+
 
     def clean_slate(self):
         self.table.children = ()

@@ -3,14 +3,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
-from refnx.analysis import Parameter, Parameters, possibly_create_parameter
+from refnx.analysis import Parameters, possibly_create_parameter
 from scipy.interpolate import interp1d
 
 from pyref.fitting.structure import Scatterer
 
 if TYPE_CHECKING:
+    import pandas as pd
     from numpy.typing import NDArray
+    from refnx.analysis import Parameter
 
 speed_of_light = 299792458  # m/s
 plank_constant = 4.135667697e-15  # ev*s

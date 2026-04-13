@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from astropy.io import fits
 from astropy.io.fits import ImageHDU
-from typing import cast
-
 from pyref import get_data_path
 
 
@@ -45,7 +44,7 @@ def load_pyref(path: Path) -> np.ndarray:
 def load_astropy(path: Path) -> np.ndarray:
     """Load RAW via astropy."""
     with fits.open(path) as hdul:
-        image = cast(ImageHDU, hdul[2])
+        image = cast("ImageHDU", hdul[2])
         return np.asarray(image.data)
 
 

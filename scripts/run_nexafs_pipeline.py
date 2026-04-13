@@ -88,9 +88,7 @@ def catalog_izero_files(directory: Path) -> pd.DataFrame:
         if not is_nexafs_scan_file(path):
             continue
         stem = path.stem.lower()
-        if stem.startswith("izero_"):
-            parts = path.stem.split("_", 1)
-        elif stem.startswith("i0_"):
+        if stem.startswith("izero_") or stem.startswith("i0_"):
             parts = path.stem.split("_", 1)
         else:
             continue
@@ -178,16 +176,16 @@ def parse_sample(
     formula_map: dict[str, str],
 ) -> dict[str, Any]:
     if len(parts) == len(keys):
-        parsed = dict(zip(keys, parts))
+        parsed = dict(zip(keys, parts, strict=False))
     elif len(parts) == len(keys) - 1 and "version" in keys:
         i = keys.index("version")
         parsed = {
-            **dict(zip(keys[:i], parts[:i])),
+            **dict(zip(keys[:i], parts[:i], strict=False)),
             "version": 1,
-            **dict(zip(keys[i + 1 :], parts[i:])),
+            **dict(zip(keys[i + 1 :], parts[i:], strict=False)),
         }
     else:
-        parsed = dict(zip(keys, parts[: len(keys)]))
+        parsed = dict(zip(keys, parts[: len(keys)], strict=False))
     ts = datetime.fromtimestamp(birth_time)
     return {
         "name": parsed["name"],

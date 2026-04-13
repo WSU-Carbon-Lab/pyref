@@ -4,17 +4,18 @@ Pandas DataFrame accessor for NEXAFS normalization: pre/post edge regions, fit, 
 
 from __future__ import annotations
 
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib import cm
-from matplotlib.axes import Axes
 from matplotlib.colors import Normalize
 from matplotlib.pyplot import colormaps
 from scipy.optimize import curve_fit
 
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 _REQUIRED_FIXED_COLUMNS = ("bare_atom", "bare_atom_substrate")
 _DEFAULT_PRE_EDGE = (270.0, 281.0)
@@ -101,16 +102,20 @@ class NexafsAccessor:
         self._fit_params: dict[str, dict[str, Any]] | None = None
 
     def _validate_schema(self) -> None:
-        missing = [c for c in (_REQUIRED_FIXED_COLUMNS + (self._energy_col,)) if c not in self._obj.columns]
+        missing = [c for c in ((*_REQUIRED_FIXED_COLUMNS, self._energy_col)) if c not in self._obj.columns]
         if missing:
+            msg = f"DataFrame must have columns {list(_REQUIRED_FIXED_COLUMNS)} and '{self._energy_col}'. Missing: {missing}"
             raise ValueError(
-                f"DataFrame must have columns {list(_REQUIRED_FIXED_COLUMNS)} and '{self._energy_col}'. Missing: {missing}"
+                msg
             )
         for col in self._absorbance_cols:
             if col not in self._obj.columns:
-                raise ValueError(
+                msg = (
                     f"Absorbance column '{col}' not in DataFrame. "
                     f"Available: {list(self._obj.columns)}"
+                )
+                raise ValueError(
+                    msg
                 )
 
     def set_regions(
@@ -189,8 +194,9 @@ class NexafsAccessor:
         self._validate_schema()
         norm = self.normalization_region()
         if len(norm) == 0:
+            msg = "Normalization region is empty. Check pre_edge and post_edge."
             raise ValueError(
-                "Normalization region is empty. Check pre_edge and post_edge."
+                msg
             )
         energy = np.asarray(norm[self._energy_col], dtype=np.float64)
         mu = np.asarray(norm["bare_atom"], dtype=np.float64)
@@ -245,7 +251,8 @@ class NexafsAccessor:
                     "shift": popt[1],
                 }
             else:
-                assert mode == "step" and jump is not None
+                assert mode == "step"
+                assert jump is not None
                 model = _model_factory_step(jump)
                 p0_scale = float(np.nanmean(y))
                 if not np.isfinite(p0_scale) or p0_scale <= 0:
@@ -293,7 +300,7 @@ class NexafsAccessor:
         self._validate_schema()
         if ax is None:
             _fig, ax = plt.subplots()
-            ax = cast(Axes, ax)  # type: ignore[assignment]
+            ax = cast("Axes", ax)  # type: ignore[assignment]
         self._obj.plot(
             x=self._energy_col,
             y=self._absorbance_cols,
@@ -312,7 +319,7 @@ class NexafsAccessor:
             color=post_color,
             alpha=alpha,
         )
-        return cast(Axes, ax)  # type: ignore[return-value]
+        return cast("Axes", ax)  # type: ignore[return-value]
 
     def plot_normalization(
         self,
@@ -340,13 +347,13 @@ class NexafsAccessor:
         norm = self.normalization_region()
         if ax is None:
             _fig, ax = plt.subplots()
-            ax = cast(Axes, ax)  # type: ignore[assignment]
+            ax = cast("Axes", ax)  # type: ignore[assignment]
         style = kwargs.pop("style", [".", "."])
         norm.plot(
             x=self._energy_col,
             y=self._absorbance_cols,
             ax=ax,
-            style=style[: len(self._absorbance_cols)] if isinstance(style, (list, tuple)) else style,
+            style=style[: len(self._absorbance_cols)] if isinstance(style, list | tuple) else style,
             **kwargs,
         )
         if show_fit and self._fit_params:
@@ -370,7 +377,7 @@ class NexafsAccessor:
                     label=f"fit {col}",
                 )
             ax.legend()
-        return cast(Axes, ax)  # type: ignore[return-value]
+        return cast("Axes", ax)  # type: ignore[return-value]
 
     def plot(
         self,
@@ -414,20 +421,22 @@ class NexafsAccessor:
         """
         df = self._obj
         if by not in df.columns:
-            raise ValueError(f"Column '{by}' not in DataFrame.")
+            msg = f"Column '{by}' not in DataFrame."
+            raise ValueError(msg)
         y_cols = [y] if isinstance(y, str) else list(y)
-        for c in [x] + y_cols:
+        for c in [x, *y_cols]:
             if c not in df.columns:
-                raise ValueError(f"Column '{c}' not in DataFrame.")
+                msg = f"Column '{c}' not in DataFrame."
+                raise ValueError(msg)
         if ax is None:
             _fig, ax = plt.subplots()
-            ax = cast(Axes, ax)  # type: ignore[assignment]
+            ax = cast("Axes", ax)  # type: ignore[assignment]
         groups = df.groupby(by, sort=True)
         keys = list(groups.groups.keys())
         if len(keys) == 0:
             return ax
         cmap = colormaps[cmap] if cmap is not None else None  # pyright: ignore[reportAssignmentType]
-        all_numeric = all(isinstance(k, (int, float)) for k in keys)
+        all_numeric = all(isinstance(k, int | float) for k in keys)
         if all_numeric:
             vmin_val = float(df[by].min())
             vmax_val = float(df[by].max())
@@ -441,7 +450,7 @@ class NexafsAccessor:
             grp = groups.get_group(key)
             if len(keys) > 1:
                 if all_numeric:
-                    scalar: float = float(key) if isinstance(key, (int, float)) else 0.0
+                    scalar: float = float(key) if isinstance(key, int | float) else 0.0
                 else:
                     scalar = float(keys.index(key))
                 color = cmap(norm_obj(scalar)) # type: ignore[reportCallIssue]
@@ -471,7 +480,7 @@ class NexafsAccessor:
         ax.set_ylim(0, None)
         if len(y_cols) == 1:
             ax.set_ylabel(y_cols[0])
-        return cast(Axes, ax)  # type: ignore[return-value]
+        return cast("Axes", ax)  # type: ignore[return-value]
 
 
 def normalize_by_group(

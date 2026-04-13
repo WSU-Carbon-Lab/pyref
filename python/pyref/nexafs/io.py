@@ -4,13 +4,15 @@ NEXAFS database IO: load sample, nexafs, and izero data; compute bare_atom and a
 
 from __future__ import annotations
 
-from sqlite3 import Connection
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
 from periodictable import xsf
 from pint import UnitRegistry
+
+if TYPE_CHECKING:
+    from sqlite3 import Connection
 
 _UREG = UnitRegistry()
 _NEXAFS_COLS = [
@@ -102,7 +104,8 @@ def load_nexafs(
         cols = _NEXAFS_COLS
     sample = _get_samples(conn, sample_name, tag=tag, version=version)
     if sample.empty:
-        raise ValueError(f"No sample found for name={sample_name!r}, tag={tag!r}, version={version!r}")
+        msg = f"No sample found for name={sample_name!r}, tag={tag!r}, version={version!r}"
+        raise ValueError(msg)
     sample_id = int(sample["id"].iloc[0])
     sample_formula = str(sample["chemical_formula"].iloc[0])
 
@@ -112,7 +115,8 @@ def load_nexafs(
         params=[sample_id],
     )
     if nexafs_df.empty:
-        raise ValueError(f"No nexafs rows for sample_id={sample_id}")
+        msg = f"No nexafs rows for sample_id={sample_id}"
+        raise ValueError(msg)
 
     def _scan_id_or_none(val: Any) -> int | None:
         if val is None:
@@ -190,4 +194,4 @@ def load_nexafs(
     merged["absorbance_0"] = merged["pd_response_0"] / merged["raw_abs"]
     merged["absorbance_1"] = merged["pd_response_1"] / merged["raw_abs"]
 
-    return cast(pd.DataFrame, merged)
+    return cast("pd.DataFrame", merged)

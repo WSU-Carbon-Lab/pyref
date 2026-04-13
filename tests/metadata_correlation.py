@@ -19,7 +19,7 @@ def load_diff_summary(path: Path) -> pd.DataFrame:
 def read_headers(fits_path: Path, keys: list[str]) -> dict[str, Any]:
     """Extract selected header values."""
     with fits.open(fits_path) as hdul:
-        primary = cast(fits.PrimaryHDU, hdul[0])
+        primary = cast("fits.PrimaryHDU", hdul[0])
         hdr = primary.header
         return {key: hdr.get(key) for key in keys}
 

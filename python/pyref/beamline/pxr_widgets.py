@@ -4,34 +4,22 @@ This module provides widgets for generating PXR scan run files for
 ALS beamline 11.0.1.2.
 """
 # Base Packages
-import sys
-import os
-import json
-import re
-import copy
-import inspect
-from pathlib import Path
 
 # Math packages
-import numpy as np
-import pandas as pd
-
 # Visualization Packages
 import ipywidgets as widgets
-from IPython.display import display, clear_output
-import tkinter as tk
-from tkinter import filedialog
+import numpy as np
+import pandas as pd
+from IPython.display import display
 
 from pyref.beamline.base_widgets import (
-    ALS_ScriptGenWidget,
     ALS_ExperimentWidget,
     ALS_MeasurementWidget,
+    ALS_ScriptGenWidget,
     clean_script,
     pad_digits,
 )
-
 from pyref.beamline.beamline_scan_macros import *
-
 
 # Variables that might be adjusted later as needed
 
@@ -75,7 +63,7 @@ class PXR_Scan(ALS_MeasurementWidget):
     def __init__(self, experiment_widget=None, **kwargs):
         parameters = self.DEFAULT_PARAMETERS.copy()
         #constants_titles = self.DEFAULT_CONSTANTS_TITLES.copy()
-        # Update those based on what the kwargs are -- 
+        # Update those based on what the kwargs are --
         parameters.update({k: v for k, v in kwargs.items() if k in parameters})
         super().__init__(constant_motor_title='Measurement Details', experiment_widget=experiment_widget) # Build the initial table
 
@@ -95,7 +83,7 @@ class PXR_Scan(ALS_MeasurementWidget):
                         self,
                         'fixed_'+str(i),
                         [
-                            [widgets.Label(value=key, layout=self.LABEL_SIZE)] + 
+                            [widgets.Label(value=key, layout=self.LABEL_SIZE)] +
                             [widgets.FloatText(value=ii, layout=self.CELL_SIZE) for ii in item]
                         ]
                     )
@@ -130,7 +118,7 @@ class PXR_Scan(ALS_MeasurementWidget):
         )
         self.energy_title = widgets.HTML(value="Photon Energy Scan [eV]")
         self.energy_desc = widgets.HTML(value="<i>Set delta=0 to run single energy</i>")
-        
+
         self.energy_info = widgets.VBox([self.energy_title, self.energy_desc])
         self.theta_end = widgets.FloatText(
             value = parameters['theta_end'],
@@ -141,7 +129,7 @@ class PXR_Scan(ALS_MeasurementWidget):
         # Compile all values that are fixed and apply to the full title
         self.constant_motor_attrs = ['energy_start','energy_stop','energy_delta', 'theta_end']
         self.table = widgets.VBox(self.update_table())
-        
+
         # Create a button to add or remove columns and rows
         self.add_step_button = widgets.Button(description="Add step")
         self.add_step_button.on_click(self.add_step)
@@ -171,7 +159,7 @@ class PXR_Scan(ALS_MeasurementWidget):
         ]
         self.display_table = self.build_display_table()
         #display(self.display_table)
-        
+
     def build_display_table(self):
         build_table = []
         build_table.extend([self.constant_motor_title]) # The title of fixed values
@@ -211,8 +199,8 @@ class PXR_Scan(ALS_MeasurementWidget):
             return 0
         motor_directory = self.get_table(include_title=True)
         for motor in motor_directory:
-            getattr(self,motor)[0].pop()  
-       
+            getattr(self,motor)[0].pop()
+
         # Update the table
         self.table.children = self.update_table()
 
@@ -231,25 +219,24 @@ class PXR_Scan(ALS_MeasurementWidget):
                 [widgets.Dropdown(options=AVAILABLE_PXR_MOTORS, value=AVAILABLE_PXR_MOTORS[0], layout=self.LABEL_SIZE)] +
                 [widgets.FloatText(value=AVAILABLE_PXR_MOTOR_DEFAULTS[AVAILABLE_PXR_MOTORS[0]], layout=self.CELL_SIZE) for i in np.arange(total_steps)]
                 #[widgets.Dropdown(options=AVAILABLE_MOTORS, value=::)]
-            ]            
+            ]
         )
-        temp_motor = getattr(self, "variable_"+str(num_extra_motors+1))
+        getattr(self, "variable_"+str(num_extra_motors+1))
         self.table.children = self.update_table()
 
     def remove_motor(self, b=None):
         num_extra_motors = len([attr for attr in dir(self) if attr.startswith("variable_")])
         for motor in self.get_table():
-            if "variable_" in motor:
-                if str(num_extra_motors) in motor:
-                    delattr(self,motor)
-        
+            if "variable_" in motor and str(num_extra_motors) in motor:
+                delattr(self,motor)
+
         # Update the table layout
         self.table.children = self.update_table()
-        
+
 
 class PXR_Experiment(ALS_ExperimentWidget):
     ALS_NAME = 'exp_'
-    WIDGET = PXR_Scan 
+    WIDGET = PXR_Scan
     DEFAULT_CONSTANTS = {
         'XPosition': 0.0,
         'YPosition': 0.0,
@@ -300,7 +287,7 @@ class PXR_Experiment(ALS_ExperimentWidget):
         # Get default values
         constants = self.DEFAULT_CONSTANTS.copy()
         constants_titles = self.DEFAULT_CONSTANTS_TITLES.copy()
-        # Update those based on what the kwargs are -- 
+        # Update those based on what the kwargs are --
         constants.update({k: v for k, v in kwargs.items() if k in constants})
         constants = clean_for_widgets(constants) # Change the list to a CSV
         # Build the experiment tab
@@ -308,7 +295,7 @@ class PXR_Experiment(ALS_ExperimentWidget):
 
         # Name of Sample Box
         self.name_of_sample = widgets.Text(description="Name of Sample: ", value=constants['name_of_sample'], style=self.MOTOR_OPTIONS_STYLE)
-        
+
         # Initial buttons used to create new measurements (one level down)
         self.add_scan_button = widgets.Button(description="Add new measurement", layout=self.default_button, style=self.BUTTON_STYLE)
         self.duplicate_scan_button = widgets.Button(description="Duplicate measurement", layout=self.default_button, style=self.BUTTON_STYLE)
@@ -317,10 +304,10 @@ class PXR_Experiment(ALS_ExperimentWidget):
         self.add_scan_button.on_click(lambda b: self.add_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
         self.duplicate_scan_button.on_click(lambda b: self.copy_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
         self.delete_scan_button.on_click(lambda b: self.delete_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
-        self.control_buttons.children = tuple([self.add_scan_button, self.duplicate_scan_button, self.delete_scan_button])
+        self.control_buttons.children = (self.add_scan_button, self.duplicate_scan_button, self.delete_scan_button)
 
         accordion_menus = []
-        # Recreate the constant values based on the Accordians that organize things better -- 
+        # Recreate the constant values based on the Accordians that organize things better --
         for key, menu in constants_titles.items():
             menu_display = []
             for attr, value in menu.items():
@@ -395,26 +382,26 @@ class PXR_Experiment(ALS_ExperimentWidget):
                 self.add_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME, **df)
         if len(self.layout.children) == 0:
             self.add_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME)
-            
+
         self.GUI_experiment = widgets.VBox([self.name_of_sample, self.widget_title, self.menu_box, self.control_buttons, self.layout])
-        
-    def update_scan_tab(self, layout, widget_str):   
+
+    def update_scan_tab(self, layout, widget_str):
         widget_list = [getattr(self, attr) for attr in dir(self) if attr.startswith(widget_str)]
         display = []
         titles = []
         for widget in widget_list:
             display.extend([widget.display()])
-            titles.append(f"En: {str(widget.energy_start.value)} [eV]")
+            titles.append(f"En: {widget.energy_start.value!s} [eV]")
             widget.energy_start.observe(self.update_title, names='value')
 
         self.layout.children = display
         for tab in np.arange(len(layout.children)):
-            layout.set_title(tab, titles[tab]) 
+            layout.set_title(tab, titles[tab])
 
     def update_title(self, change):
         index = self.layout.selected_index
         scan = getattr(self, f"{self.WIDGET.ALS_NAME}{pad_digits(index+1)}")
-        self.layout.set_title(index, f"En: {str(scan.energy_start.value)} [eV]")
+        self.layout.set_title(index, f"En: {scan.energy_start.value!s} [eV]")
 
 class PXR_ScriptGen(ALS_ScriptGenWidget):
     EXPERIMENT_NAME = "PXR"
@@ -444,15 +431,13 @@ class PXR_ScriptGen(ALS_ScriptGenWidget):
         self.copy_sample_button.on_click(lambda b: self.copy_tab(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
         self.delete_sample_button.on_click(lambda b: self.delete_tab(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
 
-        self.additional_buttons.children = tuple(
-            [
+        self.additional_buttons.children = (
                 widgets.HBox([self.new_sample_button, self.copy_sample_button, self.delete_sample_button])
-            ]
-        )
+            ,)
 
         self.GenerateExperiment(self.layout, self.WIDGET.ALS_NAME, self.WIDGET, **kwargs)
         display(self.GUI)
-        
+
     def update_experiment_tab(self, layout, widget_str):
         widget_list = [getattr(self, attr) for attr in dir(self) if attr.startswith(widget_str)]
         display = []
@@ -464,30 +449,30 @@ class PXR_ScriptGen(ALS_ScriptGenWidget):
         self.layout.children = display
         for tab in np.arange(len(layout.children)):
             layout.set_title(tab, display_titles[tab])
-    
+
     def update_title(self, change):
         index = self.layout.selected_index
         self.layout.set_title(index, change['owner'].value) # No idea why it is setup this way.
-            
+
     def save_as_df(self):
         df = {}
         # Get the sample dataframe
         df = self.save_as_dict()
-        #Temp thing -- 
+        #Temp thing --
         MACRO_DIR = str(self.save_dir)
 
         # Cycle through the samples and start saving data
-        for i, (index, sample) in enumerate(df.items()):
+        for i, (_index, sample) in enumerate(df.items()):
             MotorPositions = {}
             VariableMotors = {}
-            ScanList = [m for m in sample.keys() if "scan_" in m]
+            ScanList = [m for m in sample if "scan_" in m]
             MotorPositions = {k: v for k, v in sample.items() if k not in ScanList}
             beam_offset_counter = 0
-            
+
             name = self.WIDGET.ALS_NAME+pad_digits(i+1)
             sample_attr = getattr(self, name)
             sample_name = sample_attr.name_of_sample.value
-            
+
             for ii, scan in enumerate(ScanList):
                 dm = sample[scan]
                 exclude_motors = ['theta_end', 'energy_start', 'energy_stop', 'energy_delta']
@@ -523,29 +508,29 @@ class PXR_ScriptGen(ALS_ScriptGenWidget):
                 else:
                     SingleFile = pd.concat([SingleFile, sampdf], ignore_index=True)
             # save the sampdf as a macro file
-            SAVE_SCAN = MACRO_DIR + '/' + sample_name +'_PXR_'+str(i) + '.txt'   
+            SAVE_SCAN = MACRO_DIR + '/' + sample_name +'_PXR_'+str(i) + '.txt'
             # Make sure the positions are correct
             SingleFile = SingleFile[[c for c in SingleFile if c not in ['Exposure']] + ['Exposure']]
             SingleFile.to_csv(SAVE_SCAN, index=False, sep='\t')
             clean_script(SAVE_SCAN) # Remove exposure and clear last line if it exists
-            
-                    
+
+
         RunFile = RunFile[[c for c in RunFile if c not in ['Exposure']] + ['Exposure']]
-        return RunFile 
-        
+        return RunFile
+
     def save_beamline_scan(self, ext='.txt', sep='\t', b=None):
         SAVEDIR = str(self.save_dir)
         SAVENAME = str(self.save_name.value)
-        SAVEPATH = SAVEDIR + '/' + SAVENAME + '.txt'
+        SAVEDIR + '/' + SAVENAME + '.txt'
 
-        df = self.save_as_dict()
+        self.save_as_dict()
         #df.to_csv(SAVEPATH, index=False, sep=sep)
 
-        
+
     def clean_scan_file(self, path):
         # Cleanup the output because the ALS requires specific things
         try:
-            with open(path, 'r') as f:
+            with open(path) as f:
                 lines = f.readlines()
             if not lines: # Empty file
                 return
@@ -563,7 +548,7 @@ class PXR_ScriptGen(ALS_ScriptGenWidget):
         except Exception as e:
             print(f"An error occured: {e}")
         del lines #Remove it from memory (it can be large)
-        
+
 PHOTODIODE_POS = {
     "CCD Y": 100.000,
     "CCD Theta": 0.000,
@@ -576,10 +561,10 @@ XRR_POS = {
     "CCD X": 101.000,
     "Beam Stop": 5.25
 }
-        
+
 class PXR_MacroExperiment(ALS_ExperimentWidget):
     ALS_NAME = 'exp_'
-    WIDGET = PXR_Scan 
+    WIDGET = PXR_Scan
     DEFAULT_CONSTANTS = {
         'XPosition': 0.0,
         'YPosition': 0.0,
@@ -596,7 +581,7 @@ class PXR_MacroExperiment(ALS_ExperimentWidget):
         'PointDensity': [15,6],
         'OverlapPoints': 4,
         'Buffer': 2,
-        'I0Points':10             
+        'I0Points':10
     }
     DEFAULT_CONSTANTS_TITLES = {
         'menu1': {
@@ -623,7 +608,7 @@ class PXR_MacroExperiment(ALS_ExperimentWidget):
         # Get default values
         constants = self.DEFAULT_CONSTANTS.copy()
         constants_titles = self.DEFAULT_CONSTANTS_TITLES.copy()
-        # Update those based on what the kwargs are -- 
+        # Update those based on what the kwargs are --
         constants.update({k: v for k, v in kwargs.items() if k in constants})
         constants = clean_for_widgets(constants) # Change the list to a CSV
         # Build the experiment tab
@@ -631,7 +616,7 @@ class PXR_MacroExperiment(ALS_ExperimentWidget):
 
         # Name of Sample Box
         self.name_of_sample = widgets.Text(description="Name of Sample: ", value="Sample", style=self.MOTOR_OPTIONS_STYLE)
-        
+
         # Initial buttons used to create new measurements (one level down)
         self.add_scan_button = widgets.Button(description="Add new measurement", layout=self.default_button, style=self.BUTTON_STYLE)
         self.duplicate_scan_button = widgets.Button(description="Duplicate measurement", layout=self.default_button, style=self.BUTTON_STYLE)
@@ -640,10 +625,10 @@ class PXR_MacroExperiment(ALS_ExperimentWidget):
         self.add_scan_button.on_click(lambda b: self.add_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
         self.duplicate_scan_button.on_click(lambda b: self.copy_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
         self.delete_scan_button.on_click(lambda b: self.delete_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME))
-        self.control_buttons.children = tuple([self.add_scan_button, self.duplicate_scan_button, self.delete_scan_button])
+        self.control_buttons.children = (self.add_scan_button, self.duplicate_scan_button, self.delete_scan_button)
 
         accordion_menus = []
-        # Recreate the constant values based on the Accordians that organize things better -- 
+        # Recreate the constant values based on the Accordians that organize things better --
         for key, menu in constants_titles.items():
             menu_display = []
             for attr, value in menu.items():
@@ -718,27 +703,27 @@ class PXR_MacroExperiment(ALS_ExperimentWidget):
                 self.add_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME, **df)
         if len(self.layout.children) == 0:
             self.add_scan(self.layout, self.WIDGET, self.WIDGET.ALS_NAME)
-            
+
         self.GUI_experiment = widgets.VBox([self.name_of_sample, self.widget_title, self.menu_box, self.control_buttons, self.layout])
-        
-    def update_scan_tab(self, layout, widget_str):   
+
+    def update_scan_tab(self, layout, widget_str):
         widget_list = [getattr(self, attr) for attr in dir(self) if attr.startswith(widget_str)]
         display = []
         titles = []
         for widget in widget_list:
             display.extend([widget.display()])
-            titles.append(f"En: {str(widget.energy_start.value)} [eV]")
+            titles.append(f"En: {widget.energy_start.value!s} [eV]")
             widget.energy_start.observe(self.update_title, names='value')
 
         self.layout.children = display
         for tab in np.arange(len(layout.children)):
-            layout.set_title(tab, titles[tab]) 
+            layout.set_title(tab, titles[tab])
 
     def update_title(self, change):
         index = self.layout.selected_index
         scan = getattr(self, f"{self.WIDGET.ALS_NAME}{pad_digits(index+1)}")
-        self.layout.set_title(index, f"En: {str(scan.energy_start.value)} [eV]")
-        
+        self.layout.set_title(index, f"En: {scan.energy_start.value!s} [eV]")
+
 class PXR_MacroGen(PXR_ScriptGen):
     WIDGET = PXR_MacroExperiment
 
@@ -746,7 +731,7 @@ class PXR_MacroGen(PXR_ScriptGen):
         super().__init__(self, **kwargs)
         self.GUI.children = () # temporary fix to clear the widget generated by PXR_ScriptGen
         # New banner
-        self.title_banner = widgets.HTML(value=f"<h2>{self.EXPERIMENT_NAME} Macro Generator</h2>") 
+        self.title_banner = widgets.HTML(value=f"<h2>{self.EXPERIMENT_NAME} Macro Generator</h2>")
 
         # Change the button
         self.save_button_beamline = widgets.Button(
@@ -756,35 +741,35 @@ class PXR_MacroGen(PXR_ScriptGen):
             )
         self.save_button_beamline.on_click(self.save_beamline_scan)
         self.save_buttons = widgets.HBox([self.save_button_beamline])
-        self.GUI = widgets.VBox([self.title_banner, self.control_buttons, self.layout, self.json_buttons,self.save_button_beamline], layout=self.default_GUI)      
+        self.GUI = widgets.VBox([self.title_banner, self.control_buttons, self.layout, self.json_buttons,self.save_button_beamline], layout=self.default_GUI)
         display(self.GUI)
 
         # Everything is the same -- just save as a macro instead
-    
+
     def save_beamline_scan(self, ext='.txt', sep='\t', b=None):
         SAVEDIR = str(self.save_dir)
         SAVENAME = str(self.save_name.value)
-        SAVEPATH = SAVEDIR + '/' + SAVENAME + '.txt'
-        
+        SAVEDIR + '/' + SAVENAME + '.txt'
+
         df = self.save_as_dict()
         macro_details = self._build_individual_scan_files(df)
-        
-                
+
+
         macro = begin_macro(SAVENAME) # list of commands that will become the spiral scan
-        # Move the sample plate into the 'zero' position to begin alignment -- 
+        # Move the sample plate into the 'zero' position to begin alignment --
         macro += [move_motor('Sample Theta', 0.0, 0.1)]
         macro += [move_motor('Sample Z', 0, 0.1)]
-        
-        # Run add an I0 here --- 
-        
+
+        # Run add an I0 here ---
+
         # Begin samples
         for sample in macro_details:
             name = sample['name']
             posx = sample['posx']
             posy = sample['posy']
-            path = sample['path']
-            
-            # Each sample -- 
+            sample['path']
+
+            # Each sample --
             macro += [add_comment(f"Begin Sample: {name}")]
             macro += [clear_instruments]
             macro.extend(run_dict_trajectory(PHOTODIODE_POS))
@@ -797,36 +782,36 @@ class PXR_MacroGen(PXR_ScriptGen):
             # macro += [analog_from_file(name, path)]
         macro += [clear_instruments]
         macro.extend(run_dict_trajectory(PHOTODIODE_POS))
-        macro += [add_prompt(f"Finished Macro")]
+        macro += [add_prompt("Finished Macro")]
         build_macro(SAVENAME, SAVEDIR, macro)
-    
-    
+
+
     def _build_individual_scan_files(self, df):
-        # Initialize the macro construction        
+        # Initialize the macro construction
         all_sample_scripts = [] # Contains lists associated with each detector position
-        
+
         MACRO_DIR = str(self.save_dir)
-    
+
         # Cycle through samples and start saving data
-        for i, (index, sample) in enumerate(df.items()):
+        for i, (_index, sample) in enumerate(df.items()):
             # Get the name of the sample as chosen by user
             name = self.WIDGET.ALS_NAME+pad_digits(i+1)
             sample_attr = getattr(self, name)
             sample_name = sample_attr.name_of_sample.value
-            
+
             # Get Motor positions for XRR
             MotorPositions = {}
             VariableMotors = {}
-            ScanList = [m for m in sample.keys() if "scan_" in m]
+            ScanList = [m for m in sample if "scan_" in m]
             MotorPositions = {k: v for k, v in sample.items() if k not in ScanList}
             beam_offset_counter = 0
-            
+
             # Update Motor Positions that will be overwritten by macro generation
             MotorPositions['ZPosition'] = 0.00
             MotorPositions['ZFlipPosition'] = 3.1435
             MotorPositions['DirectBeam'] = -2.00
             MotorPositions['ThetaOffset'] = 0.00
-            
+
             for ii, scan in enumerate(ScanList):
                 dm = sample[scan]
                 exclude_motors = ['theta_end', 'energy_start', 'energy_stop', 'energy_delta']
@@ -848,18 +833,18 @@ class PXR_MacroGen(PXR_ScriptGen):
                 round_this_motor = ['Sample X', 'Sample Y', 'Sample Z', 'Sample Theta', 'CCD Theta']
                 for motor in round_this_motor:
                     sampdf[motor] = sampdf[motor].round(4)
-                    
+
                 # Initialize RunFile
                 if ii == 0:
                     RunFile = sampdf
                 else:
                     RunFile = pd.concat([RunFile, sampdf], ignore_index=True)
-                   
+
             # save the sampdf as a macro file
-            SAVE_SCAN = MACRO_DIR + '/' + sample_name +'_PXR_'+str(i) + '.txt'   
+            SAVE_SCAN = MACRO_DIR + '/' + sample_name +'_PXR_'+str(i) + '.txt'
             # Make sure the positions are correct
             RunFile = RunFile[[c for c in RunFile if c not in ['Exposure']] + ['Exposure']]
-            
+
             RunFile.to_csv(SAVE_SCAN, index=False, sep='\t')
             clean_script(SAVE_SCAN) # Remove exposure and clear last line if it exists
             # Save all details required for the macro
@@ -868,9 +853,9 @@ class PXR_MacroGen(PXR_ScriptGen):
             macro_stats['posx'] = RunFile['Sample X'].iloc[0]
             macro_stats['posy'] = RunFile['Sample Y'].iloc[0]
             macro_stats['path'] = SAVE_SCAN
-            
+
             all_sample_scripts.append(macro_stats) # Save path for macro generation
-            
+
         return all_sample_scripts
 
 def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
@@ -942,7 +927,7 @@ def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
 
             # Generate all other motors based on the input Variable motors
             Variable_Motor_dict = {}
-            for key, value in VariableMotors.items(): # Cycle through the Variable Motor dictionary
+            for key, _value in VariableMotors.items(): # Cycle through the Variable Motor dictionary
                 if 'Theta' not in key:
                     Variable_Motor_dict[key] = []
                     Variable_Motor_dict[key].extend([VariableMotors[key][i]]*len(QList))
@@ -958,7 +943,7 @@ def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
             # All Variable Motors
             #for motor in Variable_Motor_dict:
             #    Variable_Motor_dict[motor].insert(0, Variable_Motor_dict[motor][0])
-                
+
             # Adding Additional points at the start to assess error in beam intensity
             for d in range(int(MotorPositions['I0Points'])):
                 QList.insert(0,0)
@@ -972,7 +957,7 @@ def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
                 # All Variable Motors
                 for motor in Variable_Motor_dict:
                     Variable_Motor_dict[motor].insert(0, Variable_Motor_dict[motor][0])
-        
+
         else: # for all of the ranges after the first set of samples
             ##Section is identical to the above
             AngleStart = AngleChange[i] # All of the relevant values are in terms of angles, but Q is calculated as a check
@@ -1011,21 +996,21 @@ def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
 
             SampleXAddition=[XPosition]*len(QListAddition)
             BeamLineEnergyAddition=[Energy]*len(QListAddition)
-            
+
             SampleYAddition=YPosition+Zdelta/2+Zdelta/2*np.sin(np.radians(SampleThetaAdditionArray))
-            SampleZAddition=ZPosition+Zdelta/2*(np.cos(np.radians(SampleThetaAdditionArray))-1) 
+            SampleZAddition=ZPosition+Zdelta/2*(np.cos(np.radians(SampleThetaAdditionArray))-1)
             SampleYAddition=SampleYAddition.tolist()
             SampleZAddition=SampleZAddition.tolist()
 
             # Generate all other motors based on the input Variable motors
             Variable_Motor_dict_Addition = {}
-            for key, value in VariableMotors.items(): # Cycle through the Variable Motor dictionary
+            for key, _value in VariableMotors.items(): # Cycle through the Variable Motor dictionary
                 if 'Theta' not in key:
                     Variable_Motor_dict_Addition[key] = []
                     Variable_Motor_dict_Addition[key].extend([VariableMotors[key][i]]*len(QListAddition))
-                    
+
             #Check to see if any of the variable motors have moved to add buffer points
-            for key, value in VariableMotors.items():
+            for key, _value in VariableMotors.items():
                 if 'Theta' not in key:
                     if VariableMotors[key][i] != VariableMotors[key][i-1]:
                         for d in range(int(MotorPositions['Buffer'])):
@@ -1038,7 +1023,7 @@ def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
                             BeamLineEnergyAddition.insert(0,BeamLineEnergyAddition[d])
                             for motor in Variable_Motor_dict_Addition:
                                 Variable_Motor_dict_Addition[motor].insert(0, Variable_Motor_dict_Addition[motor][d])
-            
+
             QList.extend(QListAddition)
             SampleTheta.extend(SampleThetaAddition)
             CCDTheta.extend(CCDThetaAddition)
@@ -1046,9 +1031,9 @@ def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
             SampleY.extend(SampleYAddition)
             SampleZ.extend(SampleZAddition)
             BeamLineEnergy.extend(BeamLineEnergyAddition)
-            for motor, addition in zip(Variable_Motor_dict.keys(), Variable_Motor_dict_Addition.keys()):
+            for motor, addition in zip(Variable_Motor_dict.keys(), Variable_Motor_dict_Addition.keys(), strict=False):
                 Variable_Motor_dict[motor].extend(Variable_Motor_dict_Addition[addition])
-        
+
         #Check what side the sample is on. If on the bottom, sample theta starts @ -180
     if MotorPositions['ReverseHolder'] == 1:
         SampleTheta=[theta-180 for theta in SampleTheta] # for samples on the backside of the holder, need to check and see if this is correct
@@ -1062,12 +1047,12 @@ def AngleRunGenerator_v2(MotorPositions, VariableMotors, Energy, theta_end):
     sampdf['Beamline Energy'] = BeamLineEnergy
     for key, item in Variable_Motor_dict.items():
         sampdf[key] = item
-   
+
     return sampdf#(SampleX, SampleY, SampleZ, SampleTheta, CCDTheta, HOSList, HESList, BeamLineEnergy, ExposureList, QList)
 
 
-    
-    
+
+
 
 
 
@@ -1081,13 +1066,13 @@ def locate_point_density(angle, crossover_list, density_list):
         if int(crossover_list[i]) <= angle <= int(crossover_list[i+1]):
             return int(density_list[i])
     return int(density_list[-1])
-    
+
 def update_dict(old_dict, new_dict):
-    for key in old_dict.keys():
+    for key in old_dict:
         if key in new_dict:
             old_dict[key] = new_dict[key]
     return old_dict
-    
+
 def clean_for_widgets(my_dict):
     for key, value in my_dict.items():
         if isinstance(value, list):

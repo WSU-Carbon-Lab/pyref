@@ -129,7 +129,7 @@ fn write_synthetic_fits(
 
 fn build_primary_header_block(scan_idx: usize, frame_idx: usize) -> Vec<u8> {
     let cards: Vec<String> = vec![
-        card_fixed_int("SIMPLE", 1),
+        card_fixed_logical("SIMPLE", true),
         card_fixed_int("BITPIX", 16),
         card_fixed_int("NAXIS", 0),
         card_quoted_string("DATE", "2024-02-02T00:00:00"),
@@ -167,6 +167,15 @@ fn build_pixel_data_block(width: u32, height: u32, scan_idx: usize, frame_idx: u
     }
     pad_to_block_boundary(&mut buf);
     buf
+}
+
+fn card_fixed_logical(keyword: &str, value: bool) -> String {
+    let flag = if value { "T" } else { "F" };
+    if keyword.len() <= 8 {
+        format!("{key:<8}= {val:>20}", key = keyword, val = flag)
+    } else {
+        format!("{key}= {val}", key = keyword, val = flag)
+    }
 }
 
 fn card_fixed_int(keyword: &str, value: i64) -> String {

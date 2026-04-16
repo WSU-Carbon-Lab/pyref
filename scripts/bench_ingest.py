@@ -38,14 +38,14 @@ SYNTHETIC_SAMPLE_NAME = "synth"
 BZERO_UNSIGNED_I16 = 32_768
 
 
-def _build_primary_header() -> fits.Header:
+def _build_primary_header(scan_idx: int, frame_idx: int) -> fits.Header:
     hdr = fits.Header()
     hdr["SIMPLE"] = True
     hdr["BITPIX"] = 16
     hdr["NAXIS"] = 0
     hdr["DATE"] = "2024-02-02T00:00:00"
-    hdr["Beamline Energy"] = 250.0
-    hdr["Sample Theta"] = 1.0
+    hdr["Beamline Energy"] = 250.0 + float(scan_idx)
+    hdr["Sample Theta"] = 1.0 + float(frame_idx) * 0.01
     hdr["CCD Theta"] = 2.0
     hdr["EPU Polarization"] = 1.0
     hdr["Higher Order Suppressor"] = 0.0
@@ -73,7 +73,7 @@ def _write_synthetic_fits(
     scan_idx: int,
     frame_idx: int,
 ) -> None:
-    primary = fits.PrimaryHDU(header=_build_primary_header())
+    primary = fits.PrimaryHDU(header=_build_primary_header(scan_idx, frame_idx))
     image = _build_image_hdu(width, height, scan_idx, frame_idx)
     hdul = fits.HDUList([primary, image])
     hdul.writeto(path, overwrite=True)

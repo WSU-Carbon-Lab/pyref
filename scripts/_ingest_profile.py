@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Iterator, Mapping
 
 
 def format_seconds(seconds: float) -> str:
@@ -188,7 +188,11 @@ def run_ingest_with_profile(
 
 
 @contextmanager
-def isolated_catalog_env(*, enabled: bool = True, prefix: str = "pyref-bench-"):
+def isolated_catalog_env(
+    *,
+    enabled: bool = True,
+    prefix: str = "pyref-bench-",
+) -> Iterator[Path | None]:
     """Temporarily redirect PYREF_CATALOG_DB and PYREF_CACHE_ROOT into a tempdir.
 
     Parameters

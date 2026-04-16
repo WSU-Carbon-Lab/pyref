@@ -35,7 +35,8 @@ use crate::schema::{beamtimes, file_tags, files, frames, samples, scans, tags};
 
 use super::discover_paths_for_catalog_ingest;
 use super::ingest_progress::{
-    layout_and_groups_from_paths, BeamtimeIngestLayout, IngestProgress, IngestProgressSink,
+    layout_and_groups_from_paths, BeamtimeIngestLayout, IngestPhase, IngestProgress,
+    IngestProgressSink,
 };
 use super::layout::BeamtimeLayout;
 use super::parallelism::IngestParallelism;
@@ -326,7 +327,7 @@ fn ingest_beamtime_inner(
                 .collect(),
         });
         sink.emit(IngestProgress::Phase {
-            name: "headers".into(),
+            phase: IngestPhase::Headers,
         });
     }
 
@@ -359,7 +360,7 @@ fn ingest_beamtime_inner(
 
     if let Some(ref sink) = progress {
         sink.emit(IngestProgress::Phase {
-            name: "catalog".into(),
+            phase: IngestPhase::Catalog,
         });
     }
 
@@ -586,7 +587,7 @@ fn ingest_beamtime_inner(
 
     if let Some(ref sink) = progress {
         sink.emit(IngestProgress::Phase {
-            name: "zarr".into(),
+            phase: IngestPhase::Zarr,
         });
     }
 

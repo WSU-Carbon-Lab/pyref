@@ -369,9 +369,9 @@ mod extension {
                 }
                 d.set_item("scans", list)?;
             }
-            IngestProgress::Phase { name } => {
+            IngestProgress::Phase { phase } => {
                 d.set_item("event", "phase")?;
-                d.set_item("phase", name.as_str())?;
+                d.set_item("phase", phase.as_str())?;
             }
             IngestProgress::CatalogRow {
                 scan_number,

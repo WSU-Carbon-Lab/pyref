@@ -33,7 +33,7 @@ pub use ingest::{
 #[cfg(feature = "parallel_ingest")]
 pub use ingest::{ingest_beamtime_pipelined, ingest_beamtime_pipelined_with_context};
 pub use ingest_progress::{
-    BeamtimeIngestLayout, IngestProgress, IngestProgressSink, ScanFileCount,
+    BeamtimeIngestLayout, IngestPhase, IngestProgress, IngestProgressSink, ScanFileCount,
 };
 pub use layout::{detect_beamtime_layout, discover_fits_for_layout, BeamtimeLayout};
 pub use parallelism::IngestParallelism;

@@ -197,6 +197,7 @@ def test_ingest_beamtime_progress_callback(minimal_fits_dir: Path | None) -> Non
     kinds = {e["event"] for e in events}
     assert "layout" in kinds
     assert "phase" in kinds
+    assert "catalog_row" in kinds
     assert "file_complete" in kinds
 
 

@@ -274,14 +274,15 @@ def ingest_beamtime(
         - ``event == "layout"``: ``total_files``, ``scans`` (each with ``scan_number``,
           ``files``).
         - ``event == "phase"``: ``phase`` is ``headers``, ``catalog``, or ``zarr``.
+        - ``event == "catalog_row"``: after each file's rows are inserted into SQLite;
+          same counter fields as ``file_complete`` (``scan_*``, ``global_*``).
         - ``event == "file_complete"``: after each zarr write; includes ``scan_number``,
           ``scan_done``, ``scan_total``, ``global_done``, ``global_total``.
 
-        For Rich ``Progress``: ``add_task`` for the main ingest total and one task per
-        ``scan_number`` from ``layout``; on ``file_complete`` call ``update`` with
-        ``advance=1`` on the matching tasks. Handle ``phase`` events so the UI stays
-        active during long ``headers`` or ``catalog`` work before ``file_complete``
-        events begin.
+        For Rich ``Progress``: size each task for ``2 * file_count`` (one step per
+        ``catalog_row``, one per ``file_complete``) and call ``update(...,
+        advance=1)`` for both event types. Handle ``phase`` events so the description
+        updates during long ``headers`` work before ``catalog_row`` events begin.
 
     Returns
     -------

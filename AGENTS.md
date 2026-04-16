@@ -492,9 +492,13 @@ This workspace extends Rust with **PyO3 / Maturin** extension expectations.
 - When the user supplies an authoritative **staged file list** for a commit, stage or commit **only** those paths and do not broaden `git add` unless they explicitly change the instruction.
 - For pull requests, default to the **parent integration branch** named in the thread rather than opening against `main` when the user specifies a non-main target.
 - For notebook-first catalog workflows, keep setup and queries in **Jupyter** with minimal required steps outside the notebook when that is the stated goal.
+- Keep **macOS Finder artifacts** such as **`**/.DS_Store`** out of git via `.gitignore` rather than tracking or committing them.
 
 ## Learned Workspace Facts
 
 - Python ingest progress integrates **`beamtime_ingest_layout`** (total FITS count and per-scan file counts) with **`ingest_beamtime(..., progress_callback=...)`** emitting event dicts (`layout`, `phase`, `file_complete`); pair this with Rich or tqdm-style handlers.
 - Keep **`.cursor/hooks/state/`** out of git: add it to **`.gitignore`** so hook state and the continual-learning index stay local.
 - Ingestion and zarr writes from **network-mounted beamtime roots** can be far slower than from a **local replica**; validate progress UX against a local tree when iterating.
+- **Rust + PyO3:** Use a default feature set (for example **`bindings`**) that links **`libpython`** for **`cargo test`**; Maturin wheel builds use a separate **`extension-module`** feature that enables **`pyo3/extension-module`**. Putting **`extension-module`** in the default test feature set can produce undefined Python symbols (for example `_Py_DecRef`, `Py_IsInitialized`) on Linux CI linkers.
+- **`read_beamtime(..., ingest=True)`** runs ingest against the **default global catalog path** from the Rust layer; an explicit **`catalog_path`** mainly selects which database is **read** for the returned view, so keep it consistent with ingest output and env overrides.
+- **Ruff** may exclude **`python/pyref/beamline`**, **`notebooks`**, and **`tests`** per `pyproject.toml`; treat those paths as out of scope for Ruff unless configuration changes.

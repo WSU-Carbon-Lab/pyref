@@ -79,11 +79,14 @@ def _ingest_beamtime_rich(
         scan_tasks: dict[int, int] = {}
         for s in scans:
             sn = int(s["scan_number"])
+            nfiles = int(s["files"])
             scan_tasks[sn] = progress.add_task(
                 f"[green]scan {sn}[/green]",
-                total=int(s["files"]),
+                total=nfiles * 2,
             )
-        main_id = progress.add_task("[bold cyan]ingest[/bold cyan]", total=total_files)
+        main_id = progress.add_task(
+            "[bold cyan]ingest[/bold cyan]", total=total_files * 2
+        )
 
         def on_progress(d: Mapping[str, Any]) -> None:
             ev = d.get("event")
@@ -93,6 +96,13 @@ def _ingest_beamtime_rich(
                     main_id,
                     description=(f"[bold cyan]ingest[/bold cyan] [dim]({phase})[/dim]"),
                 )
+                return
+            if ev == "catalog_row":
+                progress.update(main_id, advance=1)
+                sn = int(d["scan_number"])
+                tid = scan_tasks.get(sn)
+                if tid is not None:
+                    progress.update(tid, advance=1)
                 return
             if ev != "file_complete":
                 return
@@ -342,8 +352,9 @@ def read_beamtime(
         When ``ingest`` is True and ``progress_callback`` is omitted, show a Rich
         :class:`rich.progress.Progress` display with one task per scan and a main
         ``ingest`` task (``transient=True`` so the display clears when ingest
-        finishes). The main task description updates during ``headers`` / ``catalog`` /
-        ``zarr`` phases so progress is visible before per-file ``file_complete`` events.
+        finishes). Task totals are ``2 * file_count`` so bars advance on each
+        ``catalog_row`` and each ``file_complete`` (zarr) event. The main task
+        description updates during ``headers`` / ``catalog`` / ``zarr`` phases.
         Ignored when ``ingest`` is False or when ``progress_callback`` is given.
     progress_callback : callable, optional
         When ``ingest`` is True, passed to :func:`pyref.io.readers.ingest_beamtime` and

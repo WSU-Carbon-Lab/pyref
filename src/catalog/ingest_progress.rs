@@ -38,6 +38,16 @@ pub enum IngestProgress {
     /// Optional coarse phase label for hosts that refresh banners (``headers``, ``catalog``,
     /// ``zarr``).
     Phase { name: String },
+    /// Emitted after each file's catalog rows (samples, files, frames) are inserted; mirrors
+    /// [`IngestProgress::FileComplete`] counters so UIs can advance progress during the SQLite
+    /// transaction, not only during zarr writes.
+    CatalogRow {
+        scan_number: i32,
+        scan_done: u32,
+        scan_total: u32,
+        global_done: u32,
+        global_total: u32,
+    },
     /// Emitted after a frame's pixels are written to zarr; use for nested per-scan bars and a
     /// global ``fully processed`` counter.
     FileComplete {
@@ -86,15 +96,18 @@ impl IngestProgressSink {
                 let _ = tx.send((0, *total_files));
             }
         }
+        if let IngestProgress::CatalogRow {
+            global_done,
+            global_total,
+            ..
+        } = &ev
+        {
+            if let Some(tx) = &self.legacy {
+                let _ = tx.send((*global_done, *global_total));
+            }
+        }
         if let Some(cb) = &self.on_event {
             cb(ev);
-        }
-    }
-
-    /// Legacy ``(current, total)`` updates during the catalog insert loop (TUI progress bar).
-    pub fn legacy_catalog_row(&self, current: u32, total: u32) {
-        if let Some(tx) = &self.legacy {
-            let _ = tx.send((current, total));
         }
     }
 }

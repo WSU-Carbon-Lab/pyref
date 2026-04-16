@@ -317,6 +317,12 @@ fn ingest_beamtime_inner(
         ))
     });
 
+    let scan_total_map: HashMap<i32, u32> = layout_summary
+        .scans
+        .iter()
+        .map(|s| (s.scan_number, s.file_count as u32))
+        .collect();
+
     if let Some(ref sink) = progress {
         sink.emit(IngestProgress::Phase {
             name: "catalog".into(),
@@ -342,6 +348,7 @@ fn ingest_beamtime_inner(
         .collect();
 
     conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        let mut catalog_scan_done: HashMap<i32, u32> = HashMap::new();
         for name in &unique_samples {
             diesel::insert_into(samples::table)
                 .values((
@@ -518,7 +525,18 @@ fn ingest_beamtime_inner(
                 .execute(conn)?;
 
             if let Some(ref sink) = progress {
-                sink.legacy_catalog_row((idx + 1) as u32, rows.len() as u32);
+                let sn = row.scan_number as i32;
+                let e = catalog_scan_done.entry(sn).or_insert(0);
+                *e += 1;
+                let sd = *e;
+                let st = scan_total_map.get(&sn).copied().unwrap_or(0);
+                sink.emit(IngestProgress::CatalogRow {
+                    scan_number: sn,
+                    scan_done: sd,
+                    scan_total: st,
+                    global_done: (idx + 1) as u32,
+                    global_total: rows.len() as u32,
+                });
             }
         }
         Ok(())
@@ -531,11 +549,6 @@ fn ingest_beamtime_inner(
         });
     }
 
-    let scan_total_map: HashMap<i32, u32> = layout_summary
-        .scans
-        .iter()
-        .map(|s| (s.scan_number, s.file_count as u32))
-        .collect();
     let mut by_scan: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (i, r) in rows.iter().enumerate() {
         by_scan.entry(r.scan_number as i32).or_default().push(i);

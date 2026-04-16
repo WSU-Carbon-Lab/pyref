@@ -373,6 +373,20 @@ mod extension {
                 d.set_item("event", "phase")?;
                 d.set_item("phase", name.as_str())?;
             }
+            IngestProgress::CatalogRow {
+                scan_number,
+                scan_done,
+                scan_total,
+                global_done,
+                global_total,
+            } => {
+                d.set_item("event", "catalog_row")?;
+                d.set_item("scan_number", *scan_number)?;
+                d.set_item("scan_done", *scan_done)?;
+                d.set_item("scan_total", *scan_total)?;
+                d.set_item("global_done", *global_done)?;
+                d.set_item("global_total", *global_total)?;
+            }
             IngestProgress::FileComplete {
                 scan_number,
                 scan_done,

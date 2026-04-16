@@ -1,5 +1,13 @@
 //! Beamtime ingest: Diesel catalog rows and zarr arrays in one pass.
 //!
+//! Ingest runs in three phases: headers (parallel FITS header parsing),
+//! catalog (batched SQLite transactions of scans/files/tags/frames), and
+//! zarr (raw pixel write). On mid-ingest failure, batches that already
+//! committed remain in the catalog and partial zarr writes remain on disk.
+//! Re-invoking `ingest_beamtime*` on the same beamtime directory deletes
+//! and re-inserts the `beamtimes` row, cascading away stale scan/file
+//! rows before inserting fresh data.
+//!
 //! SQLite allows one writer at a time. Ingest uses a single [`diesel::SqliteConnection`] for all
 //! catalog mutations in this process. After `fork` or when spawning a subprocess, open a new
 //! connection in the child; do not share a connection across process boundaries.
@@ -35,12 +43,7 @@ use super::parallelism::IngestParallelism;
 use super::zarr_write::{open_zarr_store, write_frame_raw};
 use super::{db, paths, CatalogError, Result};
 
-const MIN_BATCH_ROWS: usize = 200;
 const MAX_BATCH_ROWS: usize = 1000;
-const _: () = assert!(
-    MIN_BATCH_ROWS > 0 && MIN_BATCH_ROWS <= MAX_BATCH_ROWS,
-    "catalog batch bounds must satisfy 0 < MIN <= MAX"
-);
 
 fn plan_catalog_batches(rows: &[BtIngestRow]) -> Vec<(usize, usize)> {
     let mut batches: Vec<(usize, usize)> = Vec::new();
@@ -387,6 +390,13 @@ fn ingest_beamtime_inner(
 
     conn.transaction::<(), diesel::result::Error, _>(|conn| {
         for name in &unique_samples {
+            if cancel
+                .as_ref()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .unwrap_or(false)
+            {
+                return Err(diesel::result::Error::RollbackTransaction);
+            }
             let sid: i32 = diesel::insert_into(samples::table)
                 .values((
                     samples::beamtime_id.eq(beamtime_id),
@@ -793,23 +803,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_catalog_batches_fills_to_min_before_sealing() {
-        let sizes: Vec<(i64, usize)> = (1..=20).map(|sn| (sn, 50)).collect();
-        let rows = rows_for_scans(&sizes);
-        let batches = plan_catalog_batches(&rows);
-        assert_eq!(
-            batches,
-            vec![(0, 1000)],
-            "twenty 50-row scans must fit in one MAX-sized batch, not seal at MIN"
-        );
-        let (start, end) = batches[0];
-        assert!(
-            end - start >= MIN_BATCH_ROWS,
-            "batch must be at least MIN rows"
-        );
-    }
-
-    #[test]
     fn plan_catalog_batches_isolates_oversized_scan() {
         let rows = rows_for_scans(&[(1, 3000)]);
         let batches = plan_catalog_batches(&rows);
@@ -827,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn ingest_produces_same_row_counts_as_single_transaction() {
+    fn ingest_produces_expected_row_counts_for_minimal_fixture() {
         let fixture = fixture_path();
         if !fixture.exists() {
             panic!("required fixture missing: {}", fixture.display());

@@ -81,6 +81,25 @@ pub enum CatalogError {
     FitsReadFailed(#[from] crate::errors::FitsError),
 }
 
+/// Flattens a [`crate::errors::FitsError`] into the appropriate [`CatalogError`] variant.
+///
+/// Preserves the `Io` vs `Validation` distinction at the catalog layer rather than
+/// folding every failure into [`CatalogError::FitsReadFailed`]: I/O failures carrying
+/// a concrete [`std::io::Error`] source come back as [`CatalogError::Io`], everything
+/// else becomes [`CatalogError::Validation`] with the `FitsError`'s message. This
+/// matches the hand-rolled mapping that ingest used before the bulk pixel reader was
+/// unified behind `crate::io::raw_pixels`.
+pub(crate) fn flatten_fits_error(err: crate::errors::FitsError) -> CatalogError {
+    use crate::errors::FitsErrorKind;
+    match err.kind {
+        FitsErrorKind::Io => match err.source.and_then(|s| s.downcast::<std::io::Error>().ok()) {
+            Some(io_err) => CatalogError::Io(*io_err),
+            None => CatalogError::Validation(err.message),
+        },
+        _ => CatalogError::Validation(err.message),
+    }
+}
+
 impl CatalogError {
     pub fn retryable(&self) -> bool {
         match self {
@@ -200,5 +219,33 @@ mod tests {
         assert!(is_skippable_stem(""));
         assert!(is_skippable_stem("_skip"));
         assert!(!is_skippable_stem("sample"));
+    }
+
+    #[test]
+    fn flatten_fits_error_io_with_source_maps_to_catalog_io() {
+        use crate::errors::FitsError;
+        use std::io::{Error as IoError, ErrorKind};
+
+        let err = FitsError::io(
+            "raw_pixels read",
+            IoError::new(ErrorKind::UnexpectedEof, "test"),
+        );
+        match flatten_fits_error(err) {
+            CatalogError::Io(io_err) => {
+                assert_eq!(io_err.kind(), ErrorKind::UnexpectedEof);
+            }
+            other => panic!("expected CatalogError::Io, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_fits_error_validation_maps_to_catalog_validation() {
+        use crate::errors::FitsError;
+
+        let err = FitsError::validation("x");
+        match flatten_fits_error(err) {
+            CatalogError::Validation(msg) => assert_eq!(msg, "x"),
+            other => panic!("expected CatalogError::Validation, got {other:?}"),
+        }
     }
 }

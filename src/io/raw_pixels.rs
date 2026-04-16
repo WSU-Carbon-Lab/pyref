@@ -49,6 +49,16 @@ fn mmap_enabled() -> bool {
 }
 
 fn read_via_mmap(file: &File, offset: u64, nbytes: usize) -> Result<Vec<u8>, FitsError> {
+    // SAFETY: `file` was opened read-only by the caller (`read_bitpix16_be_bytes`)
+    // and is kept alive for the duration of this call. We immediately copy the
+    // mapped bytes into an owned `Vec<u8>` via `to_vec()` and let the `Mmap`
+    // drop at end of scope; no reference into the mapping ever escapes this
+    // function. Concurrent truncation or in-place mutation of the underlying
+    // FITS file during ingest is unsupported and is the caller's responsibility
+    // to prevent (ingest assumes the beamtime tree is quiescent). On NAS mounts
+    // or other environments where that invariant cannot be guaranteed, set
+    // `PYREF_DISABLE_MMAP=1` to force the `seek` + `read_exact` fallback (see
+    // module docstring).
     let mmap = unsafe {
         MmapOptions::new()
             .offset(offset)
@@ -56,9 +66,7 @@ fn read_via_mmap(file: &File, offset: u64, nbytes: usize) -> Result<Vec<u8>, Fit
             .map(file)
             .map_err(|e| FitsError::io("raw_pixels mmap", e))?
     };
-    let buf = mmap.to_vec();
-    drop(mmap);
-    Ok(buf)
+    Ok(mmap.to_vec())
 }
 
 fn read_via_seek(mut file: File, offset: u64, nbytes: usize) -> Result<Vec<u8>, FitsError> {

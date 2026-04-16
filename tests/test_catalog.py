@@ -197,6 +197,11 @@ def test_ingest_beamtime_progress_callback(minimal_fits_dir: Path | None) -> Non
     kinds = {e["event"] for e in events}
     assert "layout" in kinds
     assert "phase" in kinds
+    phase_events = [e for e in events if e.get("event") == "phase"]
+    assert phase_events, "expected at least one phase event"
+    valid_phase_labels = {"headers", "catalog", "zarr"}
+    for e in phase_events:
+        assert e["phase"] in valid_phase_labels, f"unknown phase label: {e!r}"
     assert "catalog_row" in kinds
     assert "file_complete" in kinds
 

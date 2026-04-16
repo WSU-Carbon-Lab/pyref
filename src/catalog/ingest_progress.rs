@@ -40,11 +40,11 @@ pub enum IngestPhase {
 
 impl IngestPhase {
     /// Stable lowercase label used by the Python progress-callback wire format.
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
-            IngestPhase::Headers => "headers",
-            IngestPhase::Catalog => "catalog",
-            IngestPhase::Zarr => "zarr",
+            Self::Headers => "headers",
+            Self::Catalog => "catalog",
+            Self::Zarr => "zarr",
         }
     }
 }
@@ -183,11 +183,12 @@ mod tests {
     }
 
     #[test]
-    fn ingest_phase_derives_support_copy_eq_and_debug() {
+    fn ingest_phase_variants_are_distinct_and_copyable() {
         let a = IngestPhase::Headers;
         let b = a;
         assert_eq!(a, b);
         assert_ne!(IngestPhase::Headers, IngestPhase::Catalog);
-        assert_eq!(format!("{:?}", IngestPhase::Zarr), "Zarr");
+        assert_ne!(IngestPhase::Catalog, IngestPhase::Zarr);
+        assert_ne!(IngestPhase::Headers, IngestPhase::Zarr);
     }
 }

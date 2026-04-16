@@ -72,12 +72,12 @@ fn read_image_i32(row: &BtIngestRow) -> Result<Array2<i32>> {
     f.seek(SeekFrom::Start(row.data_offset as u64))
         .map_err(CatalogError::Io)?;
     let n = (row.naxis1 * row.naxis2) as usize;
-    let mut out = Vec::with_capacity(n);
-    let mut b = [0u8; 2];
-    for _ in 0..n {
-        f.read_exact(&mut b).map_err(CatalogError::Io)?;
-        out.push(i16::from_be_bytes(b) as i32);
-    }
+    let mut buf = vec![0u8; n * 2];
+    f.read_exact(&mut buf).map_err(CatalogError::Io)?;
+    let out: Vec<i32> = buf
+        .chunks_exact(2)
+        .map(|c| i16::from_be_bytes([c[0], c[1]]) as i32)
+        .collect();
     Array2::from_shape_vec((row.naxis2 as usize, row.naxis1 as usize), out)
         .map_err(|e| CatalogError::Validation(e.to_string()))
 }
@@ -595,4 +595,64 @@ fn ingest_beamtime_inner(
 
     let _ = incremental;
     Ok(db_path)
+}
+
+#[cfg(all(test, feature = "catalog"))]
+mod tests {
+    use super::*;
+    use crate::loader::read_fits_headers_only_row;
+
+    fn fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("minimal.fits")
+    }
+
+    #[test]
+    fn read_image_i32_bulk_read_decodes_minimal_fits() {
+        let path = fixture_path();
+        if !path.exists() {
+            panic!("required fixture missing: {}", path.display());
+        }
+        let header_items: Vec<String> = Vec::new();
+        let row = read_fits_headers_only_row(path, &header_items)
+            .expect("minimal.fits fixture should parse into BtIngestRow");
+        let img = read_image_i32(&row).expect("read_image_i32 failed on minimal.fits");
+        let rows = row.naxis2 as usize;
+        let cols = row.naxis1 as usize;
+        assert_eq!(img.shape(), [rows, cols]);
+        assert_eq!(img.len(), rows * cols);
+        assert_eq!(rows, 2, "fixture minimal.fits is a 2x2 image");
+        assert_eq!(cols, 2, "fixture minimal.fits is a 2x2 image");
+        assert_eq!(
+            img[[0, 0]],
+            0_i32,
+            "first pixel (raw big-endian i16 -> i32)"
+        );
+        assert_eq!(img[[0, 1]], 1_i32, "row-major second pixel");
+        assert_eq!(img[[1, 0]], 2_i32, "second row first pixel");
+        assert_eq!(img[[1, 1]], 3_i32, "last pixel");
+    }
+
+    #[test]
+    fn read_image_i32_rejects_non_bitpix_16() {
+        let path = fixture_path();
+        if !path.exists() {
+            panic!("required fixture missing: {}", path.display());
+        }
+        let header_items: Vec<String> = Vec::new();
+        let mut row = read_fits_headers_only_row(path, &header_items)
+            .expect("minimal.fits fixture should parse into BtIngestRow");
+        row.bitpix = 8;
+        match read_image_i32(&row) {
+            Err(CatalogError::Validation(msg)) => {
+                assert!(
+                    msg.contains("unsupported BITPIX"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected CatalogError::Validation, got {other:?}"),
+        }
+    }
 }

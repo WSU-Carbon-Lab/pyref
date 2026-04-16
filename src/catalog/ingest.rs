@@ -13,9 +13,9 @@
 //! connection in the child; do not share a connection across process boundaries.
 //!
 //! FITS header reads and pixel reads for zarr use a [`rayon::ThreadPool`] sized by
-//! [`crate::catalog::IngestParallelism`] (after [`IngestParallelism::from_options_or_env`]). Work is
-//! parallelized **per scan** (each worker owns one scan's files sequentially); nested
-//! [`rayon::prelude::ParallelIterator`] runs on that pool via [`rayon::ThreadPool::install`]. Diesel
+//! [`crate::catalog::IngestParallelism`] (after [`IngestParallelism::from_options_or_env`]). The
+//! headers phase parallelizes **per file** (a flat [`rayon::prelude::ParallelIterator`] over every
+//! discovered FITS path) so worker utilization stays even when scan sizes are skewed. Diesel
 //! transactions and [`super::zarr_write::write_frame_raw`] run on the calling thread in global row
 //! order so catalog rows and zarr datasets stay aligned.
 
@@ -31,7 +31,7 @@ use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 
 use crate::io::BtIngestRow;
-use crate::loader::read_multiple_fits_headers_only_rows;
+use crate::loader::read_fits_headers_only_row;
 use crate::schema::{beamtimes, file_tags, files, frames, samples, scans, tags};
 
 use super::discover_paths_for_catalog_ingest;
@@ -319,7 +319,7 @@ fn ingest_beamtime_inner(
     }
 
     let paths_only: Vec<PathBuf> = discovered.iter().map(|(p, _)| p.clone()).collect();
-    let (layout_summary, scan_groups) = layout_and_groups_from_paths(&paths_only);
+    let (layout_summary, _scan_groups) = layout_and_groups_from_paths(&paths_only);
     if let Some(ref sink) = progress {
         sink.emit(IngestProgress::Layout {
             total_files: layout_summary.total_files as u32,
@@ -339,17 +339,14 @@ fn ingest_beamtime_inner(
         .num_threads(n_workers)
         .build()
         .map_err(|e| CatalogError::Validation(format!("rayon thread pool: {e}")))?;
-    let header_groups: Vec<Vec<BtIngestRow>> = pool
+    let mut rows: Vec<BtIngestRow> = pool
         .install(|| {
-            scan_groups
+            paths_only
                 .par_iter()
-                .map(|(_sn, paths)| {
-                    read_multiple_fits_headers_only_rows(paths.clone(), header_items)
-                })
+                .map(|p| read_fits_headers_only_row(p.clone(), header_items))
                 .collect::<std::result::Result<Vec<_>, _>>()
         })
         .map_err(CatalogError::FitsReadFailed)?;
-    let mut rows: Vec<BtIngestRow> = header_groups.into_iter().flatten().collect();
     rows.sort_by(|a, b| {
         (a.scan_number, a.frame_number, a.file_path.as_str()).cmp(&(
             b.scan_number,

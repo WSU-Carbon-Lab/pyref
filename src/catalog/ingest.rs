@@ -35,6 +35,44 @@ use super::parallelism::IngestParallelism;
 use super::zarr_write::{open_zarr_store, write_frame_raw};
 use super::{db, paths, CatalogError, Result};
 
+const MIN_BATCH_ROWS: usize = 200;
+const MAX_BATCH_ROWS: usize = 1000;
+const _: () = assert!(
+    MIN_BATCH_ROWS > 0 && MIN_BATCH_ROWS <= MAX_BATCH_ROWS,
+    "catalog batch bounds must satisfy 0 < MIN <= MAX"
+);
+
+fn plan_catalog_batches(rows: &[BtIngestRow]) -> Vec<(usize, usize)> {
+    let mut batches: Vec<(usize, usize)> = Vec::new();
+    if rows.is_empty() {
+        return batches;
+    }
+
+    let mut scan_segments: Vec<(usize, usize)> = Vec::new();
+    let mut seg_start = 0_usize;
+    for i in 1..rows.len() {
+        if rows[i].scan_number != rows[seg_start].scan_number {
+            scan_segments.push((seg_start, i));
+            seg_start = i;
+        }
+    }
+    scan_segments.push((seg_start, rows.len()));
+
+    let mut batch_start = scan_segments[0].0;
+    let mut batch_rows: usize = 0;
+    for (s, e) in scan_segments {
+        let scan_rows = e - s;
+        if batch_rows > 0 && batch_rows + scan_rows > MAX_BATCH_ROWS {
+            batches.push((batch_start, s));
+            batch_start = s;
+            batch_rows = 0;
+        }
+        batch_rows += scan_rows;
+    }
+    batches.push((batch_start, rows.len()));
+    batches
+}
+
 pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "DATE",
     "Beamline Energy",
@@ -348,7 +386,6 @@ fn ingest_beamtime_inner(
         .collect();
 
     conn.transaction::<(), diesel::result::Error, _>(|conn| {
-        let mut catalog_scan_done: HashMap<i32, u32> = HashMap::new();
         for name in &unique_samples {
             let sid: i32 = diesel::insert_into(samples::table)
                 .values((
@@ -362,168 +399,187 @@ fn ingest_beamtime_inner(
                 .get_result(conn)?;
             sample_cache.insert(name.clone(), sid);
         }
-
-        let mut scan_first_sample: HashMap<i32, String> = HashMap::new();
-        for r in &rows {
-            let sn = r.scan_number as i32;
-            let sk = if r.sample_name.trim().is_empty() {
-                "_".to_string()
-            } else {
-                r.sample_name.clone()
-            };
-            scan_first_sample.entry(sn).or_insert(sk);
-        }
-        let unique_scans: HashSet<i32> = rows.iter().map(|r| r.scan_number as i32).collect();
-        for sn in &unique_scans {
-            let sk = scan_first_sample
-                .get(sn)
-                .cloned()
-                .unwrap_or_else(|| "_".to_string());
-            let rep_sample = *sample_cache
-                .get(&sk)
-                .ok_or_else(|| diesel::result::Error::NotFound)?;
-            let scid: i32 = diesel::insert_into(scans::table)
-                .values((
-                    scans::beamtime_id.eq(beamtime_id),
-                    scans::sample_id.eq(rep_sample),
-                    scans::scan_number.eq(*sn),
-                    scans::scan_type.eq("fixed_energy"),
-                    scans::started_at.eq(None::<String>),
-                    scans::ended_at.eq(None::<String>),
-                ))
-                .returning(scans::id)
-                .get_result(conn)?;
-            scan_cache.insert(*sn, scid);
-        }
-
-        for (idx, row) in rows.iter().enumerate() {
-            if cancel
-                .as_ref()
-                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                .unwrap_or(false)
-            {
-                return Err(diesel::result::Error::RollbackTransaction);
-            }
-            let sample_key = if row.sample_name.trim().is_empty() {
-                "_".to_string()
-            } else {
-                row.sample_name.clone()
-            };
-            let sample_id = *sample_cache
-                .get(&sample_key)
-                .ok_or_else(|| diesel::result::Error::NotFound)?;
-
-            let scan_no = row.scan_number as i32;
-            let scan_id = *scan_cache
-                .get(&scan_no)
-                .ok_or_else(|| diesel::result::Error::NotFound)?;
-
-            let parse_flag = if row.scan_number == 0 || row.frame_number == 0 {
-                Some("parse_failure".to_string())
-            } else {
-                None
-            };
-
-            let file_id: i32 = diesel::insert_into(files::table)
-                .values((
-                    files::beamtime_id.eq(beamtime_id),
-                    files::sample_id.eq(sample_id),
-                    files::scan_number.eq(scan_no),
-                    files::frame_number.eq(row.frame_number as i32),
-                    files::nas_uri.eq(row.file_path.as_str()),
-                    files::filename.eq(Path::new(&row.file_path)
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")),
-                    files::parse_flag.eq(parse_flag.as_deref()),
-                    files::data_offset.eq(row.data_offset),
-                    files::naxis1.eq(row.naxis1 as i32),
-                    files::naxis2.eq(row.naxis2 as i32),
-                    files::bitpix.eq(row.bitpix as i32),
-                    files::bzero.eq(row.bzero),
-                ))
-                .returning(files::id)
-                .get_result(conn)?;
-
-            if let Some(tag_slug) = row.tag.as_ref().filter(|t| !t.is_empty()) {
-                let tid: i32 = match tags::table
-                    .filter(tags::slug.eq(tag_slug.as_str()))
-                    .select(tags::id)
-                    .first(conn)
-                    .optional()?
-                {
-                    Some(id) => id,
-                    None => diesel::insert_into(tags::table)
-                        .values(tags::slug.eq(tag_slug.as_str()))
-                        .returning(tags::id)
-                        .get_result(conn)?,
-                };
-                let ft_exists: Option<i32> = file_tags::table
-                    .filter(file_tags::file_id.eq(file_id))
-                    .filter(file_tags::tag_id.eq(tid))
-                    .select(file_tags::id)
-                    .first(conn)
-                    .optional()?;
-                if ft_exists.is_none() {
-                    diesel::insert_into(file_tags::table)
-                        .values((file_tags::file_id.eq(file_id), file_tags::tag_id.eq(tid)))
-                        .execute(conn)?;
-                }
-            }
-
-            let sx = row.sample_x.unwrap_or(0.0);
-            let sy = row.sample_y.unwrap_or(0.0);
-            let sz = row.sample_z.unwrap_or(0.0);
-            let st = row.sample_theta.unwrap_or(0.0);
-            let ccd = row.ccd_theta.unwrap_or(0.0);
-            let epu = row.epu_polarization.unwrap_or(0.0);
-            let exp = row.exposure.unwrap_or(0.0);
-            let be = row.beamline_energy.unwrap_or(0.0);
-            let ring = row.ring_current.unwrap_or(0.0);
-            let ai3 = row.ai3_izero.unwrap_or(0.0);
-            let bcm = row.beam_current.unwrap_or(0.0);
-
-            diesel::insert_into(frames::table)
-                .values((
-                    frames::scan_id.eq(scan_id),
-                    frames::file_id.eq(file_id),
-                    frames::frame_number.eq(row.frame_number as i32),
-                    frames::zarr_group_key.eq(scan_no),
-                    frames::zarr_frame_index.eq(row.frame_number as i32),
-                    frames::acquired_at.eq(row.date_iso.clone()),
-                    frames::sample_x.eq(sx),
-                    frames::sample_y.eq(sy),
-                    frames::sample_z.eq(sz),
-                    frames::sample_theta.eq(st),
-                    frames::ccd_theta.eq(ccd),
-                    frames::beamline_energy.eq(be),
-                    frames::epu_polarization.eq(epu),
-                    frames::exposure.eq(exp),
-                    frames::ring_current.eq(ring),
-                    frames::ai3_izero.eq(ai3),
-                    frames::beam_current.eq(bcm),
-                    frames::quality_flag.eq(None::<String>),
-                ))
-                .execute(conn)?;
-
-            if let Some(ref sink) = progress {
-                let sn = row.scan_number as i32;
-                let e = catalog_scan_done.entry(sn).or_insert(0);
-                *e += 1;
-                let sd = *e;
-                let st = scan_total_map.get(&sn).copied().unwrap_or(0);
-                sink.emit(IngestProgress::CatalogRow {
-                    scan_number: sn,
-                    scan_done: sd,
-                    scan_total: st,
-                    global_done: (idx + 1) as u32,
-                    global_total: rows.len() as u32,
-                });
-            }
-        }
         Ok(())
     })
     .map_err(CatalogError::Diesel)?;
+
+    let mut scan_first_sample: HashMap<i32, String> = HashMap::new();
+    for r in &rows {
+        let sn = r.scan_number as i32;
+        let sk = if r.sample_name.trim().is_empty() {
+            "_".to_string()
+        } else {
+            r.sample_name.clone()
+        };
+        scan_first_sample.entry(sn).or_insert(sk);
+    }
+
+    let batches = plan_catalog_batches(&rows);
+    let global_total = rows.len() as u32;
+    let mut catalog_scan_done: HashMap<i32, u32> = HashMap::new();
+
+    for (start, end) in batches {
+        conn.transaction::<(), diesel::result::Error, _>(|conn| {
+            let mut batch_scans_seen: HashSet<i32> = HashSet::new();
+            for row in &rows[start..end] {
+                let sn = row.scan_number as i32;
+                if !batch_scans_seen.insert(sn) {
+                    continue;
+                }
+                if scan_cache.contains_key(&sn) {
+                    continue;
+                }
+                let sk = scan_first_sample
+                    .get(&sn)
+                    .cloned()
+                    .unwrap_or_else(|| "_".to_string());
+                let rep_sample = *sample_cache
+                    .get(&sk)
+                    .ok_or(diesel::result::Error::NotFound)?;
+                let scid: i32 = diesel::insert_into(scans::table)
+                    .values((
+                        scans::beamtime_id.eq(beamtime_id),
+                        scans::sample_id.eq(rep_sample),
+                        scans::scan_number.eq(sn),
+                        scans::scan_type.eq("fixed_energy"),
+                        scans::started_at.eq(None::<String>),
+                        scans::ended_at.eq(None::<String>),
+                    ))
+                    .returning(scans::id)
+                    .get_result(conn)?;
+                scan_cache.insert(sn, scid);
+            }
+
+            for (local_idx, row) in rows[start..end].iter().enumerate() {
+                if cancel
+                    .as_ref()
+                    .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                    .unwrap_or(false)
+                {
+                    return Err(diesel::result::Error::RollbackTransaction);
+                }
+                let sample_key = if row.sample_name.trim().is_empty() {
+                    "_".to_string()
+                } else {
+                    row.sample_name.clone()
+                };
+                let sample_id = *sample_cache
+                    .get(&sample_key)
+                    .ok_or(diesel::result::Error::NotFound)?;
+
+                let scan_no = row.scan_number as i32;
+                let scan_id = *scan_cache
+                    .get(&scan_no)
+                    .ok_or(diesel::result::Error::NotFound)?;
+
+                let parse_flag = if row.scan_number == 0 || row.frame_number == 0 {
+                    Some("parse_failure".to_string())
+                } else {
+                    None
+                };
+
+                let file_id: i32 = diesel::insert_into(files::table)
+                    .values((
+                        files::beamtime_id.eq(beamtime_id),
+                        files::sample_id.eq(sample_id),
+                        files::scan_number.eq(scan_no),
+                        files::frame_number.eq(row.frame_number as i32),
+                        files::nas_uri.eq(row.file_path.as_str()),
+                        files::filename.eq(Path::new(&row.file_path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")),
+                        files::parse_flag.eq(parse_flag.as_deref()),
+                        files::data_offset.eq(row.data_offset),
+                        files::naxis1.eq(row.naxis1 as i32),
+                        files::naxis2.eq(row.naxis2 as i32),
+                        files::bitpix.eq(row.bitpix as i32),
+                        files::bzero.eq(row.bzero),
+                    ))
+                    .returning(files::id)
+                    .get_result(conn)?;
+
+                if let Some(tag_slug) = row.tag.as_ref().filter(|t| !t.is_empty()) {
+                    let tid: i32 = match tags::table
+                        .filter(tags::slug.eq(tag_slug.as_str()))
+                        .select(tags::id)
+                        .first(conn)
+                        .optional()?
+                    {
+                        Some(id) => id,
+                        None => diesel::insert_into(tags::table)
+                            .values(tags::slug.eq(tag_slug.as_str()))
+                            .returning(tags::id)
+                            .get_result(conn)?,
+                    };
+                    let ft_exists: Option<i32> = file_tags::table
+                        .filter(file_tags::file_id.eq(file_id))
+                        .filter(file_tags::tag_id.eq(tid))
+                        .select(file_tags::id)
+                        .first(conn)
+                        .optional()?;
+                    if ft_exists.is_none() {
+                        diesel::insert_into(file_tags::table)
+                            .values((file_tags::file_id.eq(file_id), file_tags::tag_id.eq(tid)))
+                            .execute(conn)?;
+                    }
+                }
+
+                let sx = row.sample_x.unwrap_or(0.0);
+                let sy = row.sample_y.unwrap_or(0.0);
+                let sz = row.sample_z.unwrap_or(0.0);
+                let st = row.sample_theta.unwrap_or(0.0);
+                let ccd = row.ccd_theta.unwrap_or(0.0);
+                let epu = row.epu_polarization.unwrap_or(0.0);
+                let exp = row.exposure.unwrap_or(0.0);
+                let be = row.beamline_energy.unwrap_or(0.0);
+                let ring = row.ring_current.unwrap_or(0.0);
+                let ai3 = row.ai3_izero.unwrap_or(0.0);
+                let bcm = row.beam_current.unwrap_or(0.0);
+
+                diesel::insert_into(frames::table)
+                    .values((
+                        frames::scan_id.eq(scan_id),
+                        frames::file_id.eq(file_id),
+                        frames::frame_number.eq(row.frame_number as i32),
+                        frames::zarr_group_key.eq(scan_no),
+                        frames::zarr_frame_index.eq(row.frame_number as i32),
+                        frames::acquired_at.eq(row.date_iso.clone()),
+                        frames::sample_x.eq(sx),
+                        frames::sample_y.eq(sy),
+                        frames::sample_z.eq(sz),
+                        frames::sample_theta.eq(st),
+                        frames::ccd_theta.eq(ccd),
+                        frames::beamline_energy.eq(be),
+                        frames::epu_polarization.eq(epu),
+                        frames::exposure.eq(exp),
+                        frames::ring_current.eq(ring),
+                        frames::ai3_izero.eq(ai3),
+                        frames::beam_current.eq(bcm),
+                        frames::quality_flag.eq(None::<String>),
+                    ))
+                    .execute(conn)?;
+
+                if let Some(ref sink) = progress {
+                    let sn = row.scan_number as i32;
+                    let e = catalog_scan_done.entry(sn).or_insert(0);
+                    *e += 1;
+                    let sd = *e;
+                    let st = scan_total_map.get(&sn).copied().unwrap_or(0);
+                    let global_idx = (start + local_idx + 1) as u32;
+                    sink.emit(IngestProgress::CatalogRow {
+                        scan_number: sn,
+                        scan_done: sd,
+                        scan_total: st,
+                        global_done: global_idx,
+                        global_total,
+                    });
+                }
+            }
+            Ok(())
+        })
+        .map_err(CatalogError::Diesel)?;
+    }
 
     if let Some(ref sink) = progress {
         sink.emit(IngestProgress::Phase {
@@ -684,6 +740,132 @@ mod tests {
             .get_result(&mut conn)
             .map_err(CatalogError::Diesel)?;
         Ok((s, sc, f))
+    }
+
+    fn make_row(scan_number: i64, frame_number: i64) -> BtIngestRow {
+        BtIngestRow {
+            file_path: format!("/tmp/{scan_number}_{frame_number}.fits"),
+            data_offset: 0,
+            naxis1: 1,
+            naxis2: 1,
+            bitpix: 16,
+            bzero: 0,
+            file_name: format!("{scan_number}_{frame_number}.fits"),
+            sample_name: "s".into(),
+            tag: None,
+            scan_number,
+            frame_number,
+            beamline_energy: None,
+            sample_theta: None,
+            ccd_theta: None,
+            epu_polarization: None,
+            exposure: None,
+            sample_x: None,
+            sample_y: None,
+            sample_z: None,
+            ring_current: None,
+            ai3_izero: None,
+            beam_current: None,
+            date_iso: None,
+        }
+    }
+
+    fn rows_for_scans(sizes: &[(i64, usize)]) -> Vec<BtIngestRow> {
+        let mut out = Vec::new();
+        for &(sn, count) in sizes {
+            for f in 0..count {
+                out.push(make_row(sn, f as i64));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn plan_catalog_batches_groups_small_scans() {
+        let rows = rows_for_scans(&[(1, 5), (2, 5), (3, 5), (4, 5), (5, 5), (6, 3000)]);
+        let batches = plan_catalog_batches(&rows);
+        assert_eq!(
+            batches,
+            vec![(0, 25), (25, 3025)],
+            "small scans must coalesce then seal when the next large scan would overflow MAX"
+        );
+        const _: () = assert!(MAX_BATCH_ROWS < 3000);
+    }
+
+    #[test]
+    fn plan_catalog_batches_fills_to_min_before_sealing() {
+        let sizes: Vec<(i64, usize)> = (1..=20).map(|sn| (sn, 50)).collect();
+        let rows = rows_for_scans(&sizes);
+        let batches = plan_catalog_batches(&rows);
+        assert_eq!(
+            batches,
+            vec![(0, 1000)],
+            "twenty 50-row scans must fit in one MAX-sized batch, not seal at MIN"
+        );
+        let (start, end) = batches[0];
+        assert!(
+            end - start >= MIN_BATCH_ROWS,
+            "batch must be at least MIN rows"
+        );
+    }
+
+    #[test]
+    fn plan_catalog_batches_isolates_oversized_scan() {
+        let rows = rows_for_scans(&[(1, 3000)]);
+        let batches = plan_catalog_batches(&rows);
+        assert_eq!(
+            batches,
+            vec![(0, 3000)],
+            "single scan > MAX gets its own overflow batch"
+        );
+    }
+
+    #[test]
+    fn plan_catalog_batches_empty_rows_empty_plan() {
+        let rows: Vec<BtIngestRow> = Vec::new();
+        assert!(plan_catalog_batches(&rows).is_empty());
+    }
+
+    #[test]
+    fn ingest_produces_same_row_counts_as_single_transaction() {
+        let fixture = fixture_path();
+        if !fixture.exists() {
+            panic!("required fixture missing: {}", fixture.display());
+        }
+        let tmp = tempfile::tempdir().expect("create tempdir for PYREF_HOME");
+        let beamtime_dir = tmp.path().join("2024-02-02");
+        let ccd_dir = beamtime_dir.join("CCD");
+        std::fs::create_dir_all(&ccd_dir).expect("create CCD dir");
+        std::fs::copy(&fixture, ccd_dir.join("minimal.fits")).expect("copy fixture");
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _home = EnvGuard::set("PYREF_HOME", tmp.path());
+        let _db = EnvGuard::unset("PYREF_CATALOG_DB");
+        let _cache = EnvGuard::unset("PYREF_CACHE_ROOT");
+
+        let header_items: Vec<String> = DEFAULT_INGEST_HEADER_ITEMS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+
+        let db_path = ingest_beamtime(&beamtime_dir, &header_items, false, None)
+            .expect("batched ingest should succeed");
+        let counts = count_rows(&db_path).expect("count rows after ingest");
+        let mut conn = db::establish_connection(&db_path).expect("open catalog db");
+        let frame_count: i64 = frames::table
+            .count()
+            .get_result(&mut conn)
+            .expect("count frames");
+
+        assert_eq!(
+            counts,
+            (1, 1, 1),
+            "batched ingest must produce exactly 1 sample/scan/file, got {counts:?}"
+        );
+        assert_eq!(
+            frame_count, 1,
+            "batched ingest must produce exactly 1 frame"
+        );
     }
 
     #[test]

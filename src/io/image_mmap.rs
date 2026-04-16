@@ -14,7 +14,7 @@ use crate::fits::HduList;
 
 type ImagePair = (Array2<i64>, Array2<i64>);
 
-fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsError> {
+pub fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsError> {
     if info.bitpix != 16 {
         return Err(FitsError::unsupported(
             "Only BITPIX=16 image HDUs supported",

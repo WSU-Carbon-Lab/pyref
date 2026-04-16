@@ -11,134 +11,62 @@ unless ``--use-default-paths`` is passed.
 from __future__ import annotations
 
 import argparse
-import os
-import tempfile
-import time
+import sys
 from pathlib import Path
-from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-def _fmt_s(seconds: float) -> str:
-    if seconds >= 100.0:
-        return f"{seconds:.1f}"
-    if seconds >= 10.0:
-        return f"{seconds:.2f}"
-    return f"{seconds:.3f}"
+from _ingest_profile import (
+    format_seconds,
+    isolated_catalog_env,
+    render_markdown_table,
+    run_ingest_with_profile,
+)
 
 
 def main() -> None:
-    """Print a markdown table of ingest phase wall times."""
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument(
+    """Print a markdown table of ingest phase wall times for a real beamtime."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
         "--beamtime",
         type=Path,
         required=True,
         help="Beamtime root directory (e.g. ALS date folder containing CCD data).",
     )
-    p.add_argument(
+    parser.add_argument(
         "--use-default-paths",
         action="store_true",
         help=(
             "Do not override PYREF_CATALOG_DB / PYREF_CACHE_ROOT (writes real catalog)."
         ),
     )
-    args = p.parse_args()
+    args = parser.parse_args()
     beam = args.beamtime.resolve()
 
-    tmp: tempfile.TemporaryDirectory[str] | None = None
-    if not args.use_default_paths:
-        tmp = tempfile.TemporaryDirectory(prefix="pyref-ingest-profile-")
-        tdir = Path(tmp.name)
-        os.environ["PYREF_CATALOG_DB"] = str((tdir / "catalog.db").resolve())
-        os.environ["PYREF_CACHE_ROOT"] = str((tdir / "cache").resolve())
-
-    from pyref.io.readers import ingest_beamtime
-
-    t0 = time.perf_counter()
-    phase_start = t0
-    current_phase = "startup"
-    phases: dict[str, float] = {}
-    counts: dict[str, int] = {
-        "layout": 0,
-        "catalog_row": 0,
-        "file_complete": 0,
-    }
-    first_fc: float | None = None
-    first_catalog: float | None = None
-    layout_files = 0
-
-    def on_progress(d: dict[str, Any]) -> None:
-        nonlocal phase_start, current_phase, first_fc, first_catalog, layout_files
-        ev = d.get("event")
-        now = time.perf_counter()
-        if ev == "phase":
-            n = str(d.get("phase", ""))
-            phases[current_phase] = phases.get(current_phase, 0.0) + (now - phase_start)
-            current_phase = n
-            phase_start = now
-            return
-        if ev == "layout":
-            layout_files = int(d.get("total_files", 0))
-            counts["layout"] += 1
-            return
-        if ev == "catalog_row":
-            if first_catalog is None:
-                first_catalog = now - t0
-            counts["catalog_row"] += 1
-            return
-        if ev == "file_complete":
-            if first_fc is None:
-                first_fc = now - t0
-            counts["file_complete"] += 1
-
-    try:
-        ingest_beamtime(beam, None, progress_callback=on_progress)
-    finally:
-        if tmp is not None:
-            tmp.cleanup()
-
-    wall = time.perf_counter() - t0
-    tail = time.perf_counter() - phase_start
-    phases[current_phase] = phases.get(current_phase, 0.0) + tail
-
-    startup_s = phases.get("startup", 0.0)
-    headers_s = phases.get("headers", 0.0)
-    catalog_s = phases.get("catalog", 0.0)
-    zarr_s = phases.get("zarr", 0.0)
-    accounted = startup_s + headers_s + catalog_s + zarr_s
-    other_s = max(0.0, wall - accounted)
-
-    rows = [
-        ("Before `headers` (DB open, discovery, layout)", startup_s),
-        ("Phase `headers` (parallel FITS header reads)", headers_s),
-        ("Phase `catalog` (SQLite transaction + `catalog_row` events)", catalog_s),
-        ("Phase `zarr` (FITS pixels read + zarr write + `file_complete`)", zarr_s),
-        ("Unattributed (measurement gap)", other_s),
-        ("Wall time total", wall),
-    ]
+    with isolated_catalog_env(
+        enabled=not args.use_default_paths,
+        prefix="pyref-ingest-profile-",
+    ):
+        _catalog_path, profile = run_ingest_with_profile(beam)
 
     print(f"Beamtime: {beam}")
-    print(f"FITS files (layout): {layout_files}")
-    if layout_files == 0:
+    print(f"FITS files (layout): {profile.layout_files}")
+    if profile.layout_files == 0:
         print(
             "Note: 0 files often means no ingestible `.fits` "
             "(stems starting with `_` are skipped) or unrecognized layout."
         )
-    cr, fc = counts["catalog_row"], counts["file_complete"]
+    cr = profile.counts["catalog_row"]
+    fc = profile.counts["file_complete"]
     print(f"catalog_row events: {cr}  file_complete: {fc}")
-    if first_catalog is not None:
-        print(f"Time to first catalog_row: {_fmt_s(first_catalog)} s")
+    first_cr = profile.first_catalog_row_seconds
+    first_fc = profile.first_file_complete_seconds
+    if first_cr is not None:
+        print(f"Time to first catalog_row: {format_seconds(first_cr)} s")
     if first_fc is not None:
-        print(f"Time to first file_complete: {_fmt_s(first_fc)} s")
+        print(f"Time to first file_complete: {format_seconds(first_fc)} s")
     print()
-    print("| Segment | Seconds | Share of wall |")
-    print("|---------|--------:|--------------:|")
-    for label, sec in rows[:-1]:
-        share = (sec / wall * 100.0) if wall > 0 else 0.0
-        print(f"| {label} | {_fmt_s(sec)} | {share:.1f}% |")
-    label, sec = rows[-1]
-    print(f"| **{label}** | **{_fmt_s(sec)}** | **100%** |")
-    print()
+    print(render_markdown_table(profile))
     print(
         "Notes: Python does almost no work during ingest (Rust holds the GIL only for "
         "short callbacks). Slow `headers` on network mounts is mostly FITS open/read "

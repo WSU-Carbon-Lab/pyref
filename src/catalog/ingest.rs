@@ -20,8 +20,6 @@
 //! order so catalog rows and zarr datasets stay aligned.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use diesel::prelude::*;
@@ -30,6 +28,8 @@ use ndarray::Array2;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 
+use crate::errors::{FitsError, FitsErrorKind};
+use crate::io::raw_pixels::read_bitpix16_be_bytes;
 use crate::io::BtIngestRow;
 use crate::loader::read_fits_headers_only_row;
 use crate::schema::{beamtimes, file_tags, files, frames, samples, scans, tags};
@@ -101,6 +101,16 @@ fn layout_label(layout: BeamtimeLayout) -> &'static str {
     }
 }
 
+fn fits_error_to_catalog(err: FitsError) -> CatalogError {
+    match err.kind {
+        FitsErrorKind::Io => match err.source.and_then(|s| s.downcast::<std::io::Error>().ok()) {
+            Some(io_err) => CatalogError::Io(*io_err),
+            None => CatalogError::Validation(err.message),
+        },
+        _ => CatalogError::Validation(err.message),
+    }
+}
+
 fn read_image_i32(row: &BtIngestRow) -> Result<Array2<i32>> {
     if row.bitpix != 16 {
         return Err(CatalogError::Validation(format!(
@@ -109,12 +119,9 @@ fn read_image_i32(row: &BtIngestRow) -> Result<Array2<i32>> {
         )));
     }
     let path = Path::new(&row.file_path);
-    let mut f = File::open(path).map_err(CatalogError::Io)?;
-    f.seek(SeekFrom::Start(row.data_offset as u64))
-        .map_err(CatalogError::Io)?;
     let n = (row.naxis1 * row.naxis2) as usize;
-    let mut buf = vec![0u8; n * 2];
-    f.read_exact(&mut buf).map_err(CatalogError::Io)?;
+    let buf = read_bitpix16_be_bytes(path, row.data_offset as u64, n * 2)
+        .map_err(fits_error_to_catalog)?;
     let out: Vec<i32> = buf
         .chunks_exact(2)
         .map(|c| i16::from_be_bytes([c[0], c[1]]) as i32)

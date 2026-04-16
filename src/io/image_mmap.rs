@@ -1,11 +1,10 @@
-use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use memmap2::MmapOptions;
 use ndarray::Array2;
 use polars::prelude::*;
 
 use super::blur::{gaussian_blur_f32_copy, i64_to_f32_array};
+use super::raw_pixels::read_bitpix16_be_bytes;
 use super::{
     subtract_background_edges, subtract_background_row_strips, subtract_dark_cold_side,
     trim_image_interior, ImageInfo, TRIM_COLS, TRIM_ROWS,
@@ -23,21 +22,11 @@ fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsE
     }
     let nelem = info.naxis1 * info.naxis2;
     let nbytes = nelem * 2;
-    let file = File::open(path).map_err(|e| FitsError::io("open", e))?;
-    let mmap = unsafe {
-        MmapOptions::new()
-            .offset(info.data_offset)
-            .len(nbytes)
-            .map(&file)
-            .map_err(|e| FitsError::io("mmap", e))?
-    };
-    let mut raw = Vec::with_capacity(nelem);
-    for chunk in mmap.chunks_exact(2) {
-        let v = i16::from_be_bytes([chunk[0], chunk[1]]) as i64 + info.bzero;
-        raw.push(v);
-    }
-    drop(mmap);
-    drop(file);
+    let bytes = read_bitpix16_be_bytes(path, info.data_offset, nbytes)?;
+    let raw: Vec<i64> = bytes
+        .chunks_exact(2)
+        .map(|c| i16::from_be_bytes([c[0], c[1]]) as i64 + info.bzero)
+        .collect();
     Array2::from_shape_vec((info.naxis2, info.naxis1), raw)
         .map_err(|e| FitsError::validation(e.to_string()))
 }

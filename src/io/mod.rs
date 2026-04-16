@@ -1,6 +1,7 @@
 pub mod blur;
 pub mod image_mmap;
 pub mod options;
+pub mod raw_pixels;
 pub mod schema;
 pub mod source;
 

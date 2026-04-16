@@ -19,7 +19,7 @@
 //! transactions and [`super::zarr_write::write_frame_raw`] run on the calling thread in global row
 //! order so catalog rows and zarr datasets stay aligned.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -597,49 +597,86 @@ fn ingest_beamtime_inner(
         });
     }
 
-    let mut by_scan: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (i, r) in rows.iter().enumerate() {
-        by_scan.entry(r.scan_number as i32).or_default().push(i);
-    }
-    let scan_order: Vec<i32> = by_scan.keys().copied().collect();
+    let channel_cap = (n_workers.saturating_mul(2)).max(4);
+    let (tx, rx) = crossbeam_channel::bounded::<Result<(usize, Array2<i32>)>>(channel_cap);
 
-    let read_chunks: Vec<Vec<(usize, Array2<i32>)>> = pool.install(|| {
-        scan_order
-            .par_iter()
-            .map(|&sn| -> Result<Vec<(usize, Array2<i32>)>> {
-                let idxs: Vec<usize> = by_scan.get(&sn).cloned().unwrap_or_default();
-                idxs.into_iter()
-                    .map(|row_i| read_image_i32(&rows[row_i]).map(|img| (row_i, img)))
-                    .collect::<std::result::Result<Vec<_>, _>>()
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-    })?;
-    let mut flat: Vec<(usize, Array2<i32>)> = read_chunks.into_iter().flatten().collect();
-    flat.sort_by_key(|(i, _)| *i);
-
+    let stop = std::sync::atomic::AtomicBool::new(false);
     let mut scan_done: HashMap<i32, u32> = HashMap::new();
     let mut global_done: u32 = 0;
     let global_total = rows.len() as u32;
-    for (i, img) in flat {
-        let row = &rows[i];
-        write_frame_raw(&zstore, row.scan_number, row.frame_number, &img)
-            .map_err(|e| CatalogError::Validation(e.to_string()))?;
-        let sn = row.scan_number as i32;
-        let e = scan_done.entry(sn).or_insert(0);
-        *e += 1;
-        let sd = *e;
-        let st = scan_total_map.get(&sn).copied().unwrap_or(0);
-        global_done += 1;
-        if let Some(ref sink) = progress {
-            sink.emit(IngestProgress::FileComplete {
-                scan_number: sn,
-                scan_done: sd,
-                scan_total: st,
-                global_done,
-                global_total,
+
+    std::thread::scope(|s| -> Result<()> {
+        let rows_ref: &[BtIngestRow] = &rows;
+        let pool_ref: &rayon::ThreadPool = &pool;
+        let cancel_ref = cancel.as_ref();
+        let stop_ref = &stop;
+
+        let reader_handle = s.spawn(move || {
+            pool_ref.install(move || {
+                rows_ref
+                    .par_iter()
+                    .enumerate()
+                    .for_each_with(tx, |tx_c, (row_i, row)| {
+                        if stop_ref.load(std::sync::atomic::Ordering::Relaxed) {
+                            return;
+                        }
+                        if cancel_ref
+                            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                            .unwrap_or(false)
+                        {
+                            return;
+                        }
+                        let item = read_image_i32(row).map(|img| (row_i, img));
+                        if tx_c.send(item).is_err() {
+                            stop_ref.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    });
             });
+        });
+
+        let mut write_err: Option<CatalogError> = None;
+        for item in rx.iter() {
+            if write_err.is_some() {
+                continue;
+            }
+            let step: Result<()> = (|| {
+                let (row_i, img) = item?;
+                let row = &rows[row_i];
+                write_frame_raw(&zstore, row.scan_number, row.frame_number, &img)
+                    .map_err(|e| CatalogError::Validation(e.to_string()))?;
+                drop(img);
+                let sn = row.scan_number as i32;
+                let entry = scan_done.entry(sn).or_insert(0);
+                *entry += 1;
+                let sd = *entry;
+                let st = scan_total_map.get(&sn).copied().unwrap_or(0);
+                global_done += 1;
+                if let Some(ref sink) = progress {
+                    sink.emit(IngestProgress::FileComplete {
+                        scan_number: sn,
+                        scan_done: sd,
+                        scan_total: st,
+                        global_done,
+                        global_total,
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(e) = step {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                write_err = Some(e);
+            }
         }
-    }
+
+        reader_handle
+            .join()
+            .map_err(|_| CatalogError::Validation("ingest zarr reader thread panicked".into()))?;
+
+        match write_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    })?;
 
     let _ = incremental;
     Ok(db_path)
@@ -900,6 +937,67 @@ mod tests {
         assert_eq!(
             counts_1, counts_2,
             "reingest must be exactly idempotent (run1={counts_1:?}, run2={counts_2:?})"
+        );
+    }
+
+    #[test]
+    fn zarr_phase_streams_and_writes_raw_for_each_frame() {
+        let fixture = fixture_path();
+        if !fixture.exists() {
+            panic!("required fixture missing: {}", fixture.display());
+        }
+        let tmp = tempfile::tempdir().expect("create tempdir for PYREF_HOME");
+        let beamtime_dir = tmp.path().join("2024-03-03");
+        let ccd_dir = beamtime_dir.join("CCD");
+        std::fs::create_dir_all(&ccd_dir).expect("create CCD dir");
+        std::fs::copy(&fixture, ccd_dir.join("minimal.fits")).expect("copy fixture");
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _home = EnvGuard::set("PYREF_HOME", tmp.path());
+        let _db = EnvGuard::unset("PYREF_CATALOG_DB");
+        let _cache = EnvGuard::unset("PYREF_CACHE_ROOT");
+
+        let header_items: Vec<String> = DEFAULT_INGEST_HEADER_ITEMS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+
+        let db_path = ingest_beamtime(&beamtime_dir, &header_items, false, None)
+            .expect("streaming zarr ingest should succeed");
+
+        let zarr_root =
+            paths::beamtime_zarr_path(&beamtime_dir).expect("resolve beamtime zarr path");
+        assert!(
+            zarr_root.is_dir(),
+            "expected zarr root dir at {}",
+            zarr_root.display()
+        );
+
+        let mut conn = db::establish_connection(&db_path).expect("open catalog db");
+        let (scan_no, frame_no): (i32, i32) = files::table
+            .select((files::scan_number, files::frame_number))
+            .first(&mut conn)
+            .expect("select scan/frame of only cataloged file");
+        let raw_path = zarr_root
+            .join(scan_no.to_string())
+            .join(format!("{frame_no:05}"))
+            .join("raw");
+        assert!(
+            raw_path.is_dir(),
+            "streaming zarr writer must create raw array dir at {}",
+            raw_path.display()
+        );
+
+        let payload_found = walkdir::WalkDir::new(&raw_path).into_iter().any(|entry| {
+            entry
+                .as_ref()
+                .map(|e| e.file_type().is_file())
+                .unwrap_or(false)
+        });
+        assert!(
+            payload_found,
+            "streaming zarr writer must emit at least one file under {}",
+            raw_path.display()
         );
     }
 }

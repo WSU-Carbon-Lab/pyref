@@ -55,18 +55,40 @@ pub fn write_frame_raw(
     array
         .store_chunk(&[0u64, 0u64], flat)
         .map_err(|e| FitsError::validation(e.to_string()))?;
-    let proc_path = format!("{base}/processed");
-    let proc = ArrayBuilder::new(
-        vec![h as u64, w as u64],
-        vec![h as u64, w as u64],
-        data_type::int32(),
-        0i32,
-    )
-    .build(store.clone(), &proc_path)
-    .map_err(|e| FitsError::validation(e.to_string()))?;
-    proc.store_metadata()
-        .map_err(|e| FitsError::validation(e.to_string()))?;
-    proc.store_chunk(&[0u64, 0u64], data.iter().copied().collect::<Vec<i32>>())
-        .map_err(|e| FitsError::validation(e.to_string()))?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "catalog"))]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+    use tempfile::TempDir;
+
+    #[test]
+    fn write_frame_raw_creates_only_raw_group() {
+        let tmp = TempDir::new().expect("create tempdir");
+        let store = open_zarr_store(tmp.path()).expect("open zarr store");
+        let scan_number: i64 = 42;
+        let frame_number: i64 = 7;
+        let data: Array2<i32> = Array2::from_shape_fn((4, 5), |(r, c)| (r * 10 + c) as i32);
+
+        write_frame_raw(&store, scan_number, frame_number, &data).expect("write frame");
+
+        let raw_path = tmp
+            .path()
+            .join(scan_number.to_string())
+            .join(format!("{frame_number:05}"))
+            .join("raw");
+        assert!(raw_path.is_dir(), "expected raw array dir at {raw_path:?}");
+
+        let proc_path = tmp
+            .path()
+            .join(scan_number.to_string())
+            .join(format!("{frame_number:05}"))
+            .join("processed");
+        assert!(
+            !proc_path.exists(),
+            "expected no processed array at {proc_path:?}"
+        );
+    }
 }

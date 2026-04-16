@@ -249,9 +249,9 @@ diesel::table! {
     /// header cards are stored in `frame_header_values`.
     ///
     /// Zarr retrieval: the monolithic beamtime archive is `beamtimes.zarr_path`.
-    /// Within the archive, images are at
-    /// `/<scan_number>/<frame_number>/raw` and
-    /// `/<scan_number>/<frame_number>/processed`.
+    /// Within the archive, raw images are at
+    /// `/<scan_number>/<frame_number>/raw`. Processed arrays are produced by
+    /// downstream processing, not ingest.
     frames (id) {
         id -> Integer,
         scan_id -> Integer,

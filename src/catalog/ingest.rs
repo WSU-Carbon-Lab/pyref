@@ -21,6 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use diesel::prelude::*;
 use diesel::OptionalExtension;
@@ -42,6 +43,14 @@ use super::layout::BeamtimeLayout;
 use super::parallelism::IngestParallelism;
 use super::zarr_write::{open_zarr_store, write_frame_raw};
 use super::{db, paths, CatalogError, Result};
+
+struct IngestContext<'a> {
+    beamtime_id: i32,
+    progress: Option<&'a IngestProgressSink>,
+    cancel: Option<&'a AtomicBool>,
+    pool: &'a rayon::ThreadPool,
+    scan_total_map: HashMap<i32, u32>,
+}
 
 const MAX_BATCH_ROWS: usize = 1000;
 
@@ -134,6 +143,358 @@ fn beamtime_date_label(beamtime_dir: &Path) -> String {
         .and_then(|n| n.to_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "unknown".into())
+}
+
+fn run_headers_phase(
+    ctx: &IngestContext<'_>,
+    paths: &[PathBuf],
+    header_items: &[String],
+) -> Result<Vec<BtIngestRow>> {
+    if let Some(sink) = ctx.progress {
+        sink.emit(IngestProgress::Phase {
+            phase: IngestPhase::Headers,
+        });
+    }
+    let mut rows: Vec<BtIngestRow> = ctx
+        .pool
+        .install(|| {
+            paths
+                .par_iter()
+                .map(|p| read_fits_headers_only_row(p.clone(), header_items))
+                .collect::<std::result::Result<Vec<_>, _>>()
+        })
+        .map_err(CatalogError::FitsReadFailed)?;
+    rows.sort_by(|a, b| {
+        (a.scan_number, a.frame_number, a.file_path.as_str()).cmp(&(
+            b.scan_number,
+            b.frame_number,
+            b.file_path.as_str(),
+        ))
+    });
+    Ok(rows)
+}
+
+fn run_catalog_phase(
+    ctx: &IngestContext<'_>,
+    conn: &mut diesel::SqliteConnection,
+    rows: &[BtIngestRow],
+) -> Result<()> {
+    if let Some(sink) = ctx.progress {
+        sink.emit(IngestProgress::Phase {
+            phase: IngestPhase::Catalog,
+        });
+    }
+
+    let mut sample_cache: HashMap<String, i32> = HashMap::new();
+    let mut scan_cache: HashMap<i32, i32> = HashMap::new();
+
+    let unique_samples: HashSet<String> = rows
+        .iter()
+        .map(|r| {
+            let n = r.sample_name.trim();
+            if n.is_empty() {
+                "_".to_string()
+            } else {
+                n.to_string()
+            }
+        })
+        .collect();
+
+    conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        for name in &unique_samples {
+            if ctx
+                .cancel
+                .map(|c| c.load(Ordering::Relaxed))
+                .unwrap_or(false)
+            {
+                return Err(diesel::result::Error::RollbackTransaction);
+            }
+            let sid: i32 = diesel::insert_into(samples::table)
+                .values((
+                    samples::beamtime_id.eq(ctx.beamtime_id),
+                    samples::name.eq(name.as_str()),
+                    samples::representative_x.eq(0.0_f64),
+                    samples::representative_y.eq(0.0_f64),
+                    samples::representative_z.eq(0.0_f64),
+                ))
+                .returning(samples::id)
+                .get_result(conn)?;
+            sample_cache.insert(name.clone(), sid);
+        }
+        Ok(())
+    })
+    .map_err(CatalogError::Diesel)?;
+
+    let mut scan_first_sample: HashMap<i32, String> = HashMap::new();
+    for r in rows {
+        let sn = r.scan_number as i32;
+        let sk = if r.sample_name.trim().is_empty() {
+            "_".to_string()
+        } else {
+            r.sample_name.clone()
+        };
+        scan_first_sample.entry(sn).or_insert(sk);
+    }
+
+    let batches = plan_catalog_batches(rows);
+    let global_total = rows.len() as u32;
+    let mut catalog_scan_done: HashMap<i32, u32> = HashMap::new();
+
+    for (start, end) in batches {
+        conn.transaction::<(), diesel::result::Error, _>(|conn| {
+            let mut batch_scans_seen: HashSet<i32> = HashSet::new();
+            for row in &rows[start..end] {
+                let sn = row.scan_number as i32;
+                if !batch_scans_seen.insert(sn) {
+                    continue;
+                }
+                if scan_cache.contains_key(&sn) {
+                    continue;
+                }
+                let sk = scan_first_sample
+                    .get(&sn)
+                    .cloned()
+                    .unwrap_or_else(|| "_".to_string());
+                let rep_sample = *sample_cache
+                    .get(&sk)
+                    .ok_or(diesel::result::Error::NotFound)?;
+                let scid: i32 = diesel::insert_into(scans::table)
+                    .values((
+                        scans::beamtime_id.eq(ctx.beamtime_id),
+                        scans::sample_id.eq(rep_sample),
+                        scans::scan_number.eq(sn),
+                        scans::scan_type.eq("fixed_energy"),
+                        scans::started_at.eq(None::<String>),
+                        scans::ended_at.eq(None::<String>),
+                    ))
+                    .returning(scans::id)
+                    .get_result(conn)?;
+                scan_cache.insert(sn, scid);
+            }
+
+            for (local_idx, row) in rows[start..end].iter().enumerate() {
+                if ctx
+                    .cancel
+                    .map(|c| c.load(Ordering::Relaxed))
+                    .unwrap_or(false)
+                {
+                    return Err(diesel::result::Error::RollbackTransaction);
+                }
+                let sample_key = if row.sample_name.trim().is_empty() {
+                    "_".to_string()
+                } else {
+                    row.sample_name.clone()
+                };
+                let sample_id = *sample_cache
+                    .get(&sample_key)
+                    .ok_or(diesel::result::Error::NotFound)?;
+
+                let scan_no = row.scan_number as i32;
+                let scan_id = *scan_cache
+                    .get(&scan_no)
+                    .ok_or(diesel::result::Error::NotFound)?;
+
+                let parse_flag = if row.scan_number == 0 || row.frame_number == 0 {
+                    Some("parse_failure".to_string())
+                } else {
+                    None
+                };
+
+                let file_id: i32 = diesel::insert_into(files::table)
+                    .values((
+                        files::beamtime_id.eq(ctx.beamtime_id),
+                        files::sample_id.eq(sample_id),
+                        files::scan_number.eq(scan_no),
+                        files::frame_number.eq(row.frame_number as i32),
+                        files::nas_uri.eq(row.file_path.as_str()),
+                        files::filename.eq(Path::new(&row.file_path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")),
+                        files::parse_flag.eq(parse_flag.as_deref()),
+                        files::data_offset.eq(row.data_offset),
+                        files::naxis1.eq(row.naxis1 as i32),
+                        files::naxis2.eq(row.naxis2 as i32),
+                        files::bitpix.eq(row.bitpix as i32),
+                        files::bzero.eq(row.bzero),
+                    ))
+                    .returning(files::id)
+                    .get_result(conn)?;
+
+                if let Some(tag_slug) = row.tag.as_ref().filter(|t| !t.is_empty()) {
+                    let tid: i32 = match tags::table
+                        .filter(tags::slug.eq(tag_slug.as_str()))
+                        .select(tags::id)
+                        .first(conn)
+                        .optional()?
+                    {
+                        Some(id) => id,
+                        None => diesel::insert_into(tags::table)
+                            .values(tags::slug.eq(tag_slug.as_str()))
+                            .returning(tags::id)
+                            .get_result(conn)?,
+                    };
+                    let ft_exists: Option<i32> = file_tags::table
+                        .filter(file_tags::file_id.eq(file_id))
+                        .filter(file_tags::tag_id.eq(tid))
+                        .select(file_tags::id)
+                        .first(conn)
+                        .optional()?;
+                    if ft_exists.is_none() {
+                        diesel::insert_into(file_tags::table)
+                            .values((file_tags::file_id.eq(file_id), file_tags::tag_id.eq(tid)))
+                            .execute(conn)?;
+                    }
+                }
+
+                let sx = row.sample_x.unwrap_or(0.0);
+                let sy = row.sample_y.unwrap_or(0.0);
+                let sz = row.sample_z.unwrap_or(0.0);
+                let st = row.sample_theta.unwrap_or(0.0);
+                let ccd = row.ccd_theta.unwrap_or(0.0);
+                let epu = row.epu_polarization.unwrap_or(0.0);
+                let exp = row.exposure.unwrap_or(0.0);
+                let be = row.beamline_energy.unwrap_or(0.0);
+                let ring = row.ring_current.unwrap_or(0.0);
+                let ai3 = row.ai3_izero.unwrap_or(0.0);
+                let bcm = row.beam_current.unwrap_or(0.0);
+
+                diesel::insert_into(frames::table)
+                    .values((
+                        frames::scan_id.eq(scan_id),
+                        frames::file_id.eq(file_id),
+                        frames::frame_number.eq(row.frame_number as i32),
+                        frames::zarr_group_key.eq(scan_no),
+                        frames::zarr_frame_index.eq(row.frame_number as i32),
+                        frames::acquired_at.eq(row.date_iso.clone()),
+                        frames::sample_x.eq(sx),
+                        frames::sample_y.eq(sy),
+                        frames::sample_z.eq(sz),
+                        frames::sample_theta.eq(st),
+                        frames::ccd_theta.eq(ccd),
+                        frames::beamline_energy.eq(be),
+                        frames::epu_polarization.eq(epu),
+                        frames::exposure.eq(exp),
+                        frames::ring_current.eq(ring),
+                        frames::ai3_izero.eq(ai3),
+                        frames::beam_current.eq(bcm),
+                        frames::quality_flag.eq(None::<String>),
+                    ))
+                    .execute(conn)?;
+
+                if let Some(sink) = ctx.progress {
+                    let sn = row.scan_number as i32;
+                    let e = catalog_scan_done.entry(sn).or_insert(0);
+                    *e += 1;
+                    let sd = *e;
+                    let st = ctx.scan_total_map.get(&sn).copied().unwrap_or(0);
+                    let global_idx = (start + local_idx + 1) as u32;
+                    sink.emit(IngestProgress::CatalogRow {
+                        scan_number: sn,
+                        scan_done: sd,
+                        scan_total: st,
+                        global_done: global_idx,
+                        global_total,
+                    });
+                }
+            }
+            Ok(())
+        })
+        .map_err(CatalogError::Diesel)?;
+    }
+
+    Ok(())
+}
+
+fn run_zarr_phase(
+    ctx: &IngestContext<'_>,
+    rows: &[BtIngestRow],
+    zstore: &zarrs::storage::ReadableWritableListableStorage,
+) -> Result<()> {
+    if let Some(sink) = ctx.progress {
+        sink.emit(IngestProgress::Phase {
+            phase: IngestPhase::Zarr,
+        });
+    }
+
+    let n_workers = ctx.pool.current_num_threads();
+    let channel_cap = (n_workers.saturating_mul(2)).max(4);
+    let (tx, rx) = crossbeam_channel::bounded::<Result<(usize, Array2<i32>)>>(channel_cap);
+
+    let stop = AtomicBool::new(false);
+    let mut scan_done: HashMap<i32, u32> = HashMap::new();
+    let mut global_done: u32 = 0;
+    let global_total = rows.len() as u32;
+
+    std::thread::scope(|s| -> Result<()> {
+        let rows_ref: &[BtIngestRow] = rows;
+        let pool_ref: &rayon::ThreadPool = ctx.pool;
+        let cancel_ref = ctx.cancel;
+        let stop_ref = &stop;
+
+        let reader_handle = s.spawn(move || {
+            pool_ref.install(move || {
+                rows_ref
+                    .par_iter()
+                    .enumerate()
+                    .for_each_with(tx, |tx_c, (row_i, row)| {
+                        if stop_ref.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if cancel_ref.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
+                            return;
+                        }
+                        let item = read_image_i32(row).map(|img| (row_i, img));
+                        if tx_c.send(item).is_err() {
+                            stop_ref.store(true, Ordering::Relaxed);
+                        }
+                    });
+            });
+        });
+
+        let mut write_err: Option<CatalogError> = None;
+        for item in rx.iter() {
+            if write_err.is_some() {
+                continue;
+            }
+            let step: Result<()> = (|| {
+                let (row_i, img) = item?;
+                let row = &rows[row_i];
+                write_frame_raw(zstore, row.scan_number, row.frame_number, &img)
+                    .map_err(|e| CatalogError::Validation(e.to_string()))?;
+                drop(img);
+                let sn = row.scan_number as i32;
+                let entry = scan_done.entry(sn).or_insert(0);
+                *entry += 1;
+                let sd = *entry;
+                let st = ctx.scan_total_map.get(&sn).copied().unwrap_or(0);
+                global_done += 1;
+                if let Some(sink) = ctx.progress {
+                    sink.emit(IngestProgress::FileComplete {
+                        scan_number: sn,
+                        scan_done: sd,
+                        scan_total: st,
+                        global_done,
+                        global_total,
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(e) = step {
+                stop.store(true, Ordering::Relaxed);
+                write_err = Some(e);
+            }
+        }
+
+        reader_handle
+            .join()
+            .map_err(|_| CatalogError::Validation("ingest zarr reader thread panicked".into()))?;
+
+        match write_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    })
 }
 
 /// Ingests a beamtime directory into the global catalog and local zarr store.
@@ -260,7 +621,7 @@ fn ingest_beamtime_inner(
     incremental: bool,
     progress: Option<IngestProgressSink>,
     parallelism: IngestParallelism,
-    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    cancel: Option<std::sync::Arc<AtomicBool>>,
 ) -> Result<PathBuf> {
     let parallelism = IngestParallelism::from_options_or_env(
         parallelism.worker_threads,
@@ -272,6 +633,7 @@ fn ingest_beamtime_inner(
             beamtime_dir.display()
         )));
     }
+
     let db_path = paths::default_catalog_db_path()?;
     let nas_uri = paths::file_uri_for_path(beamtime_dir)?;
     let zarr_path = paths::beamtime_zarr_path(beamtime_dir)?;
@@ -326,9 +688,6 @@ fn ingest_beamtime_inner(
                 .map(|s| (s.scan_number, s.file_count as u32))
                 .collect(),
         });
-        sink.emit(IngestProgress::Phase {
-            phase: IngestPhase::Headers,
-        });
     }
 
     let n_workers = parallelism.resolve_worker_count()?;
@@ -336,21 +695,6 @@ fn ingest_beamtime_inner(
         .num_threads(n_workers)
         .build()
         .map_err(|e| CatalogError::Validation(format!("rayon thread pool: {e}")))?;
-    let mut rows: Vec<BtIngestRow> = pool
-        .install(|| {
-            paths_only
-                .par_iter()
-                .map(|p| read_fits_headers_only_row(p.clone(), header_items))
-                .collect::<std::result::Result<Vec<_>, _>>()
-        })
-        .map_err(CatalogError::FitsReadFailed)?;
-    rows.sort_by(|a, b| {
-        (a.scan_number, a.frame_number, a.file_path.as_str()).cmp(&(
-            b.scan_number,
-            b.frame_number,
-            b.file_path.as_str(),
-        ))
-    });
 
     let scan_total_map: HashMap<i32, u32> = layout_summary
         .scans
@@ -358,319 +702,23 @@ fn ingest_beamtime_inner(
         .map(|s| (s.scan_number, s.file_count as u32))
         .collect();
 
-    if let Some(ref sink) = progress {
-        sink.emit(IngestProgress::Phase {
-            phase: IngestPhase::Catalog,
-        });
-    }
+    let cancel_borrow: Option<&AtomicBool> = cancel.as_ref().map(|c| c.as_ref());
+
+    let ctx = IngestContext {
+        beamtime_id,
+        progress: progress.as_ref(),
+        cancel: cancel_borrow,
+        pool: &pool,
+        scan_total_map,
+    };
+
+    let rows = run_headers_phase(&ctx, &paths_only, header_items)?;
 
     let zstore =
         open_zarr_store(&zarr_path).map_err(|e| CatalogError::Validation(e.to_string()))?;
 
-    let mut sample_cache: HashMap<String, i32> = HashMap::new();
-    let mut scan_cache: HashMap<i32, i32> = HashMap::new();
-
-    let unique_samples: HashSet<String> = rows
-        .iter()
-        .map(|r| {
-            let n = r.sample_name.trim();
-            if n.is_empty() {
-                "_".to_string()
-            } else {
-                n.to_string()
-            }
-        })
-        .collect();
-
-    conn.transaction::<(), diesel::result::Error, _>(|conn| {
-        for name in &unique_samples {
-            if cancel
-                .as_ref()
-                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                .unwrap_or(false)
-            {
-                return Err(diesel::result::Error::RollbackTransaction);
-            }
-            let sid: i32 = diesel::insert_into(samples::table)
-                .values((
-                    samples::beamtime_id.eq(beamtime_id),
-                    samples::name.eq(name.as_str()),
-                    samples::representative_x.eq(0.0_f64),
-                    samples::representative_y.eq(0.0_f64),
-                    samples::representative_z.eq(0.0_f64),
-                ))
-                .returning(samples::id)
-                .get_result(conn)?;
-            sample_cache.insert(name.clone(), sid);
-        }
-        Ok(())
-    })
-    .map_err(CatalogError::Diesel)?;
-
-    let mut scan_first_sample: HashMap<i32, String> = HashMap::new();
-    for r in &rows {
-        let sn = r.scan_number as i32;
-        let sk = if r.sample_name.trim().is_empty() {
-            "_".to_string()
-        } else {
-            r.sample_name.clone()
-        };
-        scan_first_sample.entry(sn).or_insert(sk);
-    }
-
-    let batches = plan_catalog_batches(&rows);
-    let global_total = rows.len() as u32;
-    let mut catalog_scan_done: HashMap<i32, u32> = HashMap::new();
-
-    for (start, end) in batches {
-        conn.transaction::<(), diesel::result::Error, _>(|conn| {
-            let mut batch_scans_seen: HashSet<i32> = HashSet::new();
-            for row in &rows[start..end] {
-                let sn = row.scan_number as i32;
-                if !batch_scans_seen.insert(sn) {
-                    continue;
-                }
-                if scan_cache.contains_key(&sn) {
-                    continue;
-                }
-                let sk = scan_first_sample
-                    .get(&sn)
-                    .cloned()
-                    .unwrap_or_else(|| "_".to_string());
-                let rep_sample = *sample_cache
-                    .get(&sk)
-                    .ok_or(diesel::result::Error::NotFound)?;
-                let scid: i32 = diesel::insert_into(scans::table)
-                    .values((
-                        scans::beamtime_id.eq(beamtime_id),
-                        scans::sample_id.eq(rep_sample),
-                        scans::scan_number.eq(sn),
-                        scans::scan_type.eq("fixed_energy"),
-                        scans::started_at.eq(None::<String>),
-                        scans::ended_at.eq(None::<String>),
-                    ))
-                    .returning(scans::id)
-                    .get_result(conn)?;
-                scan_cache.insert(sn, scid);
-            }
-
-            for (local_idx, row) in rows[start..end].iter().enumerate() {
-                if cancel
-                    .as_ref()
-                    .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                    .unwrap_or(false)
-                {
-                    return Err(diesel::result::Error::RollbackTransaction);
-                }
-                let sample_key = if row.sample_name.trim().is_empty() {
-                    "_".to_string()
-                } else {
-                    row.sample_name.clone()
-                };
-                let sample_id = *sample_cache
-                    .get(&sample_key)
-                    .ok_or(diesel::result::Error::NotFound)?;
-
-                let scan_no = row.scan_number as i32;
-                let scan_id = *scan_cache
-                    .get(&scan_no)
-                    .ok_or(diesel::result::Error::NotFound)?;
-
-                let parse_flag = if row.scan_number == 0 || row.frame_number == 0 {
-                    Some("parse_failure".to_string())
-                } else {
-                    None
-                };
-
-                let file_id: i32 = diesel::insert_into(files::table)
-                    .values((
-                        files::beamtime_id.eq(beamtime_id),
-                        files::sample_id.eq(sample_id),
-                        files::scan_number.eq(scan_no),
-                        files::frame_number.eq(row.frame_number as i32),
-                        files::nas_uri.eq(row.file_path.as_str()),
-                        files::filename.eq(Path::new(&row.file_path)
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")),
-                        files::parse_flag.eq(parse_flag.as_deref()),
-                        files::data_offset.eq(row.data_offset),
-                        files::naxis1.eq(row.naxis1 as i32),
-                        files::naxis2.eq(row.naxis2 as i32),
-                        files::bitpix.eq(row.bitpix as i32),
-                        files::bzero.eq(row.bzero),
-                    ))
-                    .returning(files::id)
-                    .get_result(conn)?;
-
-                if let Some(tag_slug) = row.tag.as_ref().filter(|t| !t.is_empty()) {
-                    let tid: i32 = match tags::table
-                        .filter(tags::slug.eq(tag_slug.as_str()))
-                        .select(tags::id)
-                        .first(conn)
-                        .optional()?
-                    {
-                        Some(id) => id,
-                        None => diesel::insert_into(tags::table)
-                            .values(tags::slug.eq(tag_slug.as_str()))
-                            .returning(tags::id)
-                            .get_result(conn)?,
-                    };
-                    let ft_exists: Option<i32> = file_tags::table
-                        .filter(file_tags::file_id.eq(file_id))
-                        .filter(file_tags::tag_id.eq(tid))
-                        .select(file_tags::id)
-                        .first(conn)
-                        .optional()?;
-                    if ft_exists.is_none() {
-                        diesel::insert_into(file_tags::table)
-                            .values((file_tags::file_id.eq(file_id), file_tags::tag_id.eq(tid)))
-                            .execute(conn)?;
-                    }
-                }
-
-                let sx = row.sample_x.unwrap_or(0.0);
-                let sy = row.sample_y.unwrap_or(0.0);
-                let sz = row.sample_z.unwrap_or(0.0);
-                let st = row.sample_theta.unwrap_or(0.0);
-                let ccd = row.ccd_theta.unwrap_or(0.0);
-                let epu = row.epu_polarization.unwrap_or(0.0);
-                let exp = row.exposure.unwrap_or(0.0);
-                let be = row.beamline_energy.unwrap_or(0.0);
-                let ring = row.ring_current.unwrap_or(0.0);
-                let ai3 = row.ai3_izero.unwrap_or(0.0);
-                let bcm = row.beam_current.unwrap_or(0.0);
-
-                diesel::insert_into(frames::table)
-                    .values((
-                        frames::scan_id.eq(scan_id),
-                        frames::file_id.eq(file_id),
-                        frames::frame_number.eq(row.frame_number as i32),
-                        frames::zarr_group_key.eq(scan_no),
-                        frames::zarr_frame_index.eq(row.frame_number as i32),
-                        frames::acquired_at.eq(row.date_iso.clone()),
-                        frames::sample_x.eq(sx),
-                        frames::sample_y.eq(sy),
-                        frames::sample_z.eq(sz),
-                        frames::sample_theta.eq(st),
-                        frames::ccd_theta.eq(ccd),
-                        frames::beamline_energy.eq(be),
-                        frames::epu_polarization.eq(epu),
-                        frames::exposure.eq(exp),
-                        frames::ring_current.eq(ring),
-                        frames::ai3_izero.eq(ai3),
-                        frames::beam_current.eq(bcm),
-                        frames::quality_flag.eq(None::<String>),
-                    ))
-                    .execute(conn)?;
-
-                if let Some(ref sink) = progress {
-                    let sn = row.scan_number as i32;
-                    let e = catalog_scan_done.entry(sn).or_insert(0);
-                    *e += 1;
-                    let sd = *e;
-                    let st = scan_total_map.get(&sn).copied().unwrap_or(0);
-                    let global_idx = (start + local_idx + 1) as u32;
-                    sink.emit(IngestProgress::CatalogRow {
-                        scan_number: sn,
-                        scan_done: sd,
-                        scan_total: st,
-                        global_done: global_idx,
-                        global_total,
-                    });
-                }
-            }
-            Ok(())
-        })
-        .map_err(CatalogError::Diesel)?;
-    }
-
-    if let Some(ref sink) = progress {
-        sink.emit(IngestProgress::Phase {
-            phase: IngestPhase::Zarr,
-        });
-    }
-
-    let channel_cap = (n_workers.saturating_mul(2)).max(4);
-    let (tx, rx) = crossbeam_channel::bounded::<Result<(usize, Array2<i32>)>>(channel_cap);
-
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    let mut scan_done: HashMap<i32, u32> = HashMap::new();
-    let mut global_done: u32 = 0;
-    let global_total = rows.len() as u32;
-
-    std::thread::scope(|s| -> Result<()> {
-        let rows_ref: &[BtIngestRow] = &rows;
-        let pool_ref: &rayon::ThreadPool = &pool;
-        let cancel_ref = cancel.as_ref();
-        let stop_ref = &stop;
-
-        let reader_handle = s.spawn(move || {
-            pool_ref.install(move || {
-                rows_ref
-                    .par_iter()
-                    .enumerate()
-                    .for_each_with(tx, |tx_c, (row_i, row)| {
-                        if stop_ref.load(std::sync::atomic::Ordering::Relaxed) {
-                            return;
-                        }
-                        if cancel_ref
-                            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                            .unwrap_or(false)
-                        {
-                            return;
-                        }
-                        let item = read_image_i32(row).map(|img| (row_i, img));
-                        if tx_c.send(item).is_err() {
-                            stop_ref.store(true, std::sync::atomic::Ordering::Relaxed);
-                        }
-                    });
-            });
-        });
-
-        let mut write_err: Option<CatalogError> = None;
-        for item in rx.iter() {
-            if write_err.is_some() {
-                continue;
-            }
-            let step: Result<()> = (|| {
-                let (row_i, img) = item?;
-                let row = &rows[row_i];
-                write_frame_raw(&zstore, row.scan_number, row.frame_number, &img)
-                    .map_err(|e| CatalogError::Validation(e.to_string()))?;
-                drop(img);
-                let sn = row.scan_number as i32;
-                let entry = scan_done.entry(sn).or_insert(0);
-                *entry += 1;
-                let sd = *entry;
-                let st = scan_total_map.get(&sn).copied().unwrap_or(0);
-                global_done += 1;
-                if let Some(ref sink) = progress {
-                    sink.emit(IngestProgress::FileComplete {
-                        scan_number: sn,
-                        scan_done: sd,
-                        scan_total: st,
-                        global_done,
-                        global_total,
-                    });
-                }
-                Ok(())
-            })();
-            if let Err(e) = step {
-                stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                write_err = Some(e);
-            }
-        }
-
-        reader_handle
-            .join()
-            .map_err(|_| CatalogError::Validation("ingest zarr reader thread panicked".into()))?;
-
-        match write_err {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
-    })?;
+    run_catalog_phase(&ctx, &mut conn, &rows)?;
+    run_zarr_phase(&ctx, &rows, &zstore)?;
 
     let _ = incremental;
     Ok(db_path)

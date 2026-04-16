@@ -148,14 +148,6 @@ def _parse_args() -> argparse.Namespace:
         default=1024,
         help="NAXIS2 for each synthetic frame.",
     )
-    parser.add_argument(
-        "--use-default-paths",
-        action="store_true",
-        help=(
-            "Do not override PYREF_CATALOG_DB / PYREF_CACHE_ROOT "
-            "(writes into the real user catalog; not recommended for CI)."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -179,7 +171,7 @@ def main() -> None:
             args.width,
             args.height,
         )
-        with isolated_catalog_env(enabled=not args.use_default_paths):
+        with isolated_catalog_env():
             _catalog_path, profile = run_ingest_with_profile(beamtime)
 
     print(

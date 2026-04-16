@@ -350,7 +350,7 @@ fn ingest_beamtime_inner(
     conn.transaction::<(), diesel::result::Error, _>(|conn| {
         let mut catalog_scan_done: HashMap<i32, u32> = HashMap::new();
         for name in &unique_samples {
-            diesel::insert_into(samples::table)
+            let sid: i32 = diesel::insert_into(samples::table)
                 .values((
                     samples::beamtime_id.eq(beamtime_id),
                     samples::name.eq(name.as_str()),
@@ -358,12 +358,8 @@ fn ingest_beamtime_inner(
                     samples::representative_y.eq(0.0_f64),
                     samples::representative_z.eq(0.0_f64),
                 ))
-                .execute(conn)?;
-            let sid: i32 = samples::table
-                .filter(samples::beamtime_id.eq(beamtime_id))
-                .filter(samples::name.eq(name.as_str()))
-                .select(samples::id)
-                .first(conn)?;
+                .returning(samples::id)
+                .get_result(conn)?;
             sample_cache.insert(name.clone(), sid);
         }
 
@@ -386,7 +382,7 @@ fn ingest_beamtime_inner(
             let rep_sample = *sample_cache
                 .get(&sk)
                 .ok_or_else(|| diesel::result::Error::NotFound)?;
-            diesel::insert_into(scans::table)
+            let scid: i32 = diesel::insert_into(scans::table)
                 .values((
                     scans::beamtime_id.eq(beamtime_id),
                     scans::sample_id.eq(rep_sample),
@@ -395,12 +391,8 @@ fn ingest_beamtime_inner(
                     scans::started_at.eq(None::<String>),
                     scans::ended_at.eq(None::<String>),
                 ))
-                .execute(conn)?;
-            let scid: i32 = scans::table
-                .filter(scans::beamtime_id.eq(beamtime_id))
-                .filter(scans::scan_number.eq(*sn))
-                .select(scans::id)
-                .first(conn)?;
+                .returning(scans::id)
+                .get_result(conn)?;
             scan_cache.insert(*sn, scid);
         }
 
@@ -432,7 +424,7 @@ fn ingest_beamtime_inner(
                 None
             };
 
-            diesel::insert_into(files::table)
+            let file_id: i32 = diesel::insert_into(files::table)
                 .values((
                     files::beamtime_id.eq(beamtime_id),
                     files::sample_id.eq(sample_id),
@@ -450,13 +442,8 @@ fn ingest_beamtime_inner(
                     files::bitpix.eq(row.bitpix as i32),
                     files::bzero.eq(row.bzero),
                 ))
-                .execute(conn)?;
-
-            let file_id: i32 = files::table
-                .filter(files::beamtime_id.eq(beamtime_id))
-                .filter(files::nas_uri.eq(row.file_path.as_str()))
-                .select(files::id)
-                .first(conn)?;
+                .returning(files::id)
+                .get_result(conn)?;
 
             if let Some(tag_slug) = row.tag.as_ref().filter(|t| !t.is_empty()) {
                 let tid: i32 = match tags::table
@@ -466,15 +453,10 @@ fn ingest_beamtime_inner(
                     .optional()?
                 {
                     Some(id) => id,
-                    None => {
-                        diesel::insert_into(tags::table)
-                            .values(tags::slug.eq(tag_slug.as_str()))
-                            .execute(conn)?;
-                        tags::table
-                            .filter(tags::slug.eq(tag_slug.as_str()))
-                            .select(tags::id)
-                            .first(conn)?
-                    }
+                    None => diesel::insert_into(tags::table)
+                        .values(tags::slug.eq(tag_slug.as_str()))
+                        .returning(tags::id)
+                        .get_result(conn)?,
                 };
                 let ft_exists: Option<i32> = file_tags::table
                     .filter(file_tags::file_id.eq(file_id))
@@ -601,6 +583,9 @@ fn ingest_beamtime_inner(
 mod tests {
     use super::*;
     use crate::loader::read_fits_headers_only_row;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn fixture_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -654,5 +639,92 @@ mod tests {
             }
             other => panic!("expected CatalogError::Validation, got {other:?}"),
         }
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn count_rows(db_path: &std::path::Path) -> Result<(i64, i64, i64)> {
+        let mut conn = db::establish_connection(db_path)?;
+        let s: i64 = samples::table
+            .count()
+            .get_result(&mut conn)
+            .map_err(CatalogError::Diesel)?;
+        let sc: i64 = scans::table
+            .count()
+            .get_result(&mut conn)
+            .map_err(CatalogError::Diesel)?;
+        let f: i64 = files::table
+            .count()
+            .get_result(&mut conn)
+            .map_err(CatalogError::Diesel)?;
+        Ok((s, sc, f))
+    }
+
+    #[test]
+    fn ingest_is_idempotent_across_reingests() {
+        let fixture = fixture_path();
+        if !fixture.exists() {
+            panic!("required fixture missing: {}", fixture.display());
+        }
+        let tmp = tempfile::tempdir().expect("create tempdir for PYREF_HOME");
+        let beamtime_dir = tmp.path().join("2024-01-01");
+        let ccd_dir = beamtime_dir.join("CCD");
+        std::fs::create_dir_all(&ccd_dir).expect("create CCD dir");
+        std::fs::copy(&fixture, ccd_dir.join("minimal.fits")).expect("copy fixture");
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _home = EnvGuard::set("PYREF_HOME", tmp.path());
+        let _db = EnvGuard::unset("PYREF_CATALOG_DB");
+        let _cache = EnvGuard::unset("PYREF_CACHE_ROOT");
+
+        let header_items: Vec<String> = DEFAULT_INGEST_HEADER_ITEMS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+
+        let db_path1 = ingest_beamtime(&beamtime_dir, &header_items, false, None)
+            .expect("first ingest run should succeed");
+        let counts_1 = count_rows(&db_path1).expect("count rows after run 1");
+
+        let db_path2 = ingest_beamtime(&beamtime_dir, &header_items, false, None)
+            .expect("second ingest run should succeed");
+        let counts_2 = count_rows(&db_path2).expect("count rows after run 2");
+
+        assert_eq!(db_path1, db_path2, "catalog path should be deterministic");
+        assert_eq!(
+            counts_1,
+            (1, 1, 1),
+            "first run should produce exactly 1 sample/scan/file, got {counts_1:?}"
+        );
+        assert_eq!(
+            counts_1, counts_2,
+            "reingest must be exactly idempotent (run1={counts_1:?}, run2={counts_2:?})"
+        );
     }
 }

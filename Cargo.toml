@@ -19,7 +19,7 @@ path = "src/bin/browser.rs"
 required-features = ["tui"]
 
 [features]
-default = ["bindings", "catalog", "parallel_ingest"]
+default = ["bindings", "catalog", "parallel_ingest", "watch"]
 bindings = ["dep:pyo3", "dep:pyo3-polars", "dep:numpy"]
 extension-module = ["bindings", "pyo3/extension-module", "pyo3/generate-import-lib"]
 catalog = [

@@ -60,10 +60,7 @@ pub const SYNTHETIC_SAMPLE_NAME: &str = "synth";
 /// Encodes a pixel value from scan/frame/row/column indices so callers can
 /// assert round-trips without storing a separate reference image.
 pub fn synthetic_pixel_value(scan_idx: usize, frame_idx: usize, row: usize, col: usize) -> i16 {
-    let base = (scan_idx as i64) * 37
-        + (frame_idx as i64) * 7
-        + (row as i64) * 3
-        + (col as i64);
+    let base = (scan_idx as i64) * 37 + (frame_idx as i64) * 7 + (row as i64) * 3 + (col as i64);
     (base.rem_euclid(1_024)) as i16
 }
 

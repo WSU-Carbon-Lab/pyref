@@ -17,7 +17,7 @@ use diesel::dsl::count_star;
 use diesel::prelude::*;
 use pyref::catalog::{
     ingest_beamtime, ingest_beamtime_with_progress_sink, open_catalog_db, IngestParallelism,
-    IngestProgress, IngestProgressSink,
+    IngestProgress, IngestProgressSink, IngestSelection,
 };
 use pyref::schema::{files, frames, scans};
 
@@ -88,7 +88,14 @@ fn synthetic_beamtime_ingests_with_expected_row_counts() {
     ]);
 
     let items = header_items();
-    let returned = ingest_beamtime(&beamtime.root, &items, false, None).expect("ingest_beamtime");
+    let returned = ingest_beamtime(
+        &beamtime.root,
+        &items,
+        false,
+        None,
+        IngestSelection::default(),
+    )
+    .expect("ingest_beamtime");
     assert_eq!(
         returned, catalog_db,
         "ingest should return the PYREF_CATALOG_DB path"
@@ -160,6 +167,7 @@ fn synthetic_beamtime_streams_progress_incrementally() {
         false,
         Some(progress),
         IngestParallelism::default(),
+        IngestSelection::default(),
     )
     .expect("ingest_beamtime_with_progress_sink");
 
@@ -197,4 +205,97 @@ fn synthetic_beamtime_streams_progress_incrementally() {
         "catalog_row events should precede the first file_complete event \
          (got catalog_row at {first_catalog_idx} and file_complete at {first_file_idx})",
     );
+}
+
+#[test]
+fn synthetic_beamtime_max_scans_limits_rows() {
+    const SCANS: usize = 10;
+    const FRAMES: usize = 10;
+    const MAX_SCANS: u32 = 2;
+    let expected_files: i64 = (MAX_SCANS as usize * FRAMES) as i64;
+
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let layout = SyntheticLayout::uniform(SCANS, FRAMES, 16, 16);
+    let beamtime = build_synthetic_beamtime(layout, tmp.path()).expect("build synthetic beamtime");
+
+    let catalog_db = tmp.path().join("catalog.db");
+    let cache_root = tmp.path().join("cache");
+    let _env = EnvGuard::set(&[
+        ("PYREF_CATALOG_DB", catalog_db.display().to_string()),
+        ("PYREF_CACHE_ROOT", cache_root.display().to_string()),
+    ]);
+
+    let items = header_items();
+    ingest_beamtime(
+        &beamtime.root,
+        &items,
+        false,
+        None,
+        IngestSelection {
+            max_scans: Some(MAX_SCANS),
+            scan_numbers: None,
+        },
+    )
+    .expect("ingest_beamtime max_scans");
+
+    let mut conn = open_catalog_db(&catalog_db).expect("open catalog");
+    let files_count: i64 = files::table
+        .select(count_star())
+        .first(&mut conn)
+        .expect("count files");
+    let scans_count: i64 = scans::table
+        .select(count_star())
+        .first(&mut conn)
+        .expect("count scans");
+
+    assert_eq!(files_count, expected_files, "files row count");
+    assert_eq!(scans_count, MAX_SCANS as i64, "scans row count");
+}
+
+#[test]
+fn synthetic_beamtime_scan_numbers_subset() {
+    const SCANS: usize = 4;
+    const FRAMES: usize = 4;
+    let expected_files: i64 = (2 * FRAMES) as i64;
+
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let layout = SyntheticLayout::uniform(SCANS, FRAMES, 16, 16);
+    let beamtime = build_synthetic_beamtime(layout, tmp.path()).expect("build synthetic beamtime");
+
+    let catalog_db = tmp.path().join("catalog.db");
+    let cache_root = tmp.path().join("cache");
+    let _env = EnvGuard::set(&[
+        ("PYREF_CATALOG_DB", catalog_db.display().to_string()),
+        ("PYREF_CACHE_ROOT", cache_root.display().to_string()),
+    ]);
+
+    let items = header_items();
+    ingest_beamtime(
+        &beamtime.root,
+        &items,
+        false,
+        None,
+        IngestSelection {
+            max_scans: None,
+            scan_numbers: Some(vec![1, 3]),
+        },
+    )
+    .expect("ingest_beamtime scan_numbers");
+
+    let mut conn = open_catalog_db(&catalog_db).expect("open catalog");
+    let files_count: i64 = files::table
+        .select(count_star())
+        .first(&mut conn)
+        .expect("count files");
+    let scans_count: i64 = scans::table
+        .select(count_star())
+        .first(&mut conn)
+        .expect("count scans");
+
+    assert_eq!(files_count, expected_files, "files row count");
+    assert_eq!(scans_count, 2_i64, "scans row count");
 }

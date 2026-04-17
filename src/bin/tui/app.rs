@@ -3379,6 +3379,7 @@ impl App {
                 true, // incremental
                 Some(progress_tx),
                 parallelism,
+                pyref::catalog::IngestSelection::default(),
                 Some(cancel_clone),
             );
             let _ = done_tx.send(result.map(|_| ()).map_err(|e| e.to_string()));

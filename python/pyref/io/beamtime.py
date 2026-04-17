@@ -38,13 +38,71 @@ def _rich_console_for_progress():
     return Console()
 
 
-def _ingest_beamtime_rich(
-    beamtime_path: Path,
-    header_items: list[str] | None,
+def _filter_ingest_layout_for_progress(
+    layout: dict[str, Any],
     *,
-    worker_threads: int | None,
-    resource_fraction: float | None,
+    max_scans: int | None,
+    scan_numbers: list[int] | None,
+) -> dict[str, Any]:
+    scans_raw = list(layout.get("scans") or [])
+    if scan_numbers is not None:
+        want = list(scan_numbers)
+        by_sn = {int(s["scan_number"]): s for s in scans_raw}
+        scans = [by_sn[n] for n in want if n in by_sn]
+        total_files = sum(int(s["files"]) for s in scans)
+        return {"scans": scans, "total_files": total_files}
+    if max_scans is not None:
+        ordered = sorted(scans_raw, key=lambda s: int(s["scan_number"]))
+        scans = ordered[: int(max_scans)]
+        total_files = sum(int(s["files"]) for s in scans)
+        return {"scans": scans, "total_files": total_files}
+    return dict(layout)
+
+
+def ingest_beamtime_with_rich_progress(
+    beamtime_path: FilePath,
+    header_items: list[str] | None = None,
+    *,
+    worker_threads: int | None = None,
+    resource_fraction: float | None = None,
+    max_scans: int | None = None,
+    scan_numbers: list[int] | None = None,
 ) -> Path:
+    """
+    Ingest a beamtime into the global catalog with a Rich progress display.
+
+    Wraps :func:`pyref.io.readers.ingest_beamtime` with a pre-built Rich
+    :class:`rich.progress.Progress` display sized from
+    :func:`pyref.io.readers.beamtime_ingest_layout`: one task per scan plus a main
+    ``ingest`` task. Every task total is ``2 * file_count`` so bars advance on each
+    ``catalog_row`` (SQLite insert) and each ``file_complete`` (zarr write). The main
+    task description updates as phases transition (``headers`` -> ``catalog`` ->
+    ``zarr``). The progress display is ``transient=True`` and clears after completion.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Root directory of the beamtime (ALS layout with ``CCD`` or ``Axis Photonique``).
+    header_items : list of str, optional
+        FITS header keys to capture; defaults to
+        :data:`pyref.io.readers.DEFAULT_HEADER_KEYS` when omitted.
+    worker_threads : int, optional
+        Parallel FITS reader worker count. Mutually exclusive with
+        ``resource_fraction``.
+    resource_fraction : float, optional
+        Fraction of :func:`os.cpu_count` used for reader workers, in ``(0, 1]``.
+        Mutually exclusive with ``worker_threads``.
+    max_scans : int, optional
+        Ingest only the first ``max_scans`` scan groups (ascending scan number).
+        Mutually exclusive with ``scan_numbers``.
+    scan_numbers : list of int, optional
+        Ingest only these scan numbers. Mutually exclusive with ``max_scans``.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute path to the global ``catalog.db`` written by ingest.
+    """
     from rich.progress import (
         BarColumn,
         MofNCompleteColumn,
@@ -56,7 +114,13 @@ def _ingest_beamtime_rich(
         TimeRemainingColumn,
     )
 
-    layout = beamtime_ingest_layout(beamtime_path)
+    bt = Path(beamtime_path).resolve()
+    layout = beamtime_ingest_layout(bt)
+    layout = _filter_ingest_layout_for_progress(
+        layout,
+        max_scans=max_scans,
+        scan_numbers=scan_numbers,
+    )
     scans = layout.get("scans") or []
     total_files = int(layout["total_files"])
     console = _rich_console_for_progress()
@@ -113,12 +177,14 @@ def _ingest_beamtime_rich(
                 progress.update(tid, advance=1)
 
         return ingest_beamtime(
-            beamtime_path,
+            bt,
             header_items,
             incremental=True,
             worker_threads=worker_threads,
             resource_fraction=resource_fraction,
             progress_callback=on_progress,
+            max_scans=max_scans,
+            scan_numbers=scan_numbers,
         )
 
 
@@ -381,7 +447,7 @@ def read_beamtime(
                 progress_callback=progress_callback,
             )
         elif show_progress:
-            _ingest_beamtime_rich(
+            ingest_beamtime_with_rich_progress(
                 bt,
                 header_items,
                 worker_threads=worker_threads,

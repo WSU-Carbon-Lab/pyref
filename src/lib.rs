@@ -48,10 +48,11 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     use crate::catalog::{
-        beamtime_ingest_layout, classify_scan_type, get_overrides,
+        beamtime_ingest_layout, catalog_file_count, classify_scan_type, get_overrides,
         ingest_beamtime_with_progress_sink, list_beamtime_entries_v2, list_beamtimes_from_catalog,
         paths, scan_from_catalog, scan_from_catalog_for_beamtime, set_override, CatalogFilter,
-        IngestParallelism, IngestProgress, IngestProgressSink, ReflectivityScanType,
+        IngestParallelism, IngestProgress, IngestProgressSink, IngestSelection,
+        ReflectivityScanType,
     };
 
     #[global_allocator]
@@ -350,6 +351,43 @@ mod extension {
     }
 
     #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_pyref_data_dir")]
+    pub fn py_pyref_data_dir() -> PyResult<String> {
+        match paths::pyref_data_dir() {
+            Ok(p) => Ok(p.to_string_lossy().to_string()),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_catalog_file_count")]
+    #[pyo3(
+        signature = (db_path=None, beamtime_path=None),
+        text_signature = "(db_path=None, beamtime_path=None)"
+    )]
+    pub fn py_catalog_file_count(
+        db_path: Option<&str>,
+        beamtime_path: Option<&str>,
+    ) -> PyResult<u32> {
+        let db = match db_path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => paths::default_catalog_db_path()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?,
+        };
+        let beam = beamtime_path.map(std::path::Path::new);
+        match catalog_file_count(&db, beam) {
+            Ok(n) => Ok(n),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
     fn ingest_progress_to_pydict<'py>(
         py: Python<'py>,
         ev: &IngestProgress,
@@ -432,9 +470,10 @@ mod extension {
     #[cfg(feature = "catalog")]
     #[pyfunction]
     #[pyo3(name = "py_ingest_beamtime")]
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(
-        signature = (beamtime_path, header_items, incremental=true, worker_threads=None, resource_fraction=None, progress_callback=None),
-        text_signature = "(beamtime_path, header_items, incremental=True, worker_threads=None, resource_fraction=None, progress_callback=None)"
+        signature = (beamtime_path, header_items, incremental=true, worker_threads=None, resource_fraction=None, progress_callback=None, max_scans=None, scan_numbers=None),
+        text_signature = "(beamtime_path, header_items, incremental=True, worker_threads=None, resource_fraction=None, progress_callback=None, max_scans=None, scan_numbers=None)"
     )]
     pub fn py_ingest_beamtime(
         py: Python<'_>,
@@ -444,11 +483,17 @@ mod extension {
         worker_threads: Option<usize>,
         resource_fraction: Option<f64>,
         progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
+        max_scans: Option<u32>,
+        scan_numbers: Option<Vec<i32>>,
     ) -> PyResult<String> {
         let path = std::path::Path::new(beamtime_path);
         let parallelism = IngestParallelism {
             worker_threads,
             resource_fraction,
+        };
+        let selection = IngestSelection {
+            max_scans,
+            scan_numbers,
         };
         let progress = progress_callback.map(|cb| {
             IngestProgressSink::from_callback(move |ev| {
@@ -467,6 +512,7 @@ mod extension {
                 incremental,
                 progress,
                 parallelism,
+                selection,
             )
         });
         match result {
@@ -652,6 +698,61 @@ mod extension {
         ))
     }
 
+    #[cfg(all(feature = "catalog", feature = "watch"))]
+    #[pyclass(name = "CatalogWatcherCancel")]
+    pub struct CatalogWatcherCancel {
+        inner: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[cfg(all(feature = "catalog", feature = "watch"))]
+    #[pymethods]
+    impl CatalogWatcherCancel {
+        #[new]
+        fn new() -> Self {
+            Self {
+                inner: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }
+        }
+
+        fn cancel(&self) {
+            self.inner.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(all(feature = "catalog", feature = "watch"))]
+    #[pyfunction]
+    #[pyo3(name = "py_run_catalog_watcher_blocking")]
+    #[pyo3(
+        signature = (beamtime_path, header_items, debounce_ms, subpaths, cancel),
+        text_signature = "(beamtime_path, header_items, debounce_ms, subpaths, cancel)"
+    )]
+    pub fn py_run_catalog_watcher_blocking(
+        py: Python<'_>,
+        beamtime_path: &str,
+        header_items: Vec<String>,
+        debounce_ms: u64,
+        subpaths: Vec<String>,
+        cancel: PyRef<CatalogWatcherCancel>,
+    ) -> PyResult<()> {
+        use std::path::PathBuf;
+        let flag = std::sync::Arc::clone(&cancel.inner);
+        let sub: Vec<PathBuf> = subpaths.into_iter().map(PathBuf::from).collect();
+        let path = std::path::Path::new(beamtime_path).to_path_buf();
+        py.allow_threads(|| {
+            crate::catalog::run_catalog_watcher_blocking(
+                &path,
+                &header_items,
+                debounce_ms,
+                &sub,
+                flag,
+            )
+        })
+        .map_err(|e: crate::catalog::CatalogError| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        Ok(())
+    }
+
     #[pymodule]
     #[pyo3(name = "pyref")]
     pub fn pyref(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -672,6 +773,8 @@ mod extension {
         #[cfg(feature = "catalog")]
         {
             m.add_function(pyo3::wrap_pyfunction!(py_default_catalog_db_path, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_pyref_data_dir, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_catalog_file_count, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_beamtime_ingest_layout, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_ingest_beamtime, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_scan_from_catalog, m)?)?;
@@ -684,6 +787,11 @@ mod extension {
             m.add_function(pyo3::wrap_pyfunction!(py_get_overrides, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_set_override, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_classify_scan_type, m)?)?;
+            #[cfg(feature = "watch")]
+            {
+                m.add_class::<CatalogWatcherCancel>()?;
+                m.add_function(pyo3::wrap_pyfunction!(py_run_catalog_watcher_blocking, m)?)?;
+            }
         }
         Ok(())
     }

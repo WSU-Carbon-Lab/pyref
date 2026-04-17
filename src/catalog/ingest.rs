@@ -43,6 +43,70 @@ use super::parallelism::IngestParallelism;
 use super::zarr_write::{open_zarr_store, write_frame_raw};
 use super::{db, paths, CatalogError, Result};
 
+/// Optional subset of scans to ingest (disk order is ascending scan number; explicit
+/// [`scan_numbers`](Self::scan_numbers) preserves caller order).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IngestSelection {
+    pub max_scans: Option<u32>,
+    pub scan_numbers: Option<Vec<i32>>,
+}
+
+fn filter_paths_by_selection(
+    paths_only: Vec<PathBuf>,
+    selection: &IngestSelection,
+) -> Result<(Vec<PathBuf>, BeamtimeIngestLayout)> {
+    let (_, scan_groups) = layout_and_groups_from_paths(&paths_only);
+    if selection.max_scans.is_some() && selection.scan_numbers.is_some() {
+        return Err(CatalogError::Validation(
+            "ingest selection: use only one of max_scans or scan_numbers".into(),
+        ));
+    }
+    let selected_groups: Vec<(i32, Vec<PathBuf>)> = if let Some(ref wanted) = selection.scan_numbers
+    {
+        if wanted.is_empty() {
+            return Err(CatalogError::Validation(
+                "scan_numbers must not be empty when set".into(),
+            ));
+        }
+        let map: HashMap<i32, Vec<PathBuf>> = scan_groups.iter().cloned().collect();
+        let mut out = Vec::with_capacity(wanted.len());
+        for &sn in wanted {
+            match map.get(&sn) {
+                Some(paths) => out.push((sn, paths.clone())),
+                None => {
+                    return Err(CatalogError::Validation(format!(
+                        "scan_number {sn} not found under beamtime"
+                    )));
+                }
+            }
+        }
+        out
+    } else if let Some(n) = selection.max_scans {
+        if n == 0 {
+            return Err(CatalogError::Validation(
+                "max_scans must be at least 1 when set".into(),
+            ));
+        }
+        scan_groups.into_iter().take(n as usize).collect()
+    } else {
+        scan_groups
+    };
+
+    let filtered_paths: Vec<PathBuf> = selected_groups
+        .iter()
+        .flat_map(|(_, ps)| ps.iter().cloned())
+        .collect();
+
+    if filtered_paths.is_empty() {
+        return Err(CatalogError::Validation(
+            "ingest selection produced no FITS paths".into(),
+        ));
+    }
+
+    let (layout, _) = layout_and_groups_from_paths(&filtered_paths);
+    Ok((filtered_paths, layout))
+}
+
 /// Shared per-ingest state passed through the three phase functions.
 ///
 /// Borrows caller-owned `progress`, `cancel`, and `pool`. Owns the per-scan
@@ -553,6 +617,7 @@ pub fn ingest_beamtime(
     header_items: &[String],
     incremental: bool,
     progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
+    selection: IngestSelection,
 ) -> Result<PathBuf> {
     let progress = progress_tx.map(IngestProgressSink::from_channel);
     ingest_beamtime_inner(
@@ -561,6 +626,7 @@ pub fn ingest_beamtime(
         incremental,
         progress,
         IngestParallelism::default(),
+        selection,
         None,
     )
 }
@@ -572,6 +638,7 @@ pub fn ingest_beamtime_parallel(
     incremental: bool,
     progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
     parallelism: IngestParallelism,
+    selection: IngestSelection,
 ) -> Result<PathBuf> {
     let progress = progress_tx.map(IngestProgressSink::from_channel);
     ingest_beamtime_inner(
@@ -580,6 +647,7 @@ pub fn ingest_beamtime_parallel(
         incremental,
         progress,
         parallelism,
+        selection,
         None,
     )
 }
@@ -592,6 +660,7 @@ pub fn ingest_beamtime_with_progress_sink(
     incremental: bool,
     progress: Option<IngestProgressSink>,
     parallelism: IngestParallelism,
+    selection: IngestSelection,
 ) -> Result<PathBuf> {
     ingest_beamtime_inner(
         beamtime_dir,
@@ -599,11 +668,13 @@ pub fn ingest_beamtime_with_progress_sink(
         incremental,
         progress,
         parallelism,
+        selection,
         None,
     )
 }
 
 /// Ingest with optional data-root / experimentalist context (accepted for API compatibility).
+#[allow(clippy::too_many_arguments)]
 pub fn ingest_beamtime_with_context(
     beamtime_dir: &Path,
     _data_root: Option<&Path>,
@@ -612,6 +683,7 @@ pub fn ingest_beamtime_with_context(
     incremental: bool,
     progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
     parallelism: IngestParallelism,
+    selection: IngestSelection,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
     if cancel
@@ -628,11 +700,13 @@ pub fn ingest_beamtime_with_context(
         incremental,
         progress,
         parallelism,
+        selection,
         cancel,
     )
 }
 
 #[cfg(feature = "parallel_ingest")]
+#[allow(clippy::too_many_arguments)]
 pub fn ingest_beamtime_pipelined_with_context(
     beamtime_dir: &Path,
     data_root: Option<&Path>,
@@ -641,6 +715,7 @@ pub fn ingest_beamtime_pipelined_with_context(
     incremental: bool,
     progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
     parallelism: IngestParallelism,
+    selection: IngestSelection,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<PathBuf> {
     ingest_beamtime_with_context(
@@ -651,6 +726,7 @@ pub fn ingest_beamtime_pipelined_with_context(
         incremental,
         progress_tx,
         parallelism,
+        selection,
         cancel,
     )
 }
@@ -662,7 +738,13 @@ pub fn ingest_beamtime_pipelined(
     incremental: bool,
     progress_tx: Option<std::sync::mpsc::Sender<(u32, u32)>>,
 ) -> Result<PathBuf> {
-    ingest_beamtime(beamtime_dir, header_items, incremental, progress_tx)
+    ingest_beamtime(
+        beamtime_dir,
+        header_items,
+        incremental,
+        progress_tx,
+        IngestSelection::default(),
+    )
 }
 
 fn ingest_beamtime_inner(
@@ -671,6 +753,7 @@ fn ingest_beamtime_inner(
     incremental: bool,
     progress: Option<IngestProgressSink>,
     parallelism: IngestParallelism,
+    selection: IngestSelection,
     cancel: Option<std::sync::Arc<AtomicBool>>,
 ) -> Result<PathBuf> {
     let parallelism = IngestParallelism::from_options_or_env(
@@ -727,7 +810,7 @@ fn ingest_beamtime_inner(
     }
 
     let paths_only: Vec<PathBuf> = discovered.iter().map(|(p, _)| p.clone()).collect();
-    let (layout_summary, _scan_groups) = layout_and_groups_from_paths(&paths_only);
+    let (paths_only, layout_summary) = filter_paths_by_selection(paths_only, &selection)?;
     if let Some(ref sink) = progress {
         sink.emit(IngestProgress::Layout {
             total_files: layout_summary.total_files as u32,
@@ -969,8 +1052,14 @@ mod tests {
             .map(|s| (*s).to_string())
             .collect();
 
-        let db_path = ingest_beamtime(&beamtime_dir, &header_items, false, None)
-            .expect("batched ingest should succeed");
+        let db_path = ingest_beamtime(
+            &beamtime_dir,
+            &header_items,
+            false,
+            None,
+            IngestSelection::default(),
+        )
+        .expect("batched ingest should succeed");
         let counts = count_rows(&db_path).expect("count rows after ingest");
         let mut conn = db::establish_connection(&db_path).expect("open catalog db");
         let frame_count: i64 = frames::table
@@ -1011,12 +1100,24 @@ mod tests {
             .map(|s| (*s).to_string())
             .collect();
 
-        let db_path1 = ingest_beamtime(&beamtime_dir, &header_items, false, None)
-            .expect("first ingest run should succeed");
+        let db_path1 = ingest_beamtime(
+            &beamtime_dir,
+            &header_items,
+            false,
+            None,
+            IngestSelection::default(),
+        )
+        .expect("first ingest run should succeed");
         let counts_1 = count_rows(&db_path1).expect("count rows after run 1");
 
-        let db_path2 = ingest_beamtime(&beamtime_dir, &header_items, false, None)
-            .expect("second ingest run should succeed");
+        let db_path2 = ingest_beamtime(
+            &beamtime_dir,
+            &header_items,
+            false,
+            None,
+            IngestSelection::default(),
+        )
+        .expect("second ingest run should succeed");
         let counts_2 = count_rows(&db_path2).expect("count rows after run 2");
 
         assert_eq!(db_path1, db_path2, "catalog path should be deterministic");
@@ -1053,8 +1154,14 @@ mod tests {
             .map(|s| (*s).to_string())
             .collect();
 
-        let db_path = ingest_beamtime(&beamtime_dir, &header_items, false, None)
-            .expect("streaming zarr ingest should succeed");
+        let db_path = ingest_beamtime(
+            &beamtime_dir,
+            &header_items,
+            false,
+            None,
+            IngestSelection::default(),
+        )
+        .expect("streaming zarr ingest should succeed");
 
         let zarr_root =
             paths::beamtime_zarr_path(&beamtime_dir).expect("resolve beamtime zarr path");

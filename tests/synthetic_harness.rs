@@ -13,7 +13,9 @@ use pyref::io::parse_fits_stem;
 use pyref::io::ImageInfo;
 use pyref::loader::read_fits_headers_only_row;
 
-use common::{build_synthetic_beamtime, synthetic_pixel_value, SyntheticLayout, SYNTHETIC_SAMPLE_NAME};
+use common::{
+    build_synthetic_beamtime, synthetic_pixel_value, SyntheticLayout, SYNTHETIC_SAMPLE_NAME,
+};
 
 fn header_items() -> Vec<String> {
     [
@@ -87,7 +89,10 @@ fn synthetic_pixels_round_trip_via_image_mmap() {
     assert_eq!(info.bzero, 32_768);
 
     let data = load_image_pixels(path, &info).expect("load_image_pixels");
-    assert_eq!(data.shape(), &[layout.height as usize, layout.width as usize]);
+    assert_eq!(
+        data.shape(),
+        &[layout.height as usize, layout.width as usize]
+    );
 
     for row in 0..(layout.height as usize) {
         for col in 0..(layout.width as usize) {

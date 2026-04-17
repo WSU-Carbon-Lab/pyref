@@ -248,6 +248,8 @@ def ingest_beamtime(
     worker_threads: int | None = None,
     resource_fraction: float | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    max_scans: int | None = None,
+    scan_numbers: list[int] | None = None,
 ) -> Path:
     """
     Ingest a beamtime directory into the global catalog and local zarr cache.
@@ -283,6 +285,12 @@ def ingest_beamtime(
         ``catalog_row``, one per ``file_complete``) and call ``update(...,
         advance=1)`` for both event types. Handle ``phase`` events so the description
         updates during long ``headers`` work before ``catalog_row`` events begin.
+    max_scans : int, optional
+        Ingest only the first ``max_scans`` scan groups in ascending scan-number order.
+        Mutually exclusive with ``scan_numbers``.
+    scan_numbers : list of int, optional
+        Ingest only these stem-derived scan numbers, in the given order.
+        Mutually exclusive with ``max_scans``.
 
     Returns
     -------
@@ -299,6 +307,8 @@ def ingest_beamtime(
         worker_threads,
         resource_fraction,
         progress_callback,
+        max_scans,
+        scan_numbers,
     )
     return Path(out)
 

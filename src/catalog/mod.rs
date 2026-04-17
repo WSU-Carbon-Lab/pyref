@@ -28,7 +28,8 @@ pub use explorer_query::{
 };
 pub use ingest::{
     beamtime_ingest_layout, ingest_beamtime, ingest_beamtime_parallel,
-    ingest_beamtime_with_context, ingest_beamtime_with_progress_sink, DEFAULT_INGEST_HEADER_ITEMS,
+    ingest_beamtime_with_context, ingest_beamtime_with_progress_sink, IngestSelection,
+    DEFAULT_INGEST_HEADER_ITEMS,
 };
 #[cfg(feature = "parallel_ingest")]
 pub use ingest::{ingest_beamtime_pipelined, ingest_beamtime_pipelined_with_context};
@@ -48,7 +49,9 @@ pub use reflectivity_profile::{
 };
 
 #[cfg(feature = "watch")]
-pub use watch::{run_catalog_watcher, WatchHandle, DEFAULT_DEBOUNCE_MS};
+pub use watch::{
+    run_catalog_watcher, run_catalog_watcher_blocking, WatchHandle, DEFAULT_DEBOUNCE_MS,
+};
 
 use diesel::sqlite::SqliteConnection;
 use std::path::{Path, PathBuf};

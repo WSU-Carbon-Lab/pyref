@@ -857,6 +857,7 @@ impl App {
                 &header_items,
                 false,
                 Some(progress_tx),
+                pyref::catalog::IngestSelection::default(),
             )
             .map(|_| ())
             .map_err(|e| e.to_string());
@@ -892,6 +893,7 @@ impl App {
                 &header_items,
                 false,
                 Some(progress_tx),
+                pyref::catalog::IngestSelection::default(),
             )
             .map(|_| ())
             .map_err(|e| e.to_string());
@@ -1288,6 +1290,7 @@ impl App {
                 &header_items,
                 false,
                 Some(progress_tx),
+                pyref::catalog::IngestSelection::default(),
             )
             .map(|_| ())
             .map_err(|e| e.to_string());

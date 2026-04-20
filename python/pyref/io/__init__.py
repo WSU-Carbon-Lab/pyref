@@ -22,6 +22,15 @@ Experiment catalog and discovery
 -------------------------------
 - :func:`~pyref.io.read_beamtime`: Ingest (optional) and load one beamtime's samples,
   scans, and frames.
+- :func:`~pyref.io.read_beamtime_local`: Load an already-ingested beamtime without
+  re-ingesting from NAS.
+- :func:`~pyref.io.select_beamtime_frames`: Filter beamtime rows by sample,
+  tag, and scan.
+- :func:`~pyref.io.apply_scan_overrides`: Apply sample/tag/notes overrides across scans.
+- :func:`~pyref.io.summarize_beamtime_scans`: Per-scan theta/energy ranges and
+  classification.
+- :func:`~pyref.io.set_beamtime_scan_types`: Persist per-scan fixed-energy/
+  fixed-angle type.
 - :func:`~pyref.io.list_beamtimes`: Enumerate beamtime roots stored in the catalog.
 - :func:`~pyref.io.resolve_catalog_path`: Beamtime catalog database path (Rust-aligned).
 - :func:`~pyref.io.classify_reflectivity_scan_type`: Theta vs energy scan
@@ -46,13 +55,18 @@ from pyref.io import fits_accessor  # noqa: F401 - registers df.fits accessor
 from pyref.io.beamtime import (
     BeamtimeCatalogView,
     BeamtimeEntriesView,
+    apply_scan_overrides,
     beamtime_entries,
     ingest_beamtime_with_rich_progress,
     list_beamtimes,
     naming_qc_from_frames,
     naming_qc_with_db_parse_flags,
     read_beamtime,
+    read_beamtime_local,
     scan_from_catalog_for_beamtime,
+    select_beamtime_frames,
+    set_beamtime_scan_types,
+    summarize_beamtime_scans,
 )
 from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.experiment_names import (
@@ -79,12 +93,14 @@ from pyref.io.readers import (
     resolve_fits_paths,
     scan_experiment,
     set_override,
+    set_scan_type_for_beamtime_scan,
 )
 
 __all__ = [
     "BeamtimeCatalogView",
     "BeamtimeEntriesView",
     "ParsedFitsName",
+    "apply_scan_overrides",
     "beamtime_entries",
     "beamtime_ingest_layout",
     "build_catalog",
@@ -105,6 +121,7 @@ __all__ = [
     "parse_fits_stem",
     "query_catalog",
     "read_beamtime",
+    "read_beamtime_local",
     "read_experiment",
     "read_fits",
     "resolve_catalog_path",
@@ -112,5 +129,9 @@ __all__ = [
     "scan_experiment",
     "scan_from_catalog_for_beamtime",
     "scan_view",
+    "select_beamtime_frames",
+    "set_beamtime_scan_types",
     "set_override",
+    "set_scan_type_for_beamtime_scan",
+    "summarize_beamtime_scans",
 ]

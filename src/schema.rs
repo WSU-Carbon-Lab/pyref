@@ -249,9 +249,9 @@ diesel::table! {
     /// header cards are stored in `frame_header_values`.
     ///
     /// Zarr retrieval: the monolithic beamtime archive is `beamtimes.zarr_path`.
-    /// Within the archive, raw images are at
-    /// `/<scan_number>/<frame_number>/raw`. Processed arrays are produced by
-    /// downstream processing, not ingest.
+    /// Within the archive, raw images are stored per scan in shape buckets at
+    /// `/images/by_shape/<height>x<width>/scans/<scan_number>/raw` as 3D arrays
+    /// `(bucket_frame_index, y, x)` within that scan.
     frames (id) {
         id -> Integer,
         scan_id -> Integer,
@@ -261,6 +261,10 @@ diesel::table! {
         zarr_group_key -> Integer,
         /// Dataset index within the zarr group, equal to the frame number.
         zarr_frame_index -> Integer,
+        /// Shape bucket key in the form `<height>x<width>`.
+        zarr_shape_bucket -> Nullable<Text>,
+        /// Dense frame index within the shape bucket dataset.
+        zarr_bucket_frame_index -> Nullable<Integer>,
         /// ISO 8601 acquisition timestamp from the DATE header card.
         acquired_at -> Nullable<Text>,
         // --- first-class motor positions ---

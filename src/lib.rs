@@ -50,9 +50,9 @@ mod extension {
     use crate::catalog::{
         beamtime_ingest_layout, catalog_file_count, classify_scan_type, get_overrides,
         ingest_beamtime_with_progress_sink, list_beamtime_entries_v2, list_beamtimes_from_catalog,
-        paths, scan_from_catalog, scan_from_catalog_for_beamtime, set_override, CatalogFilter,
-        IngestParallelism, IngestProgress, IngestProgressSink, IngestSelection,
-        ReflectivityScanType,
+        paths, scan_from_catalog, scan_from_catalog_for_beamtime, set_override,
+        set_scan_type_for_beamtime_scan, CatalogFilter, IngestParallelism, IngestProgress,
+        IngestProgressSink, IngestSelection, ReflectivityScanType,
     };
 
     #[global_allocator]
@@ -669,6 +669,29 @@ mod extension {
     }
 
     #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(
+        name = "py_set_scan_type_for_beamtime_scan",
+        signature = (db_path, beamtime_path, scan_number, scan_type),
+        text_signature = "(db_path, beamtime_path, scan_number, scan_type)"
+    )]
+    pub fn py_set_scan_type_for_beamtime_scan(
+        db_path: &str,
+        beamtime_path: &str,
+        scan_number: i64,
+        scan_type: &str,
+    ) -> PyResult<()> {
+        let db = std::path::Path::new(db_path);
+        let beam = std::path::Path::new(beamtime_path);
+        match set_scan_type_for_beamtime_scan(db, beam, scan_number, scan_type) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
     fn reflectivity_scan_type_id(st: ReflectivityScanType) -> &'static str {
         match st {
             ReflectivityScanType::FixedEnergy => "fixed_energy",
@@ -786,6 +809,10 @@ mod extension {
             m.add_function(pyo3::wrap_pyfunction!(py_list_beamtimes, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_get_overrides, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_set_override, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(
+                py_set_scan_type_for_beamtime_scan,
+                m
+            )?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_classify_scan_type, m)?)?;
             #[cfg(feature = "watch")]
             {

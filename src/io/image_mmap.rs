@@ -1,7 +1,13 @@
 use std::path::{Path, PathBuf};
+#[cfg(feature = "catalog")]
+use std::sync::Arc;
 
 use ndarray::Array2;
 use polars::prelude::*;
+#[cfg(feature = "catalog")]
+use zarrs::array::{Array, ArraySubset};
+#[cfg(feature = "catalog")]
+use zarrs::storage::ReadableWritableListableStorage;
 
 use super::blur::{gaussian_blur_f32_copy, i64_to_f32_array};
 use super::raw_pixels::read_bitpix16_be_bytes;
@@ -14,7 +20,62 @@ use crate::fits::HduList;
 
 type ImagePair = (Array2<i64>, Array2<i64>);
 
+#[cfg(feature = "catalog")]
+fn try_load_image_pixels_from_zarr(info: &ImageInfo) -> Result<Option<Array2<i64>>, FitsError> {
+    let zarr_path = match &info.zarr_path {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+    let store: ReadableWritableListableStorage = Arc::new(
+        zarrs::filesystem::FilesystemStore::new(zarr_path)
+            .map_err(|e| FitsError::validation(e.to_string()))?,
+    );
+    if let (Some(bucket), Some(bucket_idx), Some(scan_no)) = (
+        &info.zarr_shape_bucket,
+        info.zarr_bucket_frame_index,
+        info.zarr_group_key,
+    ) {
+        let path = format!("/images/by_shape/{bucket}/scans/{scan_no}/raw");
+        if let Ok(array) = Array::open(store.clone(), &path) {
+            let subset_region = ArraySubset::new_with_ranges(&[
+                (bucket_idx as u64)..(bucket_idx as u64 + 1),
+                0..(info.naxis2 as u64),
+                0..(info.naxis1 as u64),
+            ]);
+            let subset: Vec<u16> = array
+                .retrieve_array_subset::<Vec<u16>>(&subset_region)
+                .map_err(|e| FitsError::validation(e.to_string()))?;
+            let flat: Vec<i64> = subset
+                .iter()
+                .map(|raw| (*raw as i16 as i64) + info.bzero)
+                .collect();
+            let arr = Array2::from_shape_vec((info.naxis2, info.naxis1), flat)
+                .map_err(|e| FitsError::validation(e.to_string()))?;
+            return Ok(Some(arr));
+        }
+    }
+    if let (Some(group_key), Some(frame_index)) = (info.zarr_group_key, info.zarr_frame_index) {
+        let path = format!("/{group_key}/{frame_index:05}/raw");
+        if let Ok(array) = Array::open(store, &path) {
+            let subset_region =
+                ArraySubset::new_with_ranges(&[0..(info.naxis2 as u64), 0..(info.naxis1 as u64)]);
+            let subset: Vec<i32> = array
+                .retrieve_array_subset::<Vec<i32>>(&subset_region)
+                .map_err(|e| FitsError::validation(e.to_string()))?;
+            let flat: Vec<i64> = subset.iter().map(|value| *value as i64).collect();
+            let arr = Array2::from_shape_vec((info.naxis2, info.naxis1), flat)
+                .map_err(|e| FitsError::validation(e.to_string()))?;
+            return Ok(Some(arr));
+        }
+    }
+    Ok(None)
+}
+
 pub fn load_image_pixels(path: &Path, info: &ImageInfo) -> Result<Array2<i64>, FitsError> {
+    #[cfg(feature = "catalog")]
+    if let Ok(Some(data)) = try_load_image_pixels_from_zarr(info) {
+        return Ok(data);
+    }
     if info.bitpix != 16 {
         return Err(FitsError::unsupported(
             "Only BITPIX=16 image HDUs supported",

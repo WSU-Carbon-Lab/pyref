@@ -14,6 +14,8 @@ pub struct FrameDb {
     pub frame_number: i32,
     pub zarr_group_key: i32,
     pub zarr_frame_index: i32,
+    pub zarr_shape_bucket: Option<String>,
+    pub zarr_bucket_frame_index: Option<i32>,
     pub acquired_at: Option<String>,
     pub sample_x: f64,
     pub sample_y: f64,

@@ -12,7 +12,7 @@ mod parallelism;
 pub mod paths;
 mod query;
 mod reflectivity_profile;
-mod zarr_write;
+pub mod zarr_write;
 
 #[cfg(feature = "watch")]
 mod watch;
@@ -42,7 +42,8 @@ pub use query::{
     catalog_file_count, get_overrides, get_scan_point_uid_by_source_path, list_beamtime_entries,
     list_beamtime_entries_v2, list_beamtimes_from_catalog, query_files, query_scan_points,
     rename_file_in_catalog, scan_from_catalog, scan_from_catalog_for_beamtime, set_override,
-    update_beamspot, update_beamspot_scan_point, BeamtimeEntries, CatalogFilter, FileRow,
+    set_scan_type_for_beamtime_scan, update_beamspot, update_beamspot_scan_point, BeamtimeEntries,
+    CatalogFilter, FileRow,
 };
 pub use reflectivity_profile::{
     classify_scan_type, segment_reflectivity_profiles, ProfileSegment, ReflectivityScanType,

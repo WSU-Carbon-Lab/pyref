@@ -40,7 +40,10 @@ use super::ingest_progress::{
     IngestProgressSink,
 };
 use super::parallelism::IngestParallelism;
-use super::zarr_write::{open_zarr_store, write_frame_raw};
+use super::zarr_write::{
+    open_zarr_store, prepare_shape_scan_bucket_arrays, shape_bucket_key,
+    write_scan_shape_bucket_frame_raw, ShapeScanBucketSpec,
+};
 use super::{db, paths, CatalogError, Result};
 
 /// Optional subset of scans to ingest (disk order is ascending scan number; explicit
@@ -176,7 +179,61 @@ pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
     "Beam Current",
 ];
 
-fn read_image_i32(row: &BtIngestRow) -> Result<Array2<i32>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrameZarrAssignment {
+    shape_bucket: String,
+    scan_number: i32,
+    bucket_frame_index: i32,
+}
+
+fn build_frame_zarr_plan(
+    rows: &[BtIngestRow],
+) -> (Vec<FrameZarrAssignment>, Vec<ShapeScanBucketSpec>) {
+    let mut combo_counts: HashMap<(String, i32), usize> = HashMap::new();
+    let mut combo_dims: HashMap<(String, i32), (usize, usize)> = HashMap::new();
+    for row in rows {
+        let height = row.naxis2 as usize;
+        let width = row.naxis1 as usize;
+        let bucket = shape_bucket_key(height, width);
+        let scan_number = row.scan_number as i32;
+        let key = (bucket.clone(), scan_number);
+        *combo_counts.entry(key.clone()).or_insert(0) += 1;
+        combo_dims.entry(key).or_insert((height, width));
+    }
+    let mut combos: Vec<(String, i32)> = combo_counts.keys().cloned().collect();
+    combos.sort_by(|a, b| (a.0.as_str(), a.1).cmp(&(b.0.as_str(), b.1)));
+    let specs: Vec<ShapeScanBucketSpec> = combos
+        .iter()
+        .map(|(bucket, scan_number)| {
+            let key = &(bucket.clone(), *scan_number);
+            let (height, width) = combo_dims[key];
+            ShapeScanBucketSpec {
+                shape_bucket: bucket.clone(),
+                scan_number: *scan_number,
+                height,
+                width,
+                frames: combo_counts[key],
+            }
+        })
+        .collect();
+    let mut next_idx: HashMap<(String, i32), usize> = HashMap::new();
+    let mut assignments: Vec<FrameZarrAssignment> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let bucket = shape_bucket_key(row.naxis2 as usize, row.naxis1 as usize);
+        let scan_number = row.scan_number as i32;
+        let key = (bucket.clone(), scan_number);
+        let idx = next_idx.entry(key).or_insert(0);
+        assignments.push(FrameZarrAssignment {
+            shape_bucket: bucket,
+            scan_number,
+            bucket_frame_index: *idx as i32,
+        });
+        *idx += 1;
+    }
+    (assignments, specs)
+}
+
+fn read_image_u16(row: &BtIngestRow) -> Result<Array2<u16>> {
     if row.bitpix != 16 {
         return Err(CatalogError::Validation(format!(
             "unsupported BITPIX {} for zarr (expected 16): {}",
@@ -187,9 +244,9 @@ fn read_image_i32(row: &BtIngestRow) -> Result<Array2<i32>> {
     let n = (row.naxis1 * row.naxis2) as usize;
     let buf = read_bitpix16_be_bytes(path, row.data_offset as u64, n * 2)
         .map_err(super::flatten_fits_error)?;
-    let out: Vec<i32> = buf
+    let out: Vec<u16> = buf
         .chunks_exact(2)
-        .map(|c| i16::from_be_bytes([c[0], c[1]]) as i32)
+        .map(|c| u16::from_be_bytes([c[0], c[1]]))
         .collect();
     Array2::from_shape_vec((row.naxis2 as usize, row.naxis1 as usize), out)
         .map_err(|e| CatalogError::Validation(e.to_string()))
@@ -311,6 +368,7 @@ fn insert_catalog_batch(
     conn: &mut diesel::SqliteConnection,
     ctx: &IngestContext<'_>,
     rows: &[BtIngestRow],
+    zarr_assignments: &[FrameZarrAssignment],
     start: usize,
     end: usize,
     sample_cache: &HashMap<String, i32>,
@@ -354,6 +412,8 @@ fn insert_catalog_batch(
             if ctx.is_cancelled() {
                 return Err(diesel::result::Error::RollbackTransaction);
             }
+            let row_index = start + local_idx;
+            let zarr_assignment = &zarr_assignments[row_index];
             let sample_key = if row.sample_name.trim().is_empty() {
                 "_".to_string()
             } else {
@@ -440,6 +500,8 @@ fn insert_catalog_batch(
                     frames::frame_number.eq(row.frame_number as i32),
                     frames::zarr_group_key.eq(scan_no),
                     frames::zarr_frame_index.eq(row.frame_number as i32),
+                    frames::zarr_shape_bucket.eq(Some(zarr_assignment.shape_bucket.as_str())),
+                    frames::zarr_bucket_frame_index.eq(Some(zarr_assignment.bucket_frame_index)),
                     frames::acquired_at.eq(row.date_iso.clone()),
                     frames::sample_x.eq(sx),
                     frames::sample_y.eq(sy),
@@ -484,6 +546,7 @@ fn run_catalog_phase(
     ctx: &IngestContext<'_>,
     conn: &mut diesel::SqliteConnection,
     rows: &[BtIngestRow],
+    zarr_assignments: &[FrameZarrAssignment],
 ) -> Result<()> {
     if let Some(sink) = ctx.progress {
         sink.emit(IngestProgress::Phase {
@@ -504,6 +567,7 @@ fn run_catalog_phase(
             conn,
             ctx,
             rows,
+            zarr_assignments,
             start,
             end,
             &sample_cache,
@@ -523,6 +587,8 @@ fn run_catalog_phase(
 fn run_zarr_phase(
     ctx: &IngestContext<'_>,
     rows: &[BtIngestRow],
+    zarr_assignments: &[FrameZarrAssignment],
+    bucket_specs: &[ShapeScanBucketSpec],
     zstore: &zarrs::storage::ReadableWritableListableStorage,
 ) -> Result<()> {
     if let Some(sink) = ctx.progress {
@@ -533,7 +599,9 @@ fn run_zarr_phase(
 
     let n_workers = ctx.pool.current_num_threads();
     let channel_cap = (n_workers.saturating_mul(2)).max(4);
-    let (tx, rx) = crossbeam_channel::bounded::<Result<(usize, Array2<i32>)>>(channel_cap);
+    let (tx, rx) = crossbeam_channel::bounded::<Result<(usize, Array2<u16>)>>(channel_cap);
+    prepare_shape_scan_bucket_arrays(zstore, bucket_specs)
+        .map_err(|e| CatalogError::Validation(e.to_string()))?;
 
     let stop = AtomicBool::new(false);
     let mut scan_done: HashMap<i32, u32> = HashMap::new();
@@ -558,7 +626,7 @@ fn run_zarr_phase(
                         if cancel_ref.is_some_and(|c| c.load(Ordering::Relaxed)) {
                             return;
                         }
-                        let item = read_image_i32(row).map(|img| (row_i, img));
+                        let item = read_image_u16(row).map(|img| (row_i, img));
                         if tx_c.send(item).is_err() {
                             stop_ref.store(true, Ordering::Relaxed);
                         }
@@ -574,8 +642,15 @@ fn run_zarr_phase(
             let step: Result<()> = (|| {
                 let (row_i, img) = item?;
                 let row = &rows[row_i];
-                write_frame_raw(zstore, row.scan_number, row.frame_number, &img)
-                    .map_err(|e| CatalogError::Validation(e.to_string()))?;
+                let zarr_assignment = &zarr_assignments[row_i];
+                write_scan_shape_bucket_frame_raw(
+                    zstore,
+                    &zarr_assignment.shape_bucket,
+                    zarr_assignment.scan_number,
+                    zarr_assignment.bucket_frame_index as usize,
+                    &img,
+                )
+                .map_err(|e| CatalogError::Validation(e.to_string()))?;
                 drop(img);
                 let sn = row.scan_number as i32;
                 let entry = scan_done.entry(sn).or_insert(0);
@@ -845,12 +920,13 @@ fn ingest_beamtime_inner(
     };
 
     let rows = run_headers_phase(&ctx, &paths_only, header_items)?;
+    let (zarr_assignments, bucket_specs) = build_frame_zarr_plan(&rows);
 
     let zstore =
         open_zarr_store(&zarr_path).map_err(|e| CatalogError::Validation(e.to_string()))?;
 
-    run_catalog_phase(&ctx, &mut conn, &rows)?;
-    run_zarr_phase(&ctx, &rows, &zstore)?;
+    run_catalog_phase(&ctx, &mut conn, &rows, &zarr_assignments)?;
+    run_zarr_phase(&ctx, &rows, &zarr_assignments, &bucket_specs, &zstore)?;
 
     let _ = incremental;
     Ok(db_path)
@@ -872,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn read_image_i32_bulk_read_decodes_minimal_fits() {
+    fn read_image_u16_bulk_read_decodes_minimal_fits() {
         let path = fixture_path();
         if !path.exists() {
             panic!("required fixture missing: {}", path.display());
@@ -880,7 +956,7 @@ mod tests {
         let header_items: Vec<String> = Vec::new();
         let row = read_fits_headers_only_row(path, &header_items)
             .expect("minimal.fits fixture should parse into BtIngestRow");
-        let img = read_image_i32(&row).expect("read_image_i32 failed on minimal.fits");
+        let img = read_image_u16(&row).expect("read_image_u16 failed on minimal.fits");
         let rows = row.naxis2 as usize;
         let cols = row.naxis1 as usize;
         assert_eq!(img.shape(), [rows, cols]);
@@ -889,16 +965,16 @@ mod tests {
         assert_eq!(cols, 2, "fixture minimal.fits is a 2x2 image");
         assert_eq!(
             img[[0, 0]],
-            0_i32,
+            0_u16,
             "first pixel (raw big-endian i16 -> i32)"
         );
-        assert_eq!(img[[0, 1]], 1_i32, "row-major second pixel");
-        assert_eq!(img[[1, 0]], 2_i32, "second row first pixel");
-        assert_eq!(img[[1, 1]], 3_i32, "last pixel");
+        assert_eq!(img[[0, 1]], 1_u16, "row-major second pixel");
+        assert_eq!(img[[1, 0]], 2_u16, "second row first pixel");
+        assert_eq!(img[[1, 1]], 3_u16, "last pixel");
     }
 
     #[test]
-    fn read_image_i32_rejects_non_bitpix_16() {
+    fn read_image_u16_rejects_non_bitpix_16() {
         let path = fixture_path();
         if !path.exists() {
             panic!("required fixture missing: {}", path.display());
@@ -907,7 +983,7 @@ mod tests {
         let mut row = read_fits_headers_only_row(path, &header_items)
             .expect("minimal.fits fixture should parse into BtIngestRow");
         row.bitpix = 8;
-        match read_image_i32(&row) {
+        match read_image_u16(&row) {
             Err(CatalogError::Validation(msg)) => {
                 assert!(
                     msg.contains("unsupported BITPIX"),
@@ -1172,13 +1248,21 @@ mod tests {
         );
 
         let mut conn = db::establish_connection(&db_path).expect("open catalog db");
-        let (scan_no, frame_no): (i32, i32) = files::table
-            .select((files::scan_number, files::frame_number))
+        let shape_bucket: Option<String> = frames::table
+            .select(frames::zarr_shape_bucket)
             .first(&mut conn)
-            .expect("select scan/frame of only cataloged file");
+            .expect("select shape bucket for only cataloged frame");
+        let shape_bucket = shape_bucket.expect("zarr shape bucket should be set");
+        let scan_no: i32 = files::table
+            .select(files::scan_number)
+            .first(&mut conn)
+            .expect("select scan of only cataloged file");
         let raw_path = zarr_root
+            .join("images")
+            .join("by_shape")
+            .join(&shape_bucket)
+            .join("scans")
             .join(scan_no.to_string())
-            .join(format!("{frame_no:05}"))
             .join("raw");
         assert!(
             raw_path.is_dir(),

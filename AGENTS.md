@@ -124,17 +124,17 @@ Connecting individual frames back to their originating sample, scan, and beamtim
 
 ### Catalog and Cache Storage
 
-#### Default: local user data directory
+#### Default: catalog under `~/.config/pyref`, zarr under platform user data
 
-By default, `pyref` maintains a single persistent catalog that accumulates every beamtime the user has ever ingested. The catalog and its associated zarr cache live in the platform-appropriate user data directory, resolved at runtime by the Rust IO layer using the `directories` crate:
+By default, `pyref` maintains a single persistent catalog that accumulates every beamtime the user has ever ingested. The **catalog** path is Unix-like under the user home on all platforms (not the legacy per-OS “Application Support” / `%APPDATA%` location):
 
-| Platform | Default catalog path |
-|----------|----------------------|
-| Linux    | `$XDG_DATA_HOME/pyref/catalog.db` (falls back to `~/.local/share/pyref/catalog.db`) |
-| macOS    | `~/Library/Application Support/pyref/catalog.db` |
-| Windows  | `%APPDATA%\pyref\catalog.db` |
+| Scope | Default path |
+|-------|----------------|
+| `catalog.db` | `$XDG_CONFIG_HOME/pyref/catalog.db` when `XDG_CONFIG_HOME` is set; otherwise `~/.config/pyref/catalog.db` (on Windows, `~` is the user profile, e.g. `C:\Users\<user>\.config\pyref\catalog.db`). |
 
-The zarr archive for each beamtime is stored **on local disk under the same platform data directory** as the catalog, not under the system cache directory: `<data_dir>/pyref/.cache/<beamtime_hash>/beamtime.zarr`, where `<data_dir>` is the same root as in the table above (`$XDG_DATA_HOME` or `~/.local/share`, `~/Library/Application Support`, or `%APPDATA%` as appropriate) and `<beamtime_hash>` is a stable SHA-256 digest of the beamtime root path recorded at ingestion time. Example on macOS: `~/Library/Application Support/pyref/.cache/<beamtime_hash>/beamtime.zarr`. The zarr tree is local-only; NAS-backed FITS are used for ingestion and re-ingestion, not for routine image reads after ingest.
+The **zarr** archive for each beamtime stays under the platform user data directory from the `directories` crate: `<data_dir>/pyref/.cache/<beamtime_hash>/beamtime.zarr`, where on Linux that is typically `$XDG_DATA_HOME/pyref` or `~/.local/share/pyref`, on macOS `~/Library/Application Support/pyref`, and on Windows `%APPDATA%\pyref`. `<beamtime_hash>` is a stable SHA-256 digest of the beamtime root path recorded at ingestion time. Example on macOS: `~/Library/Application Support/pyref/.cache/<beamtime_hash>/beamtime.zarr`. The zarr tree is local-only; NAS-backed FITS are used for ingestion and re-ingestion, not for routine image reads after ingest.
+
+When `PYREF_HOME` is set (common in tests), both tooling expectations may still point at that directory for the catalog file (`<PYREF_HOME>/catalog.db`) as implemented in the Rust path resolver; production use relies on the defaults above unless overridden.
 
 Optional environment overrides: `PYREF_CATALOG_DB` (absolute path to `catalog.db`) and `PYREF_CACHE_ROOT` (parent of `<beamtime_hash>/beamtime.zarr` directories). Parallel FITS reads during ingest honor `PYREF_INGEST_WORKER_THREADS` or `PYREF_INGEST_RESOURCE_FRACTION` when explicit kwargs or TUI config fields are unset.
 
@@ -502,11 +502,12 @@ This workspace extends Rust with **PyO3 / Maturin** extension expectations.
 - Keep **`.cursor/hooks/state/`** out of git: add it to **`.gitignore`** so hook state and the continual-learning index stay local.
 - Ingestion and zarr writes from **network-mounted beamtime roots** can be far slower than from a **local replica**; validate progress UX against a local tree when iterating.
 - **Rust + PyO3:** Use a default feature set (for example **`bindings`**) that links **`libpython`** for **`cargo test`**; Maturin wheel builds use a separate **`extension-module`** feature that enables **`pyo3/extension-module`**. Putting **`extension-module`** in the default test feature set can produce undefined Python symbols (for example `_Py_DecRef`, `Py_IsInitialized`) on Linux CI linkers.
-- **`read_beamtime(..., ingest=True)`** runs ingest against the **default global catalog path** from the Rust layer; an explicit **`catalog_path`** mainly selects which database is **read** for the returned view, so keep it consistent with ingest output and env overrides.
+- **`read_beamtime(..., ingest=True)`** runs ingest against the **default global catalog path** from the Rust layer; an explicit **`catalog_path`** mainly selects which database is **read** for the returned view. Beamtime lookup keys must match absolute URI form (for example `file:///Volumes/...`), and offline lookup must avoid strict canonicalization so unmounted NAS paths can still match indexed beamtimes.
 - **Ruff** may exclude **`python/pyref/beamline`**, **`notebooks`**, and **`tests`** per `pyproject.toml`; treat those paths as out of scope for Ruff unless configuration changes.
 - Ingest phases are modeled by the Rust **`IngestPhase` enum** (not string labels); the catalog phase **coalesces short scans into a single SQLite transaction** (small-scan batching), which is a deliberate design choice.
 - CI-safe ingest benchmarking uses the synthetic harness: the Rust helper at **`tests/common/mod.rs`** (consumed by `tests/synthetic_harness.rs` and `tests/ingest_streaming.rs`) plus **`scripts/bench_ingest.py`**; shared progress/table helpers live in **`scripts/_ingest_profile.py`** and are reused by `scripts/profile_beamtime_ingest.py`.
 - Rust integration tests for ingest require **`cargo test --features catalog,parallel_ingest`**; tests that mutate env vars (**`PYREF_CATALOG_DB`**, **`PYREF_CACHE_ROOT`**) must serialize with a `Mutex` guard (pattern in `src/io/raw_pixels.rs` tests) and must point those vars at isolated tempdirs so they never write to the default catalog.
 - **`tests/fixtures/minimal.fits`** is the canonical 2x2 BITPIX=16 FITS reference; new synthetic fixtures must match its header/block layout (2880-byte header, BZERO=32768 for unsigned-as-signed-i16, stems of the form `<sample>-<scan>-<frame>.fits`).
 - **Typer CLI** (`pyref` entry point): implementation under **`python/pyref/cli/`** with groups **`nas`** (single registered NAS root in **`config.toml`** next to the data dir), **`beamtime`** (list/describe coverage using **`py_beamtime_ingest_layout`** + **`py_catalog_file_count`**), **`catalog`** (`path`, `ingest` with **`--max-scans`** / **`--scans`**), and **`watch`** (subprocess daemon via **`PYREF_CLI_WATCH_SPEC`**, worker module **`python -m pyref.cli.daemon`**, PID/logs under **`<pyref_data_dir>/daemons/`**). Legacy **`pyref-ingest`** delegates to **`pyref catalog ingest`**.
+- Beamtime **Zarr** raw images are **per-scan** **shape-bucketed** 3D `uint16` stacks at `/images/by_shape/<HxW>/scans/<scan>/raw` (shuffle + Zstd; see `catalog::zarr_write`, schema, **`migrate-zarr-3d`**); standalone Rust migration or tooling that initializes **Polars** through **PyO3** may print **`failed to get allocator capsule`** on stderr even when the run succeeds.
 - **Rust bindings for CLI:** **`py_pyref_data_dir`**, **`py_catalog_file_count`**, optional ingest subset via **`IngestSelection`** (`max_scans`, `scan_numbers`), and **`CatalogWatcherCancel`** + **`py_run_catalog_watcher_blocking`** when the **`watch`** feature is enabled (included in default features for extension builds).

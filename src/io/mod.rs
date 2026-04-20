@@ -26,6 +26,11 @@ pub struct ImageInfo {
     pub naxis2: usize,
     pub bitpix: i32,
     pub bzero: i64,
+    pub zarr_path: Option<PathBuf>,
+    pub zarr_shape_bucket: Option<String>,
+    pub zarr_bucket_frame_index: Option<usize>,
+    pub zarr_group_key: Option<i32>,
+    pub zarr_frame_index: Option<i32>,
 }
 
 impl ImageInfo {
@@ -42,6 +47,11 @@ impl ImageInfo {
             naxis2: h.naxis2,
             bitpix: h.bitpix,
             bzero,
+            zarr_path: None,
+            zarr_shape_bucket: None,
+            zarr_bucket_frame_index: None,
+            zarr_group_key: None,
+            zarr_frame_index: None,
         }
     }
 
@@ -101,6 +111,36 @@ impl ImageInfo {
             .map_err(FitsError::from)?
             .get(row_index)
             .ok_or_else(|| FitsError::validation("bzero row missing or null"))?;
+        let zarr_path = df
+            .column("zarr_path")
+            .ok()
+            .and_then(|s| s.str().ok())
+            .and_then(|c| c.get(row_index))
+            .map(PathBuf::from);
+        let zarr_shape_bucket = df
+            .column("zarr_shape_bucket")
+            .ok()
+            .and_then(|s| s.str().ok())
+            .and_then(|c| c.get(row_index))
+            .map(std::string::ToString::to_string);
+        let zarr_bucket_frame_index = df
+            .column("zarr_bucket_frame_index")
+            .ok()
+            .and_then(|s| s.i64().ok())
+            .and_then(|c| c.get(row_index))
+            .map(|x| x as usize);
+        let zarr_group_key = df
+            .column("zarr_group_key")
+            .ok()
+            .and_then(|s| s.i64().ok())
+            .and_then(|c| c.get(row_index))
+            .map(|x| x as i32);
+        let zarr_frame_index = df
+            .column("zarr_frame_index")
+            .ok()
+            .and_then(|s| s.i64().ok())
+            .and_then(|c| c.get(row_index))
+            .map(|x| x as i32);
         Ok(ImageInfo {
             path,
             data_offset,
@@ -108,6 +148,11 @@ impl ImageInfo {
             naxis2,
             bitpix,
             bzero,
+            zarr_path,
+            zarr_shape_bucket,
+            zarr_bucket_frame_index,
+            zarr_group_key,
+            zarr_frame_index,
         })
     }
 }

@@ -382,6 +382,36 @@ def set_override(
     )
 
 
+def set_scan_type_for_beamtime_scan(
+    catalog_path: FilePath,
+    beamtime_path: FilePath,
+    scan_number: int,
+    scan_type: Literal["fixed_energy", "fixed_angle"],
+) -> None:
+    """
+    Persist scan classification for one scan in one beamtime.
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Path to the catalog SQLite database.
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory used to scope the scan lookup.
+    scan_number : int
+        Scan number within ``beamtime_path``.
+    scan_type : {"fixed_energy", "fixed_angle"}
+        Classification to store in ``scans.scan_type``.
+    """
+    from pyref.pyref import py_set_scan_type_for_beamtime_scan
+
+    py_set_scan_type_for_beamtime_scan(
+        str(Path(catalog_path).resolve()),
+        str(Path(beamtime_path).resolve()),
+        int(scan_number),
+        scan_type,
+    )
+
+
 def classify_reflectivity_scan_type(
     pairs: list[tuple[float | None, float | None]],
 ) -> tuple[str, float | None, float | None, float | None, float | None]:

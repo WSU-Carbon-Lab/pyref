@@ -1,9 +1,15 @@
-//! Platform catalog and zarr paths: ``PYREF_HOME`` override or XDG-style data directory.
+//! Catalog and zarr paths.
+//!
+//! Default ``catalog.db`` lives under a Unix-like config tree in the user home on all platforms:
+//! ``$XDG_CONFIG_HOME/pyref`` when ``XDG_CONFIG_HOME`` is set, otherwise ``~/.config/pyref``
+//! (e.g. ``C:\\Users\\name\\.config\\pyref`` on Windows).
 //!
 //! Overrides (optional, for ``set-catalog`` / ``set-cache`` style workflows):
 //!
 //! - ``PYREF_CATALOG_DB``: absolute path to ``catalog.db``. Parent directories are created when
-//!   missing. When set, ``default_catalog_db_path`` ignores ``PYREF_HOME`` for the DB file.
+//!   missing. When set, ``default_catalog_db_path`` ignores other defaults.
+//! - ``PYREF_HOME``: directory used as the catalog parent when ``PYREF_CATALOG_DB`` is unset
+//!   (typically tests; catalog path is ``<PYREF_HOME>/catalog.db``).
 //! - ``PYREF_CACHE_ROOT``: directory under which each beamtime gets ``<sha256>/beamtime.zarr``.
 //!   When unset, zarr uses ``<pyref_data_dir>/.cache/<sha256>/beamtime.zarr``.
 
@@ -15,8 +21,9 @@ use super::{CatalogError, Result};
 
 const ENV_CATALOG_DB: &str = "PYREF_CATALOG_DB";
 const ENV_CACHE_ROOT: &str = "PYREF_CACHE_ROOT";
+const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 
-/// Root directory for ``catalog.db`` and ``.cache/<hash>/beamtime.zarr``.
+/// Root directory for ``.cache/<hash>/beamtime.zarr`` (not the catalog file).
 ///
 /// When the environment variable ``PYREF_HOME`` is set, returns that path (used in tests).
 /// Otherwise returns ``<data_dir>/pyref`` from the ``directories`` crate (e.g. macOS
@@ -38,9 +45,37 @@ pub fn pyref_data_dir() -> Result<PathBuf> {
     Ok(d)
 }
 
+fn default_catalog_parent_dir() -> Result<PathBuf> {
+    if let Ok(h) = std::env::var("PYREF_HOME") {
+        let p = PathBuf::from(h);
+        if !p.exists() {
+            fs::create_dir_all(&p).map_err(CatalogError::Io)?;
+        }
+        return Ok(p);
+    }
+    if let Ok(xdg) = std::env::var(ENV_XDG_CONFIG_HOME) {
+        if !xdg.is_empty() {
+            let d = PathBuf::from(xdg).join("pyref");
+            if !d.exists() {
+                fs::create_dir_all(&d).map_err(CatalogError::Io)?;
+            }
+            return Ok(d);
+        }
+    }
+    let base = directories::BaseDirs::new()
+        .ok_or_else(|| CatalogError::Validation("could not resolve home directory".into()))?;
+    let d = base.home_dir().join(".config").join("pyref");
+    if !d.exists() {
+        fs::create_dir_all(&d).map_err(CatalogError::Io)?;
+    }
+    Ok(d)
+}
+
 /// Absolute path to the global catalog database.
 ///
-/// Honors ``PYREF_CATALOG_DB`` when set; otherwise ``<pyref_data_dir>/catalog.db``.
+/// Honors ``PYREF_CATALOG_DB`` when set. Otherwise ``PYREF_HOME/catalog.db`` when ``PYREF_HOME`` is
+/// set, or ``<default_catalog_parent_dir>/catalog.db`` (``~/.config/pyref/catalog.db`` when
+/// ``XDG_CONFIG_HOME`` is unset).
 pub fn default_catalog_db_path() -> Result<PathBuf> {
     if let Ok(p) = std::env::var(ENV_CATALOG_DB) {
         let path = PathBuf::from(p);
@@ -51,7 +86,7 @@ pub fn default_catalog_db_path() -> Result<PathBuf> {
         }
         return Ok(path);
     }
-    Ok(pyref_data_dir()?.join("catalog.db"))
+    Ok(default_catalog_parent_dir()?.join("catalog.db"))
 }
 
 /// Stable SHA-256 hex digest of the canonical beamtime root path (for cache directory names).
@@ -86,6 +121,24 @@ pub fn file_uri_for_path(path: &Path) -> Result<String> {
     let canon = path.canonicalize().map_err(CatalogError::Io)?;
     let s = canon.to_string_lossy();
     Ok(format!("file://{s}"))
+}
+
+/// Logical URI for a beamtime path with offline-friendly fallback.
+///
+/// Uses canonicalized absolute path when possible. If canonicalization fails and
+/// the input is already absolute (for example, NAS mount unavailable), falls back
+/// to the literal absolute path string.
+pub fn file_uri_for_path_relaxed(path: &Path) -> Result<String> {
+    match path.canonicalize() {
+        Ok(canon) => Ok(format!("file://{}", canon.to_string_lossy())),
+        Err(err) => {
+            if path.is_absolute() {
+                Ok(format!("file://{}", path.to_string_lossy()))
+            } else {
+                Err(CatalogError::Io(err))
+            }
+        }
+    }
 }
 
 /// Resolves the catalog database path. The beamtime argument is accepted for API compatibility;

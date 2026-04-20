@@ -11,18 +11,33 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import polars as pl
 
 from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.experiment_names import parse_fits_stem
-from pyref.io.readers import beamtime_ingest_layout, ingest_beamtime
+from pyref.io.readers import (
+    beamtime_ingest_layout,
+    classify_reflectivity_scan_type,
+    ingest_beamtime,
+    set_override,
+    set_scan_type_for_beamtime_scan,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from pyref.io.readers import FilePath
+
+
+def _normalize_beamtime_path(beamtime_path: FilePath) -> Path:
+    raw = Path(beamtime_path).expanduser()
+    if raw.is_absolute():
+        return raw.resolve()
+    if raw.parts and raw.parts[0] == "Volumes":
+        return Path("/").joinpath(*raw.parts).resolve()
+    return raw.resolve()
 
 
 def _rich_console_for_progress():
@@ -347,7 +362,7 @@ def scan_from_catalog_for_beamtime(
         filt["energy_max"] = energy_max
     return py_scan_from_catalog_for_beamtime(
         str(db),
-        str(Path(beamtime_path).resolve()),
+        str(_normalize_beamtime_path(beamtime_path)),
         filt if filt else None,
     )
 
@@ -377,7 +392,7 @@ def beamtime_entries(
         db = Path(catalog_path).resolve()
     else:
         db = resolve_catalog_path()
-    raw = py_beamtime_entries(str(db), str(Path(beamtime_path).resolve()))
+    raw = py_beamtime_entries(str(db), str(_normalize_beamtime_path(beamtime_path)))
     return BeamtimeEntriesView.from_py_dict(dict(raw))
 
 
@@ -431,7 +446,7 @@ def read_beamtime(
     BeamtimeCatalogView
         ``entries`` and ``frames`` scoped to ``beamtime_path``.
     """
-    bt = Path(beamtime_path).resolve()
+    bt = _normalize_beamtime_path(beamtime_path)
     if catalog_path is not None:
         cat = Path(catalog_path).resolve()
     else:
@@ -469,6 +484,299 @@ def read_beamtime(
         entries=entries,
         frames=frames,
     )
+
+
+def read_beamtime_local(
+    beamtime_path: FilePath,
+    *,
+    catalog_path: FilePath | None = None,
+    require_indexed: bool = True,
+) -> BeamtimeCatalogView:
+    """
+    Load one beamtime from local catalog/zarr state without ingesting from NAS.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory key used at ingest time.
+    catalog_path : str or pathlib.Path, optional
+        Path to ``catalog.db`` for queries; default from :func:`resolve_catalog_path`.
+    require_indexed : bool, optional
+        When True, raise ``ValueError`` if this beamtime has no catalog entries.
+
+    Returns
+    -------
+    BeamtimeCatalogView
+        Beamtime-scoped catalog view loaded with ``ingest=False``.
+    """
+    view = read_beamtime(
+        beamtime_path,
+        catalog_path=catalog_path,
+        ingest=False,
+    )
+    if require_indexed and view.frames.height == 0 and not view.entries.scans:
+        msg = (
+            f"beamtime is not indexed in catalog: {Path(beamtime_path).resolve()} "
+            f"(catalog={view.catalog_path})"
+        )
+        raise ValueError(msg)
+    return view
+
+
+def select_beamtime_frames(
+    beamtime_path: FilePath,
+    *,
+    catalog_path: FilePath | None = None,
+    sample_names: list[str] | None = None,
+    tags: list[str] | None = None,
+    scan_numbers: list[int] | None = None,
+) -> pl.DataFrame:
+    """
+    Return beamtime frames filtered by sample name, tag, and scan number.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory key used at ingest time.
+    catalog_path : str or pathlib.Path, optional
+        Path to ``catalog.db`` for queries; default from :func:`resolve_catalog_path`.
+    sample_names : list of str, optional
+        Keep rows whose ``sample_name`` is in this list.
+    tags : list of str, optional
+        Keep rows whose ``tag`` is in this list.
+    scan_numbers : list of int, optional
+        Keep rows whose ``scan_number`` is in this list.
+
+    Returns
+    -------
+    polars.DataFrame
+        Filtered frame-level beamtime catalog view.
+    """
+    frames = scan_from_catalog_for_beamtime(
+        beamtime_path,
+        catalog_path,
+        scan_numbers=scan_numbers,
+    )
+    if sample_names is not None:
+        frames = frames.filter(pl.col("sample_name").is_in(sample_names))
+    if tags is not None:
+        frames = frames.filter(pl.col("tag").is_in(tags))
+    return frames
+
+
+def apply_scan_overrides(
+    beamtime_path: FilePath,
+    *,
+    scan_numbers: list[int],
+    catalog_path: FilePath | None = None,
+    sample_name: str | None = None,
+    tag: str | None = None,
+    notes: str | None = None,
+    current_sample_names: list[str] | None = None,
+) -> pl.DataFrame:
+    """
+    Apply one sample/tag/notes override to every file in selected scans.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory key used at ingest time.
+    scan_numbers : list of int
+        Scan numbers to update.
+    catalog_path : str or pathlib.Path, optional
+        Path to ``catalog.db``; default from :func:`resolve_catalog_path`.
+    sample_name : str, optional
+        Replacement sample name for every selected file.
+    tag : str, optional
+        Replacement tag for every selected file.
+    notes : str, optional
+        Replacement notes for every selected file.
+    current_sample_names : list of str, optional
+        Additional guard: only update rows currently matching these sample names.
+
+    Returns
+    -------
+    polars.DataFrame
+        Distinct rows updated with columns ``scan_number``, ``file_path``,
+        ``sample_name``, and ``tag``.
+    """
+    if sample_name is None and tag is None and notes is None:
+        msg = "at least one of sample_name, tag, or notes must be provided"
+        raise ValueError(msg)
+    if not scan_numbers:
+        msg = "scan_numbers must contain at least one scan number"
+        raise ValueError(msg)
+    cat = (
+        Path(catalog_path).resolve()
+        if catalog_path is not None
+        else resolve_catalog_path()
+    )
+    rows = scan_from_catalog_for_beamtime(
+        beamtime_path,
+        cat,
+        scan_numbers=scan_numbers,
+    )
+    if current_sample_names is not None:
+        rows = rows.filter(pl.col("sample_name").is_in(current_sample_names))
+    targets = (
+        rows.select("scan_number", "file_path", "sample_name", "tag")
+        .unique()
+        .sort(["scan_number", "file_path"])
+    )
+    for path in targets.get_column("file_path").to_list():
+        set_override(
+            cat,
+            str(path),
+            sample_name=sample_name,
+            tag=tag,
+            notes=notes,
+        )
+    return targets
+
+
+def summarize_beamtime_scans(
+    beamtime_path: FilePath,
+    *,
+    catalog_path: FilePath | None = None,
+    scan_numbers: list[int] | None = None,
+    sample_names: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> pl.DataFrame:
+    """
+    Summarize theta/energy ranges and scan classification per scan.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory key used at ingest time.
+    catalog_path : str or pathlib.Path, optional
+        Path to ``catalog.db`` for queries; default from :func:`resolve_catalog_path`.
+    scan_numbers : list of int, optional
+        Restrict summary to these scan numbers.
+    sample_names : list of str, optional
+        Restrict rows to these sample names before summary.
+    tags : list of str, optional
+        Restrict rows to these tags before summary.
+
+    Returns
+    -------
+    polars.DataFrame
+        Columns ``scan_number``, ``n_frames``, ``sample_names``, ``tags``,
+        ``energy_min``, ``energy_max``, ``theta_min``, ``theta_max``,
+        ``inferred_scan_type``, and ``catalog_scan_type``.
+    """
+    rows = select_beamtime_frames(
+        beamtime_path,
+        catalog_path=catalog_path,
+        sample_names=sample_names,
+        tags=tags,
+        scan_numbers=scan_numbers,
+    )
+    if rows.height == 0:
+        return pl.DataFrame(
+            schema={
+                "scan_number": pl.Int64,
+                "n_frames": pl.Int64,
+                "sample_names": pl.List(pl.String),
+                "tags": pl.List(pl.String),
+                "energy_min": pl.Float64,
+                "energy_max": pl.Float64,
+                "theta_min": pl.Float64,
+                "theta_max": pl.Float64,
+                "inferred_scan_type": pl.String,
+                "catalog_scan_type": pl.String,
+            }
+        )
+    summaries: list[dict[str, Any]] = []
+    for scan_df in rows.partition_by("scan_number", maintain_order=True):
+        scan_number = int(scan_df.get_column("scan_number")[0])
+        energies = scan_df.get_column("Beamline Energy").to_list()
+        thetas = scan_df.get_column("Sample Theta").to_list()
+        pairs = list(zip(energies, thetas, strict=False))
+        inferred, e_min, e_max, t_min, t_max = classify_reflectivity_scan_type(pairs)
+        if "catalog_scan_type" in scan_df.columns:
+            scan_types = (
+                scan_df.get_column("catalog_scan_type")
+                .drop_nulls()
+                .unique()
+                .to_list()
+            )
+        else:
+            scan_types = []
+        catalog_scan_type = str(scan_types[0]) if scan_types else None
+        sample_values = (
+            scan_df.get_column("sample_name")
+            .drop_nulls()
+            .unique()
+            .sort()
+            .to_list()
+        )
+        tag_values = (
+            scan_df.get_column("tag")
+            .drop_nulls()
+            .unique()
+            .sort()
+            .to_list()
+        )
+        summaries.append(
+            {
+                "scan_number": scan_number,
+                "n_frames": scan_df.height,
+                "sample_names": [str(x) for x in sample_values],
+                "tags": [str(x) for x in tag_values],
+                "energy_min": e_min,
+                "energy_max": e_max,
+                "theta_min": t_min,
+                "theta_max": t_max,
+                "inferred_scan_type": inferred,
+                "catalog_scan_type": catalog_scan_type,
+            }
+        )
+    return pl.DataFrame(summaries).sort("scan_number")
+
+
+def set_beamtime_scan_types(
+    beamtime_path: FilePath,
+    scan_type_by_scan: Mapping[int, str],
+    *,
+    catalog_path: FilePath | None = None,
+) -> pl.DataFrame:
+    """
+    Persist manual scan classifications for one beamtime.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory key used at ingest time.
+    scan_type_by_scan : mapping of int to str
+        Mapping from scan number to scan type (`fixed_energy` or `fixed_angle`).
+    catalog_path : str or pathlib.Path, optional
+        Path to ``catalog.db``; default from :func:`resolve_catalog_path`.
+
+    Returns
+    -------
+    polars.DataFrame
+        Two columns: ``scan_number`` and ``scan_type`` for rows written.
+    """
+    if not scan_type_by_scan:
+        msg = "scan_type_by_scan must contain at least one entry"
+        raise ValueError(msg)
+    cat = (
+        Path(catalog_path).resolve()
+        if catalog_path is not None
+        else resolve_catalog_path()
+    )
+    bt = Path(beamtime_path).resolve()
+    rows: list[dict[str, Any]] = []
+    for scan_number, scan_type in sorted(scan_type_by_scan.items()):
+        set_scan_type_for_beamtime_scan(
+            cat,
+            bt,
+            int(scan_number),
+            cast("Literal['fixed_energy', 'fixed_angle']", scan_type),
+        )
+        rows.append({"scan_number": int(scan_number), "scan_type": str(scan_type)})
+    return pl.DataFrame(rows)
 
 
 def _stem_from_catalog_file_name(name: str) -> str:
@@ -568,10 +876,15 @@ def naming_qc_with_db_parse_flags(
 __all__ = [
     "BeamtimeCatalogView",
     "BeamtimeEntriesView",
+    "apply_scan_overrides",
     "beamtime_entries",
     "list_beamtimes",
     "naming_qc_from_frames",
     "naming_qc_with_db_parse_flags",
     "read_beamtime",
+    "read_beamtime_local",
     "scan_from_catalog_for_beamtime",
+    "select_beamtime_frames",
+    "set_beamtime_scan_types",
+    "summarize_beamtime_scans",
 ]

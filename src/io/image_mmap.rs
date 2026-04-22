@@ -30,15 +30,11 @@ fn try_load_image_pixels_from_zarr(info: &ImageInfo) -> Result<Option<Array2<i64
         zarrs::filesystem::FilesystemStore::new(zarr_path)
             .map_err(|e| FitsError::validation(e.to_string()))?,
     );
-    if let (Some(bucket), Some(bucket_idx), Some(scan_no)) = (
-        &info.zarr_shape_bucket,
-        info.zarr_bucket_frame_index,
-        info.zarr_group_key,
-    ) {
-        let path = format!("/images/by_shape/{bucket}/scans/{scan_no}/raw");
+    if let (Some(bucket_idx), Some(scan_no)) = (info.zarr_bucket_frame_index, info.zarr_group_key) {
+        let path = format!("/images/scans/{scan_no}/raw");
         if let Ok(array) = Array::open(store.clone(), &path) {
             let subset_region = ArraySubset::new_with_ranges(&[
-                (bucket_idx as u64)..(bucket_idx as u64 + 1),
+                (bucket_idx as u64)..(bucket_idx as u64 + 1_u64),
                 0..(info.naxis2 as u64),
                 0..(info.naxis1 as u64),
             ]);

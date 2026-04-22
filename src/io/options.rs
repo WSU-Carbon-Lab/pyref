@@ -1,6 +1,6 @@
 //! Options for read_fits and scan_fits: header keys, schema, batch size, catalog filter.
 
-use crate::io::schema::FitsMetadataSchema;
+use crate::io::metadata::FitsMetadataSchema;
 use crate::io::source::ResolvePreference;
 
 #[cfg(feature = "catalog")]
@@ -17,6 +17,12 @@ pub const DEFAULT_HEADER_ITEMS: &[&str] = &[
     "EXPOSURE",
     "Sample Name",
     "Scan ID",
+    "Sample X",
+    "Sample Y",
+    "Sample Z",
+    "RINGCRNT",
+    "AI 3 Izero",
+    "Beam Current",
 ];
 
 /// Options for eager `read_fits`: which headers to read, whether to add Q/Lambda, batch size.

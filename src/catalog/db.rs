@@ -1,4 +1,5 @@
 //! Diesel SQLite connection: foreign keys, embedded migrations.
+//! WAL + busy timeout reduce lock contention when a CLI ingest and the file watcher overlap.
 
 use diesel::connection::SimpleConnection;
 use diesel::sqlite::SqliteConnection;
@@ -26,5 +27,7 @@ pub fn establish_connection(database_url: &Path) -> Result<SqliteConnection> {
         .map_err(CatalogError::Diesel)?;
     conn.run_pending_migrations(MIGRATIONS)
         .map_err(|e| CatalogError::Migrations(format!("{e:?}")))?;
+    conn.batch_execute("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000;")
+        .map_err(CatalogError::Diesel)?;
     Ok(conn)
 }

@@ -29,6 +29,15 @@ DEFAULT_HEADER_KEYS = [
     "CCD Theta",
     "Higher Order Suppressor",
     "EPU Polarization",
+    "EXPOSURE",
+    "Sample Name",
+    "Scan ID",
+    "Sample X",
+    "Sample Y",
+    "Sample Z",
+    "RINGCRNT",
+    "AI 3 Izero",
+    "Beam Current",
 ]
 
 REQUIRED_SCAN_COLUMNS = (

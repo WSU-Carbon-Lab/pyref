@@ -10,12 +10,18 @@ use diesel::prelude::*;
 use pyref::catalog::db;
 use pyref::catalog::paths;
 use pyref::catalog::zarr_write::{
-    prepare_shape_scan_bucket_arrays, scan_raw_array_path, shape_bucket_key, ShapeScanBucketSpec,
-    ZARR_U16_ZSTD_LEVEL,
+    prepare_scan_zarr_arrays, scan_raw_array_path, ScanZarrSpec, ZARR_U16_ZSTD_LEVEL,
 };
 use pyref::schema::{beamtimes, files, frames};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::{ReadableWritableListableStorage, ReadableWritableListableStorageTraits};
+
+type LegacyFramePixels = (
+    Array<dyn ReadableWritableListableStorageTraits>,
+    usize,
+    usize,
+);
+type LegacyFrameLoad = Option<LegacyFramePixels>;
 
 #[derive(Debug, Clone)]
 struct CliOptions {
@@ -43,7 +49,6 @@ struct FramePlan {
     frame_id: i32,
     group_key: i32,
     frame_index: i32,
-    shape_bucket: String,
     bucket_frame_index: i32,
     height: usize,
     width: usize,
@@ -118,14 +123,7 @@ fn load_legacy_frame(
     store: &ReadableWritableListableStorage,
     group_key: i32,
     frame_index: i32,
-) -> Result<
-    Option<(
-        Array<dyn ReadableWritableListableStorageTraits>,
-        usize,
-        usize,
-    )>,
-    String,
-> {
+) -> Result<LegacyFrameLoad, String> {
     let path = format!("/{group_key}/{frame_index:05}/raw");
     let Ok(array) = Array::open(store.clone(), &path) else {
         return Ok(None);
@@ -206,34 +204,32 @@ fn migrate_beamtime(
         return Ok(());
     }
 
-    let mut specs_by_combo: HashMap<(String, i32), ShapeScanBucketSpec> = HashMap::new();
+    let mut specs_by_scan: HashMap<i32, ScanZarrSpec> = HashMap::new();
     let mut plans: Vec<FramePlan> = Vec::new();
-    let mut next_idx: HashMap<(String, i32), i32> = HashMap::new();
+    let mut next_idx: HashMap<i32, i32> = HashMap::new();
     for row in &frame_rows {
         let Some((_array, h, w)) =
             load_legacy_frame(&store, row.zarr_group_key, row.zarr_frame_index)?
         else {
             continue;
         };
-        let bucket = shape_bucket_key(h, w);
         let gk = row.zarr_group_key;
-        let combo = (bucket.clone(), gk);
-        let idx = next_idx.entry(combo.clone()).or_insert(0);
+        let idx = next_idx.entry(gk).or_insert(0);
         plans.push(FramePlan {
             frame_id: row.id,
             group_key: gk,
             frame_index: row.zarr_frame_index,
-            shape_bucket: bucket.clone(),
             bucket_frame_index: *idx,
             height: h,
             width: w,
         });
         *idx += 1;
-        specs_by_combo
-            .entry(combo)
-            .and_modify(|s| s.frames += 1)
-            .or_insert(ShapeScanBucketSpec {
-                shape_bucket: bucket,
+        specs_by_scan
+            .entry(gk)
+            .and_modify(|s| {
+                s.frames += 1;
+            })
+            .or_insert(ScanZarrSpec {
                 scan_number: gk,
                 height: h,
                 width: w,
@@ -244,12 +240,10 @@ fn migrate_beamtime(
         println!("beamtime {}: no legacy frames found", beamtime.id);
         return Ok(());
     }
-    let mut specs: Vec<ShapeScanBucketSpec> = specs_by_combo.into_values().collect();
-    specs.sort_by(|a, b| {
-        (a.shape_bucket.as_str(), a.scan_number).cmp(&(b.shape_bucket.as_str(), b.scan_number))
-    });
+    let mut specs: Vec<ScanZarrSpec> = specs_by_scan.into_values().collect();
+    specs.sort_by(|a, b| a.scan_number.cmp(&b.scan_number));
     if !options.dry_run {
-        prepare_shape_scan_bucket_arrays(&store, &specs).map_err(|e| e.to_string())?;
+        prepare_scan_zarr_arrays(&store, &specs).map_err(|e| e.to_string())?;
     }
 
     let mut migrated_frames = 0usize;
@@ -326,7 +320,7 @@ fn migrate_beamtime(
         };
         let legacy = retrieve_legacy_pixels_i32(&legacy_array, plan.height, plan.width)?;
         let converted: Vec<u16> = legacy.into_iter().map(|v| (v as i16) as u16).collect();
-        let bucket_path = scan_raw_array_path(&plan.shape_bucket, plan.group_key);
+        let bucket_path = scan_raw_array_path(plan.group_key);
         let bucket_array = Array::open(store.clone(), &bucket_path).map_err(|e| e.to_string())?;
         let subset = ArraySubset::new_with_start_shape(
             vec![plan.bucket_frame_index as u64, 0_u64, 0_u64],
@@ -337,10 +331,7 @@ fn migrate_beamtime(
             .store_array_subset(&subset, converted)
             .map_err(|e| e.to_string())?;
         diesel::update(frames::table.filter(frames::id.eq(plan.frame_id)))
-            .set((
-                frames::zarr_shape_bucket.eq(Some(plan.shape_bucket.as_str())),
-                frames::zarr_bucket_frame_index.eq(Some(plan.bucket_frame_index)),
-            ))
+            .set(frames::zarr_bucket_frame_index.eq(Some(plan.bucket_frame_index)))
             .execute(conn)
             .map_err(|e| e.to_string())?;
         if !options.keep_legacy {
@@ -355,7 +346,7 @@ fn migrate_beamtime(
         migrated_frames += 1;
     }
     println!(
-        "beamtime {}: migrated {} frames into {} per-scan shape bucket arrays",
+        "beamtime {}: migrated {} frames into {} per-scan 3D arrays",
         beamtime.id,
         migrated_frames,
         specs.len(),

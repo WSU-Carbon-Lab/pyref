@@ -17,8 +17,8 @@ pub mod catalog;
 pub mod schema;
 
 pub use errors::FitsError;
+pub use io::metadata::FitsMetadataSchema;
 pub use io::options::{ReadFitsOptions, ScanFitsOptions};
-pub use io::schema::FitsMetadataSchema;
 pub use io::source::{FitsSource, ResolvePreference, ResolvedSource};
 pub use io::{build_fits_stem, image_mmap, ImageInfo};
 pub use loader::{
@@ -49,11 +49,15 @@ mod extension {
     #[cfg(feature = "catalog")]
     use crate::catalog::{
         beamtime_ingest_layout, catalog_file_count, classify_scan_type, get_overrides,
-        ingest_beamtime_with_progress_sink, list_beamtime_entries_v2, list_beamtimes_from_catalog,
-        paths, scan_from_catalog, scan_from_catalog_for_beamtime, set_override,
-        set_scan_type_for_beamtime_scan, CatalogFilter, IngestParallelism, IngestProgress,
-        IngestProgressSink, IngestSelection, ReflectivityScanType,
+        header_values_view, ingest_beamtime_with_progress_sink, list_beamtime_entries_v2,
+        list_beamtimes_from_catalog, paths, scan_from_catalog, scan_from_catalog_for_beamtime,
+        set_override, set_scan_type_for_beamtime_scan, sync_missing_headers_for_beamtime,
+        CatalogFilter, IngestParallelism, IngestProgress, IngestProgressSink, IngestSelection,
+        ReflectivityScanType,
     };
+
+    #[cfg(feature = "catalog")]
+    type ClassifyScanTypeTuple = (String, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
 
     #[global_allocator]
     static ALLOC: PolarsAllocator = PolarsAllocator::new();
@@ -566,6 +570,51 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     #[pyfunction]
+    #[pyo3(
+        name = "py_header_values_view",
+        signature = (db_path, beamtime_path=None),
+        text_signature = "(db_path, beamtime_path=None)"
+    )]
+    pub fn py_header_values_view(
+        db_path: &str,
+        beamtime_path: Option<&str>,
+    ) -> PyResult<PyDataFrame> {
+        let db = std::path::Path::new(db_path);
+        let beamtime = beamtime_path.map(std::path::Path::new);
+        match header_values_view(db, beamtime) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(
+        name = "py_sync_missing_headers_for_beamtime",
+        signature = (db_path, beamtime_path),
+        text_signature = "(db_path, beamtime_path)"
+    )]
+    pub fn py_sync_missing_headers_for_beamtime<'py>(
+        py: Python<'py>,
+        db_path: &str,
+        beamtime_path: &str,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use pyo3::types::PyDict;
+        let db = std::path::Path::new(db_path);
+        let beam = std::path::Path::new(beamtime_path);
+        let report = sync_missing_headers_for_beamtime(db, beam)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let d = PyDict::new_bound(py);
+        d.set_item("files_checked", report.files_checked)?;
+        d.set_item("files_updated", report.files_updated)?;
+        d.set_item("header_rows_inserted", report.header_rows_inserted)?;
+        Ok(d)
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
     #[pyo3(name = "py_beamtime_entries")]
     #[pyo3(
         signature = (db_path, beamtime_path),
@@ -710,7 +759,7 @@ mod extension {
     /// Classify scan type from a list of ``(beamline_energy_eV, sample_theta_deg)`` pairs.
     pub fn py_classify_scan_type(
         pairs: Vec<(Option<f64>, Option<f64>)>,
-    ) -> PyResult<(String, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> {
+    ) -> PyResult<ClassifyScanTypeTuple> {
         let (st, e_min, e_max, t_min, t_max) = classify_scan_type(&pairs);
         Ok((
             reflectivity_scan_type_id(st).to_string(),
@@ -803,6 +852,11 @@ mod extension {
             m.add_function(pyo3::wrap_pyfunction!(py_scan_from_catalog, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(
                 py_scan_from_catalog_for_beamtime,
+                m
+            )?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_header_values_view, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(
+                py_sync_missing_headers_for_beamtime,
                 m
             )?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_beamtime_entries, m)?)?;

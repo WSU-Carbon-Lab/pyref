@@ -1,5 +1,3 @@
-#![cfg(feature = "catalog")]
-
 // schema.rs
 //
 // Diesel schema for the pyref catalog database.
@@ -11,7 +9,7 @@
 // and profile identity are promoted to first-class columns on the `frames`
 // table (sample_x, sample_y, sample_z, sample_theta, ccd_theta,
 // beamline_energy, epu_polarization, exposure, ring_current, ai3_izero,
-// beam_current). Every remaining card is stored in the `frame_header_values`
+// beam_current). Every remaining card is stored in the `header_values`
 // EAV table, keyed through `header_cards`, which is populated on first
 // ingestion from whatever cards are present in the FITS files. This makes the
 // schema forward-compatible when the beamline control system adds or renames
@@ -29,7 +27,6 @@
 //   scan_type         : "fixed_energy" | "fixed_angle"
 //   profile_type      : "fixed_energy" | "fixed_angle"
 //   frame_role        : "i0" | "stitch" | "overlap" | "reflectivity"
-//   card_category     : "motor" | "ai" | "camera" | "metadata"
 //   quality_flag      : "ok" | "mislabeled_sample" | "parse_failure"
 //   detection_flag    : "ok" | "beam_detection_failed" | "beam_drift_anomaly"
 
@@ -46,7 +43,7 @@ diesel::table! {
     ///
     /// `zarr_path` is the absolute local filesystem path to the beamtime's
     /// monolithic zarr archive, located at
-    /// `<data_dir>/pyref/.cache/<beamtime_hash>/beamtime.zarr`. All
+    /// `<pyref_config_dir>/cache/<beamtime_hash>/beamtime.zarr`. All
     /// post-ingestion image retrieval uses this path exclusively. The NAS
     /// does not need to be mounted for any workflow after ingestion completes.
     beamtimes (id) {
@@ -223,19 +220,12 @@ diesel::table! {
     /// subsequent beamtimes with new card names append rows here without
     /// requiring a schema migration.
     ///
-    /// `card_category` classifies the card for UI and query purposes:
-    ///   "motor"    - physical positioning motor (Sample X, CCD Theta, etc.)
-    ///   "ai"       - analog input channel (Beam Current, TEY signal, etc.)
-    ///   "camera"   - CCD / detector configuration (ROI, binning, temp)
-    ///   "metadata" - timing, instrument bookkeeping, MCS axes
     header_cards (id) {
         id -> Integer,
         /// Raw card name as it appears in the FITS header (e.g. "AI 3 Izero").
         name -> Text,
-        /// Human-readable display name for UI use.
+        /// Normalized display name for UI use.
         display_name -> Text,
-        /// "motor" | "ai" | "camera" | "metadata"
-        card_category -> Text,
     }
 }
 
@@ -244,14 +234,12 @@ diesel::table! {
 // ---------------------------------------------------------------------------
 
 diesel::table! {
-    /// One row per frame per scan. Contains all first-class reduction-critical
-    /// header values as typed columns, plus zarr retrieval keys. All remaining
-    /// header cards are stored in `frame_header_values`.
+    /// One row per frame per scan. Contains frame provenance + zarr retrieval
+    /// keys. Header card values are stored in `header_values`.
     ///
     /// Zarr retrieval: the monolithic beamtime archive is `beamtimes.zarr_path`.
-    /// Within the archive, raw images are stored per scan in shape buckets at
-    /// `/images/by_shape/<height>x<width>/scans/<scan_number>/raw` as 3D arrays
-    /// `(bucket_frame_index, y, x)` within that scan.
+    /// Within the archive, raw images are stored per scan at
+    /// `/images/scans/<scan_number>/raw` as 3D arrays `(bucket_frame_index, y, x)`.
     frames (id) {
         id -> Integer,
         scan_id -> Integer,
@@ -261,36 +249,10 @@ diesel::table! {
         zarr_group_key -> Integer,
         /// Dataset index within the zarr group, equal to the frame number.
         zarr_frame_index -> Integer,
-        /// Shape bucket key in the form `<height>x<width>`.
-        zarr_shape_bucket -> Nullable<Text>,
-        /// Dense frame index within the shape bucket dataset.
+        /// Dense frame index within the per-scan 3D raw stack.
         zarr_bucket_frame_index -> Nullable<Integer>,
         /// ISO 8601 acquisition timestamp from the DATE header card.
         acquired_at -> Nullable<Text>,
-        // --- first-class motor positions ---
-        /// Sample X stage position (mm). FITS card: "Sample X".
-        sample_x -> Double,
-        /// Sample Y stage position (mm). FITS card: "Sample Y".
-        sample_y -> Double,
-        /// Sample Z stage position (mm). FITS card: "Sample Z".
-        sample_z -> Double,
-        /// Sample theta (degrees). FITS card: "Sample Theta".
-        sample_theta -> Double,
-        /// CCD theta (degrees). FITS card: "CCD Theta".
-        ccd_theta -> Double,
-        /// Beamline energy (eV). FITS card: "Beamline Energy".
-        beamline_energy -> Double,
-        // --- first-class AI / beam channels ---
-        /// EPU polarization angle (degrees). FITS card: "EPU Polarization".
-        epu_polarization -> Double,
-        /// CCD exposure time (seconds). FITS card: "EXPOSURE".
-        exposure -> Double,
-        /// Storage ring current (mA). FITS card: "RINGCRNT".
-        ring_current -> Double,
-        /// Upstream gold mesh absorption current (V). FITS card: "AI 3 Izero".
-        ai3_izero -> Double,
-        /// Photodiode beam current (mA). FITS card: "Beam Current".
-        beam_current -> Double,
         // --- quality flag ---
         /// NULL when ok. "mislabeled_sample" when stage position deviates
         /// beyond configured tolerance for the attributed sample name.
@@ -302,14 +264,13 @@ diesel::joinable!(frames -> scans (scan_id));
 diesel::joinable!(frames -> files (file_id));
 
 // ---------------------------------------------------------------------------
-// Frame header values (EAV for non-critical cards)
+// Header values (EAV for FITS cards)
 // ---------------------------------------------------------------------------
 
 diesel::table! {
-    /// Entity-attribute-value store for all FITS header cards not promoted to
-    /// first-class columns on `frames`. All card values from the primary HDU
-    /// are stored as Double; the card name is resolved through `header_cards`.
-    frame_header_values (id) {
+    /// Entity-attribute-value store for numeric FITS header card values.
+    /// The card name is resolved through `header_cards`.
+    header_values (id) {
         id -> Integer,
         frame_id -> Integer,
         header_card_id -> Integer,
@@ -317,8 +278,8 @@ diesel::table! {
     }
 }
 
-diesel::joinable!(frame_header_values -> frames (frame_id));
-diesel::joinable!(frame_header_values -> header_cards (header_card_id));
+diesel::joinable!(header_values -> frames (frame_id));
+diesel::joinable!(header_values -> header_cards (header_card_id));
 
 // ---------------------------------------------------------------------------
 // Profiles
@@ -528,7 +489,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     scans,
     header_cards,
     frames,
-    frame_header_values,
+    header_values,
     profiles,
     profile_frames,
     beam_finding,

@@ -75,7 +75,7 @@ impl IngestParallelism {
             let n = ((avail as f64) * f).floor() as usize;
             return Ok(n.max(1));
         }
-        Ok(avail.max(1).min(8))
+        Ok(avail.clamp(1, 8))
     }
 }
 

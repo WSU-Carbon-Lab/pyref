@@ -2,8 +2,7 @@
 //!
 //! Layout: legacy ``/{scan}/{frame}/raw`` (2D int32) may still exist for older
 //! archives. New ingest writes **per-scan** 3D stacks at
-//! ``/images/by_shape/<HxW>/scans/<scan_number>/raw`` as ``uint16`` with
-//! shuffle + Zstd so each scan compresses independently.
+//! ``/images/scans/<scan_number>/raw`` as ``uint16`` with shuffle + Zstd.
 
 use ndarray::Array2;
 use std::path::Path;
@@ -18,16 +17,14 @@ use zarrs::storage::{ReadableWritableListableStorage, ReadableWritableListableSt
 use crate::errors::FitsError;
 
 const IMAGES_ROOT: &str = "/images";
-const BY_SHAPE_ROOT: &str = "/images/by_shape";
+const SCANS_ROOT: &str = "/images/scans";
 const RAW_DATASET_NAME: &str = "raw";
-const SCANS_SEGMENT: &str = "scans";
 const DEFAULT_SHARD_FRAMES: u64 = 64;
 
 pub const ZARR_U16_ZSTD_LEVEL: i32 = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShapeScanBucketSpec {
-    pub shape_bucket: String,
+pub struct ScanZarrSpec {
     pub scan_number: i32,
     pub height: usize,
     pub width: usize,
@@ -43,8 +40,8 @@ fn ensure_group(store: &ReadableWritableListableStorage, path: &str) -> Result<(
         .map_err(|e| FitsError::validation(e.to_string()))
 }
 
-pub fn scan_raw_array_path(shape_bucket: &str, scan_number: i32) -> String {
-    format!("{BY_SHAPE_ROOT}/{shape_bucket}/{SCANS_SEGMENT}/{scan_number}/{RAW_DATASET_NAME}")
+pub fn scan_raw_array_path(scan_number: i32) -> String {
+    format!("{SCANS_ROOT}/{scan_number}/{RAW_DATASET_NAME}")
 }
 
 pub fn open_zarr_store(zarr_root: &Path) -> Result<ReadableWritableListableStorage, FitsError> {
@@ -56,20 +53,16 @@ pub fn open_zarr_store(zarr_root: &Path) -> Result<ReadableWritableListableStora
     Ok(store)
 }
 
-pub fn shape_bucket_key(height: usize, width: usize) -> String {
-    format!("{height}x{width}")
-}
-
-fn open_or_create_scan_bucket_array(
+fn open_or_create_scan_array(
     store: &ReadableWritableListableStorage,
-    spec: &ShapeScanBucketSpec,
+    spec: &ScanZarrSpec,
 ) -> Result<Array<dyn ReadableWritableListableStorageTraits>, FitsError> {
-    let path = scan_raw_array_path(&spec.shape_bucket, spec.scan_number);
+    let path = scan_raw_array_path(spec.scan_number);
     if let Ok(array) = Array::open(store.clone(), &path) {
         return Ok(array);
     }
     let n = spec.frames as u64;
-    let shard_frames = n.max(1).min(DEFAULT_SHARD_FRAMES);
+    let shard_frames = n.clamp(1, DEFAULT_SHARD_FRAMES);
     let shape = vec![n, spec.height as u64, spec.width as u64];
     let chunk_shape = vec![shard_frames, spec.height as u64, spec.width as u64];
     let mut builder = ArrayBuilder::new(shape, chunk_shape, data_type::uint16(), 0u16);
@@ -92,43 +85,31 @@ fn open_or_create_scan_bucket_array(
     Ok(array)
 }
 
-pub fn prepare_shape_scan_bucket_arrays(
+pub fn prepare_scan_zarr_arrays(
     store: &ReadableWritableListableStorage,
-    specs: &[ShapeScanBucketSpec],
+    specs: &[ScanZarrSpec],
 ) -> Result<(), FitsError> {
     ensure_group(store, "/")?;
     ensure_group(store, IMAGES_ROOT)?;
-    ensure_group(store, BY_SHAPE_ROOT)?;
+    ensure_group(store, SCANS_ROOT)?;
     for spec in specs {
-        ensure_group(store, &format!("{BY_SHAPE_ROOT}/{}", spec.shape_bucket))?;
-        ensure_group(
-            store,
-            &format!("{BY_SHAPE_ROOT}/{}/{SCANS_SEGMENT}", spec.shape_bucket),
-        )?;
-        ensure_group(
-            store,
-            &format!(
-                "{BY_SHAPE_ROOT}/{}/{SCANS_SEGMENT}/{}",
-                spec.shape_bucket, spec.scan_number
-            ),
-        )?;
-        let _ = open_or_create_scan_bucket_array(store, spec)?;
+        ensure_group(store, &format!("{SCANS_ROOT}/{}", spec.scan_number))?;
+        let _ = open_or_create_scan_array(store, spec)?;
     }
     Ok(())
 }
 
-pub fn write_scan_shape_bucket_frame_raw(
+pub fn write_scan_frame_raw(
     store: &ReadableWritableListableStorage,
-    shape_bucket: &str,
     scan_number: i32,
-    bucket_frame_index: usize,
+    frame_index: usize,
     data: &Array2<u16>,
 ) -> Result<(), FitsError> {
-    let path = scan_raw_array_path(shape_bucket, scan_number);
+    let path = scan_raw_array_path(scan_number);
     let array =
         Array::open(store.clone(), &path).map_err(|e| FitsError::validation(e.to_string()))?;
     let subset = ArraySubset::new_with_start_shape(
-        vec![bucket_frame_index as u64, 0_u64, 0_u64],
+        vec![frame_index as u64, 0_u64, 0_u64],
         vec![1_u64, data.nrows() as u64, data.ncols() as u64],
     )
     .map_err(|e| FitsError::validation(e.to_string()))?;
@@ -213,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn bucketed_uint16_layout_uses_less_disk_than_legacy_per_frame_int32() {
+    fn per_scan_uint16_layout_uses_less_disk_than_legacy_per_frame_int32() {
         let old_tmp = TempDir::new().expect("create old tempdir");
         let new_tmp = TempDir::new().expect("create new tempdir");
         let old_store = open_zarr_store(old_tmp.path()).expect("open old zarr store");
@@ -225,25 +206,22 @@ mod tests {
         for i in 0..n {
             write_frame_raw(&old_store, 1, i as i64, &old_frame).expect("write legacy frame");
         }
-        let key = shape_bucket_key(h, w);
-        let specs = vec![ShapeScanBucketSpec {
-            shape_bucket: key.clone(),
+        let specs = vec![ScanZarrSpec {
             scan_number: 1,
             height: h,
             width: w,
             frames: n,
         }];
-        prepare_shape_scan_bucket_arrays(&new_store, &specs).expect("prepare bucket arrays");
+        prepare_scan_zarr_arrays(&new_store, &specs).expect("prepare scan arrays");
         let new_frame = Array2::from_elem((h, w), 512_u16);
         for i in 0..n {
-            write_scan_shape_bucket_frame_raw(&new_store, &key, 1, i, &new_frame)
-                .expect("write bucket frame");
+            write_scan_frame_raw(&new_store, 1, i, &new_frame).expect("write scan frame");
         }
         let old_bytes = dir_size_bytes(old_tmp.path());
         let new_bytes = dir_size_bytes(new_tmp.path());
         assert!(
             new_bytes < old_bytes,
-            "expected bucketed layout to be smaller (new={new_bytes}, old={old_bytes})"
+            "expected per-scan layout to be smaller (new={new_bytes}, old={old_bytes})"
         );
     }
 }

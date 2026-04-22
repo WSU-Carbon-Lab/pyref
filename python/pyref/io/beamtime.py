@@ -367,6 +367,44 @@ def scan_from_catalog_for_beamtime(
     )
 
 
+def header_values_view(
+    *,
+    beamtime_path: FilePath | None = None,
+    catalog_path: FilePath | None = None,
+) -> pl.DataFrame:
+    """
+    Load merged frame/header rows.
+
+    Uses ``frames``, ``header_cards``, and ``header_values`` as the source tables.
+
+    Parameters
+    ----------
+    beamtime_path : str or pathlib.Path, optional
+        Restrict rows to one beamtime root. When omitted, returns rows for all
+        beamtimes.
+    catalog_path : str or pathlib.Path, optional
+        Path to ``catalog.db``; default from :func:`resolve_catalog_path`.
+
+    Returns
+    -------
+    polars.DataFrame
+        Long-form frame/header rows with frame provenance, zarr keys, header name,
+        normalized header display name, and numeric header value.
+    """
+    from pyref.pyref import py_header_values_view
+
+    if catalog_path is not None:
+        db = Path(catalog_path).resolve()
+    else:
+        db = resolve_catalog_path()
+    beam = (
+        str(_normalize_beamtime_path(beamtime_path))
+        if beamtime_path is not None
+        else None
+    )
+    return py_header_values_view(str(db), beam)
+
+
 def beamtime_entries(
     beamtime_path: FilePath,
     catalog_path: FilePath | None = None,
@@ -878,6 +916,7 @@ __all__ = [
     "BeamtimeEntriesView",
     "apply_scan_overrides",
     "beamtime_entries",
+    "header_values_view",
     "list_beamtimes",
     "naming_qc_from_frames",
     "naming_qc_with_db_parse_flags",

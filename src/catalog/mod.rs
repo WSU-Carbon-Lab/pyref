@@ -1,5 +1,3 @@
-#![cfg(feature = "catalog")]
-
 mod beamspot_qc;
 mod beamtime_index;
 pub mod db;
@@ -12,6 +10,7 @@ mod parallelism;
 pub mod paths;
 mod query;
 mod reflectivity_profile;
+mod scan_scheduler;
 pub mod zarr_write;
 
 #[cfg(feature = "watch")]
@@ -39,11 +38,12 @@ pub use ingest_progress::{
 pub use layout::{detect_beamtime_layout, discover_fits_for_layout, BeamtimeLayout};
 pub use parallelism::IngestParallelism;
 pub use query::{
-    catalog_file_count, get_overrides, get_scan_point_uid_by_source_path, list_beamtime_entries,
-    list_beamtime_entries_v2, list_beamtimes_from_catalog, query_files, query_scan_points,
-    rename_file_in_catalog, scan_from_catalog, scan_from_catalog_for_beamtime, set_override,
-    set_scan_type_for_beamtime_scan, update_beamspot, update_beamspot_scan_point, BeamtimeEntries,
-    CatalogFilter, FileRow,
+    catalog_file_count, get_overrides, get_scan_point_uid_by_source_path, header_values_view,
+    list_beamtime_entries, list_beamtime_entries_v2, list_beamtimes_from_catalog, query_files,
+    query_scan_points, rename_file_in_catalog, scan_from_catalog, scan_from_catalog_for_beamtime,
+    set_override, set_scan_type_for_beamtime_scan, sync_missing_headers_for_beamtime,
+    update_beamspot, update_beamspot_scan_point, BeamtimeEntries, CatalogFilter, FileRow,
+    HeaderSyncReport,
 };
 pub use reflectivity_profile::{
     classify_scan_type, segment_reflectivity_profiles, ProfileSegment, ReflectivityScanType,

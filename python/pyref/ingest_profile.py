@@ -1,8 +1,8 @@
-"""Shared helpers for ingest profiling and benchmarking scripts.
+"""Shared helpers for ingest profiling and benchmarking.
 
 Exposes a phase-aware progress collector around :func:`pyref.io.readers.ingest_beamtime`
-so ``scripts/profile_beamtime_ingest.py`` and ``scripts/bench_ingest.py`` render the
-same markdown table instead of diverging their timing logic.
+so :mod:`pyref.cli.bench` and other callers render the same markdown table instead of
+diverging their timing logic.
 """
 
 from __future__ import annotations

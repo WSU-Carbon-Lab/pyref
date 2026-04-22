@@ -27,6 +27,7 @@ pub const FITS_METADATA_COLUMNS: &[&str] = &[
     "Higher Order Suppressor",
     "EPU Polarization",
     "EXPOSURE",
+    "AI 3 Izero",
     "Sample Name",
     "Scan ID",
     "Lambda",
@@ -61,6 +62,7 @@ impl FitsMetadataSchema {
                     | "Higher Order Suppressor"
                     | "EPU Polarization"
                     | "EXPOSURE"
+                    | "AI 3 Izero"
                     | "Scan ID"
                     | "Lambda"
                     | "Q" => DataType::Float64,

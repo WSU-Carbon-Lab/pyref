@@ -1,5 +1,3 @@
-#![cfg(feature = "watch")]
-
 use crate::catalog::ingest_beamtime;
 use crate::catalog::CatalogError;
 use crate::catalog::IngestSelection;
@@ -19,6 +17,15 @@ const DEFAULT_HEADER_KEYS: &[&str] = &[
     "CCD Theta",
     "Higher Order Suppressor",
     "EPU Polarization",
+    "EXPOSURE",
+    "Sample Name",
+    "Scan ID",
+    "Sample X",
+    "Sample Y",
+    "Sample Z",
+    "RINGCRNT",
+    "AI 3 Izero",
+    "Beam Current",
 ];
 
 pub struct WatchHandle {
@@ -35,6 +42,17 @@ impl Drop for WatchHandle {
     fn drop(&mut self) {
         let _ = self.stop_tx.take().map(|tx| tx.send(()));
     }
+}
+
+fn spawn_ingest_worker(beamtime_dir: PathBuf, keys: Vec<String>) -> mpsc::Sender<()> {
+    let (work_tx, work_rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        while let Ok(()) = work_rx.recv() {
+            let _ = ingest_beamtime(&beamtime_dir, &keys, true, None, IngestSelection::default());
+            while work_rx.try_recv().is_ok() {}
+        }
+    });
+    work_tx
 }
 
 pub fn run_catalog_watcher(
@@ -104,7 +122,7 @@ pub fn run_catalog_watcher(
                         &keys,
                         true,
                         None,
-                        crate::catalog::IngestSelection::default(),
+                        IngestSelection::default(),
                     );
                     if let Some(ref f) = on_end {
                         f();
@@ -210,15 +228,17 @@ pub fn run_catalog_watcher_blocking(
             .map_err(|e| CatalogError::Validation(format!("watch {}: {e}", root.display())))?;
     }
 
+    let work_tx = spawn_ingest_worker(beamtime_dir.clone(), keys);
+
     while !cancel.load(Ordering::Relaxed) {
         match event_rx.recv_timeout(Duration::from_millis(200)) {
             Ok(()) => {
-                let _ =
-                    ingest_beamtime(&beamtime_dir, &keys, true, None, IngestSelection::default());
+                let _ = work_tx.send(());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
+    drop(work_tx);
     Ok(())
 }

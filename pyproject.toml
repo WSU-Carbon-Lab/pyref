@@ -64,7 +64,6 @@ dependencies = [
 
 [project.scripts]
 pyref = "pyref.cli.main:main"
-pyref-ingest = "pyref.cli.main:main_ingest_shim"
 
 [tool.maturin]
 bindings = "pyo3"

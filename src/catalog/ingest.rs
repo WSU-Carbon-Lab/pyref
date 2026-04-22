@@ -8,41 +8,49 @@
 //! and re-inserts the `beamtimes` row, cascading away stale scan/file
 //! rows before inserting fresh data.
 //!
+//! Future work: true incremental ingest (diff discovered paths vs catalog, extend per-scan zarr
+//! arrays) would pair with WAL mode for safe concurrent watcher + CLI use; the `incremental`
+//! parameter is reserved for that design.
+//!
 //! SQLite allows one writer at a time. Ingest uses a single [`diesel::SqliteConnection`] for all
 //! catalog mutations in this process. After `fork` or when spawning a subprocess, open a new
 //! connection in the child; do not share a connection across process boundaries.
 //!
 //! FITS header reads and pixel reads for zarr use a [`rayon::ThreadPool`] sized by
 //! [`crate::catalog::IngestParallelism`] (after [`IngestParallelism::from_options_or_env`]). The
-//! headers phase parallelizes **per file** (a flat [`rayon::prelude::ParallelIterator`] over every
-//! discovered FITS path) so worker utilization stays even when scan sizes are skewed. Diesel
-//! transactions and [`super::zarr_write::write_frame_raw`] run on the calling thread in global row
-//! order so catalog rows and zarr datasets stay aligned.
+//! headers and zarr reader phases schedule files with **water-fill** across scans sorted by
+//! ascending file count: each scan gets up to `min(remaining_files, pool_budget)` concurrent slots,
+//! and when a short scan finishes, [`super::scan_scheduler::WaterFillQueues`] reallocates workers
+//! to longer scans. Resulting catalog rows are still sorted by `(scan_number, frame_number, path)`
+//! before SQLite and zarr writes. Diesel transactions and [`super::zarr_write::write_scan_frame_raw`]
+//! run on the calling thread in that sorted row order so catalog rows and zarr datasets stay aligned.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use diesel::prelude::*;
 use diesel::OptionalExtension;
 use ndarray::Array2;
-use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 
 use crate::io::raw_pixels::read_bitpix16_be_bytes;
 use crate::io::BtIngestRow;
 use crate::loader::read_fits_headers_only_row;
-use crate::schema::{beamtimes, file_tags, files, frames, samples, scans, tags};
+use crate::schema::{
+    beamtimes, file_tags, files, frames, header_cards, header_values, samples, scans, tags,
+};
 
 use super::discover_paths_for_catalog_ingest;
 use super::ingest_progress::{
-    layout_and_groups_from_paths, BeamtimeIngestLayout, IngestPhase, IngestProgress,
-    IngestProgressSink,
+    layout_and_groups_from_paths, partition_paths_by_scan, BeamtimeIngestLayout, IngestPhase,
+    IngestProgress, IngestProgressSink,
 };
 use super::parallelism::IngestParallelism;
+use super::scan_scheduler::{SharedWaterFill, WaterFillQueues};
 use super::zarr_write::{
-    open_zarr_store, prepare_shape_scan_bucket_arrays, shape_bucket_key,
-    write_scan_shape_bucket_frame_raw, ShapeScanBucketSpec,
+    open_zarr_store, prepare_scan_zarr_arrays, write_scan_frame_raw, ScanZarrSpec,
 };
 use super::{db, paths, CatalogError, Result};
 
@@ -181,56 +189,66 @@ pub const DEFAULT_INGEST_HEADER_ITEMS: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FrameZarrAssignment {
-    shape_bucket: String,
     scan_number: i32,
     bucket_frame_index: i32,
 }
 
+fn row_index_groups_by_scan(rows: &[BtIngestRow]) -> Vec<(i32, Vec<usize>)> {
+    let mut by_scan: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (i, r) in rows.iter().enumerate() {
+        by_scan.entry(r.scan_number as i32).or_default().push(i);
+    }
+    let mut groups: Vec<(i32, Vec<usize>)> = by_scan.into_iter().collect();
+    groups.sort_by(|a, b| a.1.len().cmp(&b.1.len()).then_with(|| a.0.cmp(&b.0)));
+    groups
+}
+
 fn build_frame_zarr_plan(
     rows: &[BtIngestRow],
-) -> (Vec<FrameZarrAssignment>, Vec<ShapeScanBucketSpec>) {
-    let mut combo_counts: HashMap<(String, i32), usize> = HashMap::new();
-    let mut combo_dims: HashMap<(String, i32), (usize, usize)> = HashMap::new();
+) -> Result<(Vec<FrameZarrAssignment>, Vec<ScanZarrSpec>)> {
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    let mut dims: HashMap<i32, (usize, usize)> = HashMap::new();
     for row in rows {
-        let height = row.naxis2 as usize;
-        let width = row.naxis1 as usize;
-        let bucket = shape_bucket_key(height, width);
-        let scan_number = row.scan_number as i32;
-        let key = (bucket.clone(), scan_number);
-        *combo_counts.entry(key.clone()).or_insert(0) += 1;
-        combo_dims.entry(key).or_insert((height, width));
+        let sn = row.scan_number as i32;
+        *counts.entry(sn).or_insert(0) += 1;
+        let hw = (row.naxis2 as usize, row.naxis1 as usize);
+        if let Some(&existing) = dims.get(&sn) {
+            if existing != hw {
+                return Err(CatalogError::Validation(format!(
+                    "scan {sn} has mixed image shapes {existing:?} vs {hw:?}: {}",
+                    row.file_path
+                )));
+            }
+        } else {
+            dims.insert(sn, hw);
+        }
     }
-    let mut combos: Vec<(String, i32)> = combo_counts.keys().cloned().collect();
-    combos.sort_by(|a, b| (a.0.as_str(), a.1).cmp(&(b.0.as_str(), b.1)));
-    let specs: Vec<ShapeScanBucketSpec> = combos
+    let mut scan_numbers: Vec<i32> = counts.keys().copied().collect();
+    scan_numbers.sort_unstable();
+    let specs: Vec<ScanZarrSpec> = scan_numbers
         .iter()
-        .map(|(bucket, scan_number)| {
-            let key = &(bucket.clone(), *scan_number);
-            let (height, width) = combo_dims[key];
-            ShapeScanBucketSpec {
-                shape_bucket: bucket.clone(),
-                scan_number: *scan_number,
+        .map(|&sn| {
+            let (height, width) = dims[&sn];
+            ScanZarrSpec {
+                scan_number: sn,
                 height,
                 width,
-                frames: combo_counts[key],
+                frames: counts[&sn],
             }
         })
         .collect();
-    let mut next_idx: HashMap<(String, i32), usize> = HashMap::new();
+    let mut next_idx: HashMap<i32, usize> = HashMap::new();
     let mut assignments: Vec<FrameZarrAssignment> = Vec::with_capacity(rows.len());
     for row in rows {
-        let bucket = shape_bucket_key(row.naxis2 as usize, row.naxis1 as usize);
         let scan_number = row.scan_number as i32;
-        let key = (bucket.clone(), scan_number);
-        let idx = next_idx.entry(key).or_insert(0);
+        let idx = next_idx.entry(scan_number).or_insert(0);
         assignments.push(FrameZarrAssignment {
-            shape_bucket: bucket,
             scan_number,
             bucket_frame_index: *idx as i32,
         });
         *idx += 1;
     }
-    (assignments, specs)
+    Ok((assignments, specs))
 }
 
 fn read_image_u16(row: &BtIngestRow) -> Result<Array2<u16>> {
@@ -268,8 +286,8 @@ fn beamtime_date_label(beamtime_dir: &Path) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// Emits `Phase(Headers)` then reads every FITS header in parallel on
-/// `ctx.pool` (flat per-file iteration), returning rows sorted by
+/// Emits `Phase(Headers)` then reads every FITS header on `ctx.pool` using
+/// water-fill scheduling across scans (ascending file count), returning rows sorted by
 /// `(scan_number, frame_number, file_path)`.
 fn run_headers_phase(
     ctx: &IngestContext<'_>,
@@ -281,15 +299,48 @@ fn run_headers_phase(
             phase: IngestPhase::Headers,
         });
     }
-    let mut rows: Vec<BtIngestRow> = ctx
-        .pool
-        .install(|| {
-            paths
-                .par_iter()
-                .map(|p| read_fits_headers_only_row(p.clone(), header_items))
-                .collect::<std::result::Result<Vec<_>, _>>()
-        })
-        .map_err(CatalogError::FitsReadFailed)?;
+    let groups = partition_paths_by_scan(paths);
+    let n_workers = ctx.pool.current_num_threads().max(1);
+    let shared = Arc::new(SharedWaterFill::new(WaterFillQueues::new(groups)));
+    shared.set_pool_size(n_workers);
+    let results = Arc::new(Mutex::new(Vec::<BtIngestRow>::new()));
+    let first_err: Arc<Mutex<Option<crate::errors::FitsError>>> = Arc::new(Mutex::new(None));
+    let cancel = ctx.cancel;
+    ctx.pool.install(|| {
+        rayon::scope(|s| {
+            for _ in 0..n_workers {
+                let shared = Arc::clone(&shared);
+                let results = Arc::clone(&results);
+                let first_err = Arc::clone(&first_err);
+                s.spawn(move |_| loop {
+                    if first_err.lock().unwrap().is_some() {
+                        break;
+                    }
+                    let job = shared.wait_pop(cancel);
+                    let Some((path, gi)) = job else {
+                        break;
+                    };
+                    match read_fits_headers_only_row(path, header_items) {
+                        Ok(row) => {
+                            results.lock().unwrap().push(row);
+                        }
+                        Err(e) => {
+                            *first_err.lock().unwrap() = Some(e);
+                            break;
+                        }
+                    }
+                    shared.complete_and_notify(gi);
+                });
+            }
+        });
+    });
+    if let Some(e) = first_err.lock().unwrap().take() {
+        return Err(CatalogError::FitsReadFailed(e));
+    }
+    let mut rows = Arc::try_unwrap(results)
+        .map_err(|_| CatalogError::Validation("header ingest results arc".into()))?
+        .into_inner()
+        .map_err(|_| CatalogError::Validation("header ingest results mutex".into()))?;
     rows.sort_by(|a, b| {
         (a.scan_number, a.frame_number, a.file_path.as_str()).cmp(&(
             b.scan_number,
@@ -314,6 +365,22 @@ fn build_scan_first_sample(rows: &[BtIngestRow]) -> HashMap<i32, String> {
         scan_first_sample.entry(sn).or_insert(sk);
     }
     scan_first_sample
+}
+
+fn load_header_card_cache(conn: &mut diesel::SqliteConnection) -> Result<HashMap<String, i32>> {
+    let rows: Vec<(String, i32)> = header_cards::table
+        .select((header_cards::name, header_cards::id))
+        .load(conn)
+        .map_err(CatalogError::Diesel)?;
+    Ok(rows.into_iter().collect())
+}
+
+fn normalize_header_display_name(card_name: &str) -> String {
+    card_name
+        .split_whitespace()
+        .map(|part| part.to_ascii_lowercase().replace("sample", "sam"))
+        .collect::<Vec<String>>()
+        .join("_")
 }
 
 /// Inserts one row per unique sample name under one transaction and returns
@@ -373,6 +440,7 @@ fn insert_catalog_batch(
     end: usize,
     sample_cache: &HashMap<String, i32>,
     scan_cache: &mut HashMap<i32, i32>,
+    header_card_cache: &mut HashMap<String, i32>,
     scan_first_sample: &HashMap<i32, String>,
     catalog_scan_done: &mut HashMap<i32, u32>,
     global_total: u32,
@@ -481,42 +549,51 @@ fn insert_catalog_batch(
                 }
             }
 
-            let sx = row.sample_x.unwrap_or(0.0);
-            let sy = row.sample_y.unwrap_or(0.0);
-            let sz = row.sample_z.unwrap_or(0.0);
-            let st = row.sample_theta.unwrap_or(0.0);
-            let ccd = row.ccd_theta.unwrap_or(0.0);
-            let epu = row.epu_polarization.unwrap_or(0.0);
-            let exp = row.exposure.unwrap_or(0.0);
-            let be = row.beamline_energy.unwrap_or(0.0);
-            let ring = row.ring_current.unwrap_or(0.0);
-            let ai3 = row.ai3_izero.unwrap_or(0.0);
-            let bcm = row.beam_current.unwrap_or(0.0);
-
-            diesel::insert_into(frames::table)
+            let frame_id: i32 = diesel::insert_into(frames::table)
                 .values((
                     frames::scan_id.eq(scan_id),
                     frames::file_id.eq(file_id),
                     frames::frame_number.eq(row.frame_number as i32),
                     frames::zarr_group_key.eq(scan_no),
                     frames::zarr_frame_index.eq(row.frame_number as i32),
-                    frames::zarr_shape_bucket.eq(Some(zarr_assignment.shape_bucket.as_str())),
                     frames::zarr_bucket_frame_index.eq(Some(zarr_assignment.bucket_frame_index)),
                     frames::acquired_at.eq(row.date_iso.clone()),
-                    frames::sample_x.eq(sx),
-                    frames::sample_y.eq(sy),
-                    frames::sample_z.eq(sz),
-                    frames::sample_theta.eq(st),
-                    frames::ccd_theta.eq(ccd),
-                    frames::beamline_energy.eq(be),
-                    frames::epu_polarization.eq(epu),
-                    frames::exposure.eq(exp),
-                    frames::ring_current.eq(ring),
-                    frames::ai3_izero.eq(ai3),
-                    frames::beam_current.eq(bcm),
                     frames::quality_flag.eq(None::<String>),
                 ))
-                .execute(conn)?;
+                .returning(frames::id)
+                .get_result(conn)?;
+
+            for (card_name, value) in &row.non_promoted_header_values {
+                let header_card_id = if let Some(id) = header_card_cache.get(card_name.as_str()) {
+                    *id
+                } else {
+                    let existing: Option<i32> = header_cards::table
+                        .filter(header_cards::name.eq(card_name.as_str()))
+                        .select(header_cards::id)
+                        .first(conn)
+                        .optional()?;
+                    let id = match existing {
+                        Some(id) => id,
+                        None => diesel::insert_into(header_cards::table)
+                            .values((
+                                header_cards::name.eq(card_name.as_str()),
+                                header_cards::display_name
+                                    .eq(normalize_header_display_name(card_name.as_str())),
+                            ))
+                            .returning(header_cards::id)
+                            .get_result(conn)?,
+                    };
+                    header_card_cache.insert(card_name.clone(), id);
+                    id
+                };
+                diesel::insert_into(header_values::table)
+                    .values((
+                        header_values::frame_id.eq(frame_id),
+                        header_values::header_card_id.eq(header_card_id),
+                        header_values::value.eq(*value),
+                    ))
+                    .execute(conn)?;
+            }
 
             if let Some(sink) = ctx.progress {
                 let sn = row.scan_number as i32;
@@ -560,6 +637,7 @@ fn run_catalog_phase(
     let batches = plan_catalog_batches(rows);
     let global_total = rows.len() as u32;
     let mut scan_cache: HashMap<i32, i32> = HashMap::new();
+    let mut header_card_cache = load_header_card_cache(conn)?;
     let mut catalog_scan_done: HashMap<i32, u32> = HashMap::new();
 
     for (start, end) in batches {
@@ -572,6 +650,7 @@ fn run_catalog_phase(
             end,
             &sample_cache,
             &mut scan_cache,
+            &mut header_card_cache,
             &scan_first_sample,
             &mut catalog_scan_done,
             global_total,
@@ -582,13 +661,13 @@ fn run_catalog_phase(
 }
 
 /// Emits `Phase(Zarr)` then `FileComplete` per row. Uses a bounded crossbeam
-/// channel between a single reader pool task (running `ctx.pool` in parallel)
-/// and the calling-thread writer so the zstore sees writes in completion order.
+/// channel between water-fill reader workers on `ctx.pool` and the calling-thread
+/// writer so the zstore sees writes in completion order.
 fn run_zarr_phase(
     ctx: &IngestContext<'_>,
     rows: &[BtIngestRow],
     zarr_assignments: &[FrameZarrAssignment],
-    bucket_specs: &[ShapeScanBucketSpec],
+    scan_zarr_specs: &[ScanZarrSpec],
     zstore: &zarrs::storage::ReadableWritableListableStorage,
 ) -> Result<()> {
     if let Some(sink) = ctx.progress {
@@ -600,7 +679,7 @@ fn run_zarr_phase(
     let n_workers = ctx.pool.current_num_threads();
     let channel_cap = (n_workers.saturating_mul(2)).max(4);
     let (tx, rx) = crossbeam_channel::bounded::<Result<(usize, Array2<u16>)>>(channel_cap);
-    prepare_shape_scan_bucket_arrays(zstore, bucket_specs)
+    prepare_scan_zarr_arrays(zstore, scan_zarr_specs)
         .map_err(|e| CatalogError::Validation(e.to_string()))?;
 
     let stop = AtomicBool::new(false);
@@ -613,25 +692,40 @@ fn run_zarr_phase(
         let pool_ref: &rayon::ThreadPool = ctx.pool;
         let cancel_ref = ctx.cancel;
         let stop_ref = &stop;
+        let n_readers = n_workers.max(1);
+        let zarr_shared = Arc::new(SharedWaterFill::new(WaterFillQueues::new(
+            row_index_groups_by_scan(rows_ref),
+        )));
+        zarr_shared.set_pool_size(n_readers);
 
-        let reader_handle = s.spawn(move || {
-            pool_ref.install(move || {
-                rows_ref
-                    .par_iter()
-                    .enumerate()
-                    .for_each_with(tx, |tx_c, (row_i, row)| {
-                        if stop_ref.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        if cancel_ref.is_some_and(|c| c.load(Ordering::Relaxed)) {
-                            return;
-                        }
-                        let item = read_image_u16(row).map(|img| (row_i, img));
-                        if tx_c.send(item).is_err() {
-                            stop_ref.store(true, Ordering::Relaxed);
+        let reader_handle = s.spawn({
+            let zarr_shared = zarr_shared;
+            let tx = tx;
+            move || {
+                pool_ref.install(|| {
+                    rayon::scope(|spw| {
+                        for _ in 0..n_readers {
+                            let zarr_shared = Arc::clone(&zarr_shared);
+                            let tx_c = tx.clone();
+                            spw.spawn(move |_| loop {
+                                if stop_ref.load(Ordering::Relaxed) {
+                                    return;
+                                }
+                                let job = zarr_shared.wait_pop(cancel_ref);
+                                let Some((row_i, gi)) = job else {
+                                    break;
+                                };
+                                let row = &rows_ref[row_i];
+                                let item = read_image_u16(row).map(|img| (row_i, img));
+                                if tx_c.send(item).is_err() {
+                                    stop_ref.store(true, Ordering::Relaxed);
+                                }
+                                zarr_shared.complete_and_notify(gi);
+                            });
                         }
                     });
-            });
+                });
+            }
         });
 
         let mut write_err: Option<CatalogError> = None;
@@ -643,9 +737,8 @@ fn run_zarr_phase(
                 let (row_i, img) = item?;
                 let row = &rows[row_i];
                 let zarr_assignment = &zarr_assignments[row_i];
-                write_scan_shape_bucket_frame_raw(
+                write_scan_frame_raw(
                     zstore,
-                    &zarr_assignment.shape_bucket,
                     zarr_assignment.scan_number,
                     zarr_assignment.bucket_frame_index as usize,
                     &img,
@@ -920,13 +1013,13 @@ fn ingest_beamtime_inner(
     };
 
     let rows = run_headers_phase(&ctx, &paths_only, header_items)?;
-    let (zarr_assignments, bucket_specs) = build_frame_zarr_plan(&rows);
+    let (zarr_assignments, scan_zarr_specs) = build_frame_zarr_plan(&rows)?;
 
     let zstore =
         open_zarr_store(&zarr_path).map_err(|e| CatalogError::Validation(e.to_string()))?;
 
     run_catalog_phase(&ctx, &mut conn, &rows, &zarr_assignments)?;
-    run_zarr_phase(&ctx, &rows, &zarr_assignments, &bucket_specs, &zstore)?;
+    run_zarr_phase(&ctx, &rows, &zarr_assignments, &scan_zarr_specs, &zstore)?;
 
     let _ = incremental;
     Ok(db_path)
@@ -1039,6 +1132,19 @@ mod tests {
         Ok((s, sc, f))
     }
 
+    fn count_header_rows(db_path: &std::path::Path) -> Result<(i64, i64)> {
+        let mut conn = db::establish_connection(db_path)?;
+        let cards: i64 = header_cards::table
+            .count()
+            .get_result(&mut conn)
+            .map_err(CatalogError::Diesel)?;
+        let values: i64 = header_values::table
+            .count()
+            .get_result(&mut conn)
+            .map_err(CatalogError::Diesel)?;
+        Ok((cards, values))
+    }
+
     fn make_row(scan_number: i64, frame_number: i64) -> BtIngestRow {
         BtIngestRow {
             file_path: format!("/tmp/{scan_number}_{frame_number}.fits"),
@@ -1064,6 +1170,7 @@ mod tests {
             ai3_izero: None,
             beam_current: None,
             date_iso: None,
+            non_promoted_header_values: Vec::new(),
         }
     }
 
@@ -1142,6 +1249,8 @@ mod tests {
             .count()
             .get_result(&mut conn)
             .expect("count frames");
+        let (header_card_count, header_value_count) =
+            count_header_rows(&db_path).expect("count header rows after ingest");
 
         assert_eq!(
             counts,
@@ -1151,6 +1260,14 @@ mod tests {
         assert_eq!(
             frame_count, 1,
             "batched ingest must produce exactly 1 frame"
+        );
+        assert!(
+            header_card_count > 0,
+            "ingest must register discovered FITS header cards"
+        );
+        assert!(
+            header_value_count > 0,
+            "ingest must persist non-promoted FITS header values"
         );
     }
 
@@ -1248,19 +1365,12 @@ mod tests {
         );
 
         let mut conn = db::establish_connection(&db_path).expect("open catalog db");
-        let shape_bucket: Option<String> = frames::table
-            .select(frames::zarr_shape_bucket)
-            .first(&mut conn)
-            .expect("select shape bucket for only cataloged frame");
-        let shape_bucket = shape_bucket.expect("zarr shape bucket should be set");
         let scan_no: i32 = files::table
             .select(files::scan_number)
             .first(&mut conn)
             .expect("select scan of only cataloged file");
         let raw_path = zarr_root
             .join("images")
-            .join("by_shape")
-            .join(&shape_bucket)
             .join("scans")
             .join(scan_no.to_string())
             .join("raw");

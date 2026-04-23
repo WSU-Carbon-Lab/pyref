@@ -128,10 +128,12 @@ Connecting individual frames back to their originating sample, scan, and beamtim
 
 By default, `pyref` maintains a single persistent catalog that accumulates every beamtime the user has ever ingested. The **catalog** and **local zarr cache** share the same config root (not macOS “Application Support” unless you override with `PYREF_CATALOG_DB` / `PYREF_CACHE_ROOT`):
 
-| Scope | Default path |
-|-------|----------------|
-| `catalog.db` | On macOS, always `~/.config/pyref/catalog.db`. On Linux and Windows, `$XDG_CONFIG_HOME/pyref/catalog.db` when `XDG_CONFIG_HOME` is set; otherwise `~/.config/pyref/catalog.db` (on Windows, `~` is the user profile, e.g. `C:\Users\<user>\.config\pyref\catalog.db`). |
+
+| Scope                  | Default path                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog.db`           | On macOS, always `~/.config/pyref/catalog.db`. On Linux and Windows, `$XDG_CONFIG_HOME/pyref/catalog.db` when `XDG_CONFIG_HOME` is set; otherwise `~/.config/pyref/catalog.db` (on Windows, `~` is the user profile, e.g. `C:\Users\<user>\.config\pyref\catalog.db`).                                                                                                          |
 | Zarr (`beamtime.zarr`) | `<same_dir_as_catalog_parent>/cache/<beamtime_hash>/beamtime.zarr`. Example on macOS: `~/.config/pyref/cache/<beamtime_hash>/beamtime.zarr`. `<beamtime_hash>` is a stable SHA-256 digest of the beamtime root path recorded at ingestion time. The zarr tree is local-only; NAS-backed FITS are used for ingestion and re-ingestion, not for routine image reads after ingest. |
+
 
 macOS ignores `XDG_CONFIG_HOME` for this default tree so a common misconfiguration (`XDG_CONFIG_HOME=$HOME/Library/Application Support`) cannot relocate pyref into Application Support. Use `PYREF_HOME` (tests) or `PYREF_CATALOG_DB` / `PYREF_CACHE_ROOT` when you need a non-default location.
 
@@ -181,12 +183,14 @@ A zarr archive on a fast local network share (e.g., 10GbE NFS or SMB) is accepta
 
 This table lives in the catalog database and is machine-local in semantics, even when the catalog is on a shared drive. It stores one row per registered NAS label for the current machine. The Rust IO layer reads this table on startup and caches the mappings in memory for the duration of the process. Agents must never read `path_aliases` directly from Python; path resolution is an IO-layer concern exposed through the `pyref.io` interface.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `Integer` | Primary key. |
-| `label` | `Text` | Short user-assigned NAS label (e.g., `als-data`). Unique per catalog. |
-| `physical_path` | `Text` | Absolute filesystem path to the mount point on this machine. |
-| `registered_at` | `Text` | ISO 8601 timestamp of last registration. |
+
+| Column          | Type      | Description                                                           |
+| --------------- | --------- | --------------------------------------------------------------------- |
+| `id`            | `Integer` | Primary key.                                                          |
+| `label`         | `Text`    | Short user-assigned NAS label (e.g., `als-data`). Unique per catalog. |
+| `physical_path` | `Text`    | Absolute filesystem path to the mount point on this machine.          |
+| `registered_at` | `Text`    | ISO 8601 timestamp of last registration.                              |
+
 
 ### Cataloging System
 
@@ -199,45 +203,59 @@ The `profiles` table is the primary user-facing entry point. Users browse profil
 The 115 FITS primary HDU cards per frame are split into two tiers at ingestion time. Eleven cards that directly drive scan classification, beamspot localization, normalization, and profile identity are promoted to first-class typed columns on the `frames` table: `sample_x`, `sample_y`, `sample_z`, `sample_theta`, `ccd_theta`, `beamline_energy`, `epu_polarization`, `exposure`, `ring_current`, `ai3_izero`, and `beam_current`. All remaining cards are stored in the `frame_header_values` EAV table, keyed through the `header_cards` registry. The `header_cards` table is populated automatically on first ingestion from whatever cards are present in the FITS files; subsequent beamtimes with new or renamed channels append rows to this table without requiring a schema migration. If a card that was previously treated as non-critical needs to be queried as a first-class column, the correct remedy is a Diesel migration that adds the column to `frames` and backfills it from `frame_header_values`, not a workaround join.
 
 #### `beamtimes`
+
 Root of the catalog hierarchy. Stores two path columns: `nas_uri`, which is the logical `nas://<label>/<relative_path>` URI pointing to the original FITS data on the NAS, and `zarr_path`, which is the absolute local filesystem path to the beamtime's zarr archive at `<data_dir>/pyref/.cache/<beamtime_hash>/beamtime.zarr` (same `<data_dir>` convention as the default catalog path). The `nas_uri` is used for provenance and during ingestion and re-ingestion; all post-ingestion image retrieval goes through `zarr_path`. The date parsed from the beamtime directory name is also stored here. All other tables carry a foreign key to this table.
 
 #### `samples`
+
 One row per unique sample name within a beamtime. Stores the sample name and the median `sample_x`, `sample_y`, and `sample_z` stage positions computed across all frames attributed to that name. Stage positions are nominally fixed per sample; frames that deviate beyond a configurable tolerance are flagged `mislabeled_sample` in `frames.quality_flag` rather than creating a second sample row.
 
 #### `tags`
+
 One row per unique tag slug parsed from FITS filenames. Tags carry no intrinsic meaning to the catalog. The many-to-many relationship between tags and files is resolved through the `file_tags` junction table.
 
 #### `file_tags`
+
 Junction table linking `files` to `tags`. Allows many tags to map to many files without duplication.
 
 #### `files`
+
 One row per FITS file ingested. Stores the absolute path, bare filename, scan number, frame number, sample ID, and beamtime ID. This is the canonical provenance reference for raw file locations and the join target for tag resolution. Image data is not retrieved through this table; it is accessed via the zarr keys on `frames`.
 
 #### `scans`
+
 One row per scan. Stores the scan number, scan type (`fixed_energy` or `fixed_angle`), start and end timestamps, sample ID, and beamtime ID. Scan type is determined during ingestion from the motor trajectory analysis and recorded here as a first-class attribute so downstream reduction does not recompute it.
 
 #### `header_cards`
+
 Registry of FITS header card names discovered during ingestion. One row per unique card name. Each row stores the raw card name as it appears in the FITS header, a human-readable display name, and a category label (`motor`, `ai`, `camera`, or `metadata`). This table is the lookup key for the `frame_header_values` EAV table. Agents must not hard-code card name strings outside of this table and the first-class column definitions on `frames`.
 
 #### `frames`
+
 One row per frame per scan. Stores the eleven first-class header card values as typed `Double` columns, plus the zarr retrieval keys (`zarr_group_key` and `zarr_frame_index`) needed to fetch the detector image. The monolithic zarr archive is located at `beamtimes.zarr_path` for the parent beamtime. Within the archive, scan number is the group key, frame number is the dataset index within that group, and each group stores two datasets per frame named `raw` and `processed`. The `raw` dataset is the image as extracted from the FITS file; the `processed` dataset is the image after edge artifact removal, row-wise and column-wise background subtraction, and Gaussian filtering. Both share the same frame index. Each row also carries FKs to `files` and `scans`, providing the full provenance chain from pixel to beamtime.
 
 #### `frame_header_values`
+
 EAV store for all FITS header cards not promoted to first-class columns on `frames`. All values are stored as `Double`. The card name is resolved through `header_cards`. This table is append-only after initial ingestion; values are never updated in place.
 
 #### `profiles`
+
 The primary user-facing table. One row per reduced reflectivity profile, where a profile is a single continuous 1D curve assembled from one or more stitches. Multi-profile scans produce multiple rows sharing the same `scan_id`, distinguished by `profile_index`. Each row stores the profile type (`fixed_energy` or `fixed_angle`), the value of the fixed parameter (energy in eV for fixed-angle profiles, theta in degrees for fixed-energy profiles), `epu_polarization`, and the median stage position (`sample_x`, `sample_y`, `sample_z`) over all member frames. The stage position columns here are denormalized from `frames` for query convenience; the authoritative per-frame positions remain in `frames`.
 
 #### `profile_frames`
+
 Junction table mapping profiles to their constituent frames, with a `frame_role` column classifying each frame's function in the reduction pipeline. Valid roles are `i0`, `stitch`, `overlap`, and `reflectivity`. I0 frames appear here multiple times when they serve as the normalization reference for more than one profile in a multi-profile scan; this is by design and is the correct resolution of the shared-I0 problem. Agents must not attempt to enforce uniqueness on `frame_id` in this table.
 
 #### `beam_finding`
+
 Per-frame output of the beamspot localization pipeline. Stores the preprocessing parameters applied (edge removal flag, dark column and row counts for background subtraction, Gaussian kernel sigma), the peak fitting result (centroid row and column, ROI intensity, fit standard deviation), the dark region statistics (mean and standard deviation), and a `detection_flag` with values `ok`, `beam_detection_failed`, or `beam_drift_anomaly`. Each row carries a FK to `frames`. Frames with `detection_flag = beam_detection_failed` must not appear in `reflectivity`.
 
 #### `stitch_corrections`
+
 Per-stitch correction factors computed during the normalization and stitching pipeline. One row per stitch segment within a profile. Stores the `fano_factor` (always non-null; 1.0 when no Fano correction was applied), the `overlap_scale_factor` (null for the first stitch, which has no preceding stitch), the `i0_normalization_value`, and `i0_source_scan_id` (null when I0 comes from frames within the current profile; set to the external scan's ID for fixed-angle profiles that borrow I0 from a separate scan). Each row carries a FK to `profiles`.
 
 #### `reflectivity`
+
 Frame-level reduced reflectivity data after normalization and stitching. One row per reduced frame. Stores Q (inverse angstroms), theta (degrees), energy (eV), normalized intensity, propagated one-sigma uncertainty, and `frame_type` (`i0`, `stitch`, `overlap`, or `reflectivity`). Carries FKs to `profiles`, `frames`, and `beam_finding`. Frames flagged `beam_detection_failed` must not appear here. Stitched profile assembly and parquet export are performed by the packaging utility in `pyref.reduction`, which joins this table against `stitch_corrections` filtered by `profile_id`.
 
 ## Data Quality Flagging
@@ -274,7 +292,7 @@ Frame provenance must be preserved end-to-end. Every row in `reflectivity` must 
 
 Fano factor computation and application must be documented in `stitch_corrections` for every scan. A scan processed without a Fano correction must record `fano_factor = 1.0` rather than leaving the field null.
 
-<!-- DO NOT EDIT THIS BLOCK IT IS MANAGED BY DOTAGENTS -->
+
 
 # General
 
@@ -349,12 +367,12 @@ The following applies to **Python** work in this repository: scientific and gene
 
 Use **[uv](https://docs.astral.sh/uv/latest/)** for environments, runs, and dependency changes. Pair it with the **[Astral](https://astral.sh/)** stack as configured in this project.
 
-- **Dependencies**: add, upgrade, and remove packages with **`uv add`**, **`uv add … --upgrade`**, **`uv remove`**—do **not** hand-edit version pins in `pyproject.toml`.
-- **Environment**: **`uv sync`** after cloning or when the lockfile changes; **`uv run …`** to execute Python, tools, and tests.
-- **Dev tools**: keep **`ruff`** and **`ty`** in the development (or project) dependency group; run **`ruff check`** (and project formatting if applicable) plus **`ty check`** on changed code. **`uvx`** remains an option for one-off tool runs.
-- **pytest**: install via **`uv add --dev pytest`** (or the project's dev group); run with **`uv run pytest`**.
+- **Dependencies**: add, upgrade, and remove packages with `**uv add`**, `**uv add … --upgrade**`, `**uv remove**`—do **not** hand-edit version pins in `pyproject.toml`.
+- **Environment**: `**uv sync`** after cloning or when the lockfile changes; `**uv run …**` to execute Python, tools, and tests.
+- **Dev tools**: keep `**ruff`** and `**ty**` in the development (or project) dependency group; run `**ruff check**` (and project formatting if applicable) plus `**ty check**` on changed code. `**uvx**` remains an option for one-off tool runs.
+- **pytest**: install via `**uv add --dev pytest`** (or the project's dev group); run with `**uv run pytest**`.
 
-If a **`uv`** subcommand differs by version, use **`uv --help`** or the [uv docs](https://docs.astral.sh/uv/latest/).
+If a `**uv**` subcommand differs by version, use `**uv --help**` or the [uv docs](https://docs.astral.sh/uv/latest/).
 
 ### Testing
 
@@ -365,29 +383,33 @@ If a **`uv`** subcommand differs by version, use **`uv --help`** or the [uv docs
 
 Load these **skills** by **name** when the task matches (each skill's own `SKILL.md` and references hold the full detail). Installed skills usually live under `.cursor/skills/` (or your editor's equivalent).
 
-| Skill | Use it for |
-|-------|------------|
-| **general-python** | Hub: **uv** / **ruff** / **ty** workflow, builtins and collections, functions and classes, **dataclasses**, typing boundaries, **pytest**, scientific defaults, and pointers to the other skills. |
-| **numpy-scientific** | **NumPy**: dtypes, views vs copies, broadcasting, ufuncs and reductions, **linalg** / **einsum**, **`Generator`**, I/O, interop with tables and plotting. |
-| **dataframes** | **pandas** and **Polars**: when to use which, indexing, joins, lazy execution, I/O, nulls, Arrow interop. |
-| **numpy-docstrings** | **Numpydoc**-style docstrings: section order, semantics (what belongs in docstrings vs types vs tests), anti-patterns, **Parameters** / **Returns** / **Examples** / classes / modules. |
-| **matplotlib-scientific** | Publication-style **Matplotlib**: OO API, axes and legends, layout, export, journal widths, optional **SciencePlots**. |
-| **lab-instrumentation** | **PyVISA** / VISA sessions, **sockets** vs VISA, **hardware abstraction**, **input validation** before I/O, **testing** without hardware, **PDF** extraction for datasheets and manuals. |
+
+| Skill                     | Use it for                                                                                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **general-python**        | Hub: **uv** / **ruff** / **ty** workflow, builtins and collections, functions and classes, **dataclasses**, typing boundaries, **pytest**, scientific defaults, and pointers to the other skills. |
+| **numpy-scientific**      | **NumPy**: dtypes, views vs copies, broadcasting, ufuncs and reductions, **linalg** / **einsum**, `**Generator`**, I/O, interop with tables and plotting.                                         |
+| **dataframes**            | **pandas** and **Polars**: when to use which, indexing, joins, lazy execution, I/O, nulls, Arrow interop.                                                                                         |
+| **numpy-docstrings**      | **Numpydoc**-style docstrings: section order, semantics (what belongs in docstrings vs types vs tests), anti-patterns, **Parameters** / **Returns** / **Examples** / classes / modules.           |
+| **matplotlib-scientific** | Publication-style **Matplotlib**: OO API, axes and legends, layout, export, journal widths, optional **SciencePlots**.                                                                            |
+| **lab-instrumentation**   | **PyVISA** / VISA sessions, **sockets** vs VISA, **hardware abstraction**, **input validation** before I/O, **testing** without hardware, **PDF** extraction for datasheets and manuals.          |
+
 
 ### Cursor: subagents
 
 Delegate by **subagent name** when a focused pass is better than inline editing. Subagents usually live under `.cursor/agents/` (or your editor's equivalent).
 
-| Subagent | Use it for |
-|----------|------------|
-| **python-reviewer** | Reviewing changes: **uv** hygiene, typing, numerics footguns, tests, docstring quality. |
-| **python-types** | Deep **typing** for **ty**: annotations, PEP 695-style generics, exhaustive **`match`**, fixing checker output. |
+
+| Subagent            | Use it for                                                                                                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **python-reviewer** | Reviewing changes: **uv** hygiene, typing, numerics footguns, tests, docstring quality.                                           |
+| **python-types**    | Deep **typing** for **ty**: annotations, PEP 695-style generics, exhaustive `**match`**, fixing checker output.                   |
 | **python-refactor** | **Structure**: unclear multi-value returns, composition vs inheritance, oversized functions or classes, deterministic boundaries. |
+
 
 ### Cursor: rules
 
 - A **Python** Cursor **rule** applies to Python sources (typically `**/*.py` when the rule is configured for those globs). It restates **interpreter preference**, **uv** usage, **ruff** / **ty** expectations, numerics and docstring defaults, and points to **general-python**, domain skills such as **lab-instrumentation** when editing drivers or lab I/O, and the subagents above.
-- **Rule text is authoritative for "always on" editor hints**; **skills** carry the long-form patterns and examples. When the two differ on a detail, follow **this spec** and **`pyproject.toml`**, then the **rule**, then skill nuance.
+- **Rule text is authoritative for "always on" editor hints**; **skills** carry the long-form patterns and examples. When the two differ on a detail, follow **this spec** and `**pyproject.toml`**, then the **rule**, then skill nuance.
 
 ### External references
 
@@ -446,11 +468,13 @@ It is important to note that these notebooks are designed to be robust. These sh
 This workspace extends Python with **PyO3 / Maturin** integration expectations.
 
 ### General Guidelines
+
 We are using the [pyo3](https://pyo3.rs/) library to create a python extension for our project. The ONLY reason we are doing this is to speed up the execution of critical code. As such, we should only use pyo3 for code that is critical to the performance of the project, and should avoid using it for code that is not performance critical. Generally, iO operations are easier to implement in python, while multi-threaded operations are faster in rust.
 
 The python GIL is the global interpreter lock, limiting the ability for python to be truly multi-threaded. However, rust executions can bypass the GIL leading to a significant speedup in performance. As such, we should not multi-thread in python, but rather pass tasks into rust for parallel processing, and then return the results back to python.
 
 ### Tooling
+
 `uv` is still king within the project, and should be used for all python needs. However, we will use the `maturin` tool as the build system for the project. See the [maturin documentation](https://www.maturin.rs/) for more information on how to use it. Ensure that `maturin` is installed in the dev group. See the [uv documentation](https://docs.astral.sh/uv/concepts/projects/init/#projects-with-extension-modules) for more information on how to use maturin as a tool. In general, we prefer a structure native to maturin following the following format:
 
 ```
@@ -465,6 +489,7 @@ The python GIL is the global interpreter lock, limiting the ability for python t
 │   ├── lib.rs
 │   └── bindings.rs
 ```
+
 Ensure that the `python/` directory is a valid python package, and that the `src/` directory is a valid rust crate.
 
 # Rust - TUI
@@ -485,7 +510,7 @@ This workspace extends Rust with **PyO3 / Maturin** extension expectations.
 - Document unsafe blocks with the project's standard (even if you avoid new unsafe code).
 - Prefer thin Python modules that re-export a small Rust API rather than exposing many low-level Rust objects.
 
-<!-- END OF MANAGED SECTION -->
+
 
 ## Learned User Preferences
 
@@ -493,23 +518,25 @@ This workspace extends Rust with **PyO3 / Maturin** extension expectations.
 - When the user supplies an authoritative **staged file list** for a commit, stage or commit **only** those paths and do not broaden `git add` unless they explicitly change the instruction.
 - For pull requests, default to the **parent integration branch** named in the thread rather than opening against `main` when the user specifies a non-main target.
 - For notebook-first catalog workflows, keep setup and queries in **Jupyter** with minimal required steps outside the notebook when that is the stated goal.
-- Keep **macOS Finder artifacts** such as **`**/.DS_Store`** out of git via `.gitignore` rather than tracking or committing them.
+- Keep **macOS Finder artifacts** such as `****/.DS_Store`** out of git via `.gitignore` rather than tracking or committing them.
 - For multi-task implementation plans, default to **subagent-driven-development** with a per-task two-stage review (spec compliance first, then code quality) instead of executing everything inline.
 - Benchmark and profile ingest against a **local or synthetic replica** first; only run profilers against the live NAS beamtime once the local case is well-characterized (live NAS runs can exhaust resources and crash the editor).
 
 ## Learned Workspace Facts
 
 - **Implementation plans** should always include two closing steps: (1) **greenfield cleanup** — remove unused code and tests that are no longer needed but were tied to the change; (2) **quality gates** — intentional deprecations where relevant, typing and lint fixes, and verification that the code **builds with zero errors and zero warnings** (Rust + Python per repo tooling). Apply these at the end of every substantive plan, not only as optional polish.
-- Python ingest progress integrates **`beamtime_ingest_layout`** (total FITS count and per-scan file counts) with **`ingest_beamtime(..., progress_callback=...)`** emitting event dicts of kind `layout`, `phase`, `file_complete`, or `catalog_row`; pair this with Rich or tqdm-style handlers.
-- Keep **`.cursor/hooks/state/`** out of git: add it to **`.gitignore`** so hook state and the continual-learning index stay local.
+- Python ingest progress integrates `**beamtime_ingest_layout`** (total FITS count and per-scan file counts) with `**ingest_beamtime(..., progress_callback=...)**` emitting event dicts of kind `layout`, `phase`, `file_complete`, or `catalog_row`; pair this with Rich or tqdm-style handlers.
+- Keep `**.cursor/hooks/state/**` out of git: add it to `**.gitignore**` so hook state and the continual-learning index stay local.
 - Ingestion and zarr writes from **network-mounted beamtime roots** can be far slower than from a **local replica**; validate progress UX against a local tree when iterating.
-- **Rust + PyO3:** Use a default feature set (for example **`bindings`**) that links **`libpython`** for **`cargo test`**; Maturin wheel builds use a separate **`extension-module`** feature that enables **`pyo3/extension-module`**. Putting **`extension-module`** in the default test feature set can produce undefined Python symbols (for example `_Py_DecRef`, `Py_IsInitialized`) on Linux CI linkers.
-- **`read_beamtime(..., ingest=True)`** runs ingest against the **default global catalog path** from the Rust layer; an explicit **`catalog_path`** mainly selects which database is **read** for the returned view. Beamtime lookup keys must match absolute URI form (for example `file:///Volumes/...`), and offline lookup must avoid strict canonicalization so unmounted NAS paths can still match indexed beamtimes.
-- **Ruff** may exclude **`python/pyref/beamline`**, **`notebooks`**, and **`tests`** per `pyproject.toml`; treat those paths as out of scope for Ruff unless configuration changes.
-- Ingest phases are modeled by the Rust **`IngestPhase` enum** (not string labels); the catalog phase **coalesces short scans into a single SQLite transaction** (small-scan batching), which is a deliberate design choice.
-- CI-safe ingest benchmarking uses the synthetic harness: the Rust helper at **`tests/common/mod.rs`** (consumed by `tests/synthetic_harness.rs` and `tests/ingest_streaming.rs`) plus **`uv run pyref bench synthetic`**; shared progress/table helpers live in **`python/pyref/ingest_profile.py`** and are also used by **`uv run pyref bench profile --beamtime <path>`** for real beamtimes.
-- Rust integration tests for ingest require **`cargo test --features catalog,parallel_ingest`**; tests that mutate env vars (**`PYREF_CATALOG_DB`**, **`PYREF_CACHE_ROOT`**) must serialize with a `Mutex` guard (pattern in `src/io/raw_pixels.rs` tests) and must point those vars at isolated tempdirs so they never write to the default catalog.
-- **`tests/fixtures/minimal.fits`** is the canonical 2x2 BITPIX=16 FITS reference; new synthetic fixtures must match its header/block layout (2880-byte header, BZERO=32768 for unsigned-as-signed-i16, stems of the form `<sample>-<scan>-<frame>.fits`).
-- **Typer CLI** (`pyref` entry point): implementation under **`python/pyref/cli/`** with groups **`nas`** (single registered NAS root in **`config.toml`** next to the data dir), **`beamtime`** (list/describe coverage using **`py_beamtime_ingest_layout`** + **`py_catalog_file_count`**), **`catalog`** (`path`, `ingest` with **`--max-scans`** / **`--scans`**), **`watch`** (subprocess daemon via **`PYREF_CLI_WATCH_SPEC`**, worker module **`python -m pyref.cli.daemon`**, PID/logs under **`<pyref_data_dir>/daemons/`**), and **`bench`** (`synthetic`, `profile` for ingest timing). Legacy **`pyref-ingest`** delegates to **`pyref catalog ingest`**.
-- Beamtime **Zarr** raw images are **per-scan** 3D `uint16` stacks at `/images/scans/<scan>/raw` under the beamtime archive (default cache root `<pyref_config_dir>/cache/<sha256>/beamtime.zarr`; shuffle + Zstd; see `catalog::zarr_write`, schema, **`migrate-zarr-3d`**); standalone Rust migration or tooling that initializes **Polars** through **PyO3** may print **`failed to get allocator capsule`** on stderr even when the run succeeds.
-- **Rust bindings for CLI:** **`py_pyref_data_dir`**, **`py_catalog_file_count`**, optional ingest subset via **`IngestSelection`** (`max_scans`, `scan_numbers`), and **`CatalogWatcherCancel`** + **`py_run_catalog_watcher_blocking`** when the **`watch`** feature is enabled (included in default features for extension builds).
+- **Rust + PyO3:** Use a default feature set (for example `**bindings`**) that links `**libpython**` for `**cargo test**`; Maturin wheel builds use a separate `**extension-module**` feature that enables `**pyo3/extension-module**`. Putting `**extension-module**` in the default test feature set can produce undefined Python symbols (for example `_Py_DecRef`, `Py_IsInitialized`) on Linux CI linkers.
+- `**read_beamtime(..., ingest=True)**` runs ingest against the **default global catalog path** from the Rust layer; an explicit `**catalog_path`** mainly selects which database is **read** for the returned view. Beamtime lookup keys must match absolute URI form (for example `file:///Volumes/...`), and offline lookup must avoid strict canonicalization so unmounted NAS paths can still match indexed beamtimes.
+- **Ruff** may exclude `**python/pyref/beamline`**, `**notebooks**`, and `**tests**` per `pyproject.toml`; treat those paths as out of scope for Ruff unless configuration changes.
+- Ingest phases are modeled by the Rust `**IngestPhase` enum** (not string labels); the catalog phase **coalesces short scans into a single SQLite transaction** (small-scan batching), which is a deliberate design choice.
+- CI-safe ingest benchmarking uses the synthetic harness: the Rust helper at `**tests/common/mod.rs`** (consumed by `tests/synthetic_harness.rs` and `tests/ingest_streaming.rs`) plus `**uv run pyref bench synthetic**`; shared progress/table helpers live in `**python/pyref/ingest_profile.py**` and are also used by `**uv run pyref bench profile --beamtime <path>**` for real beamtimes.
+- Rust integration tests for ingest require `**cargo test --features catalog,parallel_ingest**`; tests that mutate env vars (`**PYREF_CATALOG_DB**`, `**PYREF_CACHE_ROOT**`) must serialize with a `Mutex` guard (pattern in `src/io/raw_pixels.rs` tests) and must point those vars at isolated tempdirs so they never write to the default catalog.
+- `**tests/fixtures/minimal.fits**` is the canonical 2x2 BITPIX=16 FITS reference; new synthetic fixtures must match its header/block layout (2880-byte header, BZERO=32768 for unsigned-as-signed-i16, stems of the form `<sample>-<scan>-<frame>.fits`).
+- **Typer CLI** (`pyref` entry point): implementation under `**python/pyref/cli/`** with groups `**nas**` (single registered NAS root in `**config.toml**` next to the data dir), `**beamtime**` (list/describe coverage using `**py_beamtime_ingest_layout**` + `**py_catalog_file_count**`), `**catalog**` (`path`, `ingest` with `**--max-scans**` / `**--scans**`), `**watch**` (subprocess daemon via `**PYREF_CLI_WATCH_SPEC**`, worker module `**python -m pyref.cli.daemon**`, PID/logs under `**<pyref_data_dir>/daemons/**`), and `**bench**` (`synthetic`, `profile` for ingest timing). Legacy `**pyref-ingest**` delegates to `**pyref catalog ingest**`.
+- Beamtime **Zarr** raw images are **per-scan** 3D `uint16` stacks at `/images/scans/<scan>/raw` under the beamtime archive (default cache root `<pyref_config_dir>/cache/<sha256>/beamtime.zarr`; shuffle + Zstd; see `catalog::zarr_write`, schema, `**migrate-zarr-3d`**); standalone Rust migration or tooling that initializes **Polars** through **PyO3** may print `**failed to get allocator capsule`** on stderr even when the run succeeds.
+- **Rust bindings for CLI:** `**py_pyref_data_dir`**, `**py_catalog_file_count**`, optional ingest subset via `**IngestSelection**` (`max_scans`, `scan_numbers`), and `**CatalogWatcherCancel**` + `**py_run_catalog_watcher_blocking**` when the `**watch**` feature is enabled (included in default features for extension builds).
+- For the catalog-first PRSoXR prototyping effort, start at `**docs/prototyping/README.md**` and treat `**docs/prototyping/comprehensive_implementation_plan.md**` as the execution source of truth; keep `**docs/prototyping/api-design/api_flow_design.md**` and `**docs/prototyping/workflows/cell_*.md**` aligned with it before implementation changes.
+

@@ -11,6 +11,7 @@ pub struct Gaussian2DFit {
     pub baseline: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gaussian_2d(r: f64, c: f64, mu_r: f64, mu_c: f64, sr: f64, sc: f64, a: f64, b: f64) -> f64 {
     if sr <= 0.0 || sc <= 0.0 {
         return b;
@@ -100,8 +101,8 @@ pub fn fit_2d_gaussian(
                 }
             }
         }
-        for i in 0..6 {
-            jtj[i][i] += lambda;
+        for (i, row) in jtj.iter_mut().enumerate() {
+            row[i] += lambda;
         }
         let dp = solve_6x6(&jtj, &jtr)?;
         let new_mu_r = mu_r + dp[0];
@@ -139,6 +140,7 @@ pub fn fit_2d_gaussian(
     })
 }
 
+#[allow(clippy::needless_range_loop)]
 fn solve_6x6(a: &[[f64; 6]; 6], b: &[f64; 6]) -> Option<[f64; 6]> {
     let mut m = [[0.0f64; 7]; 6];
     for i in 0..6 {
@@ -159,8 +161,8 @@ fn solve_6x6(a: &[[f64; 6]; 6], b: &[f64; 6]) -> Option<[f64; 6]> {
         if div.abs() < 1e-15 {
             return None;
         }
-        for j in 0..7 {
-            m[col][j] /= div;
+        for v in &mut m[col][..7] {
+            *v /= div;
         }
         for i in 0..6 {
             if i != col {

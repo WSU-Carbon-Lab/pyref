@@ -29,6 +29,15 @@ DEFAULT_HEADER_KEYS = [
     "CCD Theta",
     "Higher Order Suppressor",
     "EPU Polarization",
+    "EXPOSURE",
+    "Sample Name",
+    "Scan ID",
+    "Sample X",
+    "Sample Y",
+    "Sample Z",
+    "RINGCRNT",
+    "AI 3 Izero",
+    "Beam Current",
 ]
 
 REQUIRED_SCAN_COLUMNS = (
@@ -248,6 +257,8 @@ def ingest_beamtime(
     worker_threads: int | None = None,
     resource_fraction: float | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    max_scans: int | None = None,
+    scan_numbers: list[int] | None = None,
 ) -> Path:
     """
     Ingest a beamtime directory into the global catalog and local zarr cache.
@@ -283,6 +294,12 @@ def ingest_beamtime(
         ``catalog_row``, one per ``file_complete``) and call ``update(...,
         advance=1)`` for both event types. Handle ``phase`` events so the description
         updates during long ``headers`` work before ``catalog_row`` events begin.
+    max_scans : int, optional
+        Ingest only the first ``max_scans`` scan groups in ascending scan-number order.
+        Mutually exclusive with ``scan_numbers``.
+    scan_numbers : list of int, optional
+        Ingest only these stem-derived scan numbers, in the given order.
+        Mutually exclusive with ``max_scans``.
 
     Returns
     -------
@@ -299,6 +316,8 @@ def ingest_beamtime(
         worker_threads,
         resource_fraction,
         progress_callback,
+        max_scans,
+        scan_numbers,
     )
     return Path(out)
 
@@ -369,6 +388,36 @@ def set_override(
         sample_name,
         tag,
         notes,
+    )
+
+
+def set_scan_type_for_beamtime_scan(
+    catalog_path: FilePath,
+    beamtime_path: FilePath,
+    scan_number: int,
+    scan_type: Literal["fixed_energy", "fixed_angle"],
+) -> None:
+    """
+    Persist scan classification for one scan in one beamtime.
+
+    Parameters
+    ----------
+    catalog_path : str or pathlib.Path
+        Path to the catalog SQLite database.
+    beamtime_path : str or pathlib.Path
+        Beamtime root directory used to scope the scan lookup.
+    scan_number : int
+        Scan number within ``beamtime_path``.
+    scan_type : {"fixed_energy", "fixed_angle"}
+        Classification to store in ``scans.scan_type``.
+    """
+    from pyref.pyref import py_set_scan_type_for_beamtime_scan
+
+    py_set_scan_type_for_beamtime_scan(
+        str(Path(catalog_path).resolve()),
+        str(Path(beamtime_path).resolve()),
+        int(scan_number),
+        scan_type,
     )
 
 

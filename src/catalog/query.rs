@@ -5,11 +5,14 @@ use diesel::sql_types::{BigInt, Double, Integer, Nullable, Text};
 use diesel::sqlite::{Sqlite, SqliteConnection};
 use diesel::{sql_query, OptionalExtension, RunQueryDsl};
 use polars::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::catalog::{db, paths, CatalogError, Result};
+use crate::loader::read_fits_headers_only_row;
 use crate::schema::{
-    beam_finding, beamtimes, file_overrides, file_tags, files, frames, samples, scans, tags,
+    beam_finding, beamtimes, file_overrides, file_tags, files, frames, header_cards, header_values,
+    samples, scans, tags,
 };
 
 #[derive(Default, Debug, Clone)]
@@ -46,23 +49,38 @@ pub struct FileRow {
 }
 
 fn beamtime_id_for_dir(conn: &mut SqliteConnection, beamtime_dir: &Path) -> Result<Option<i32>> {
-    let uri = match paths::file_uri_for_path(beamtime_dir) {
+    let uri = match paths::file_uri_for_path_relaxed(beamtime_dir) {
         Ok(u) => u,
         Err(CatalogError::Io(_)) => return Ok(None),
         Err(e) => return Err(e),
     };
-    Ok(beamtimes::table
+    beamtimes::table
         .filter(beamtimes::nas_uri.eq(uri))
         .select(beamtimes::id)
         .first(conn)
         .optional()
-        .map_err(CatalogError::Diesel)?)
+        .map_err(CatalogError::Diesel)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HeaderSyncReport {
+    pub files_checked: u32,
+    pub files_updated: u32,
+    pub header_rows_inserted: u32,
+}
+
+fn normalize_header_display_name(card_name: &str) -> String {
+    card_name
+        .split_whitespace()
+        .map(|part| part.to_ascii_lowercase().replace("sample", "sam"))
+        .collect::<Vec<String>>()
+        .join("_")
 }
 
 pub fn catalog_file_count(db_path: &Path, beamtime_dir: Option<&Path>) -> Result<u32> {
     let mut conn = db::establish_connection(db_path)?;
     let n: i64 = if let Some(dir) = beamtime_dir {
-        let uri = paths::file_uri_for_path(dir)?;
+        let uri = paths::file_uri_for_path_relaxed(dir)?;
         files::table
             .inner_join(beamtimes::table.on(files::beamtime_id.eq(beamtimes::id)))
             .filter(beamtimes::nas_uri.eq(uri))
@@ -180,9 +198,9 @@ struct CatalogFileSql {
     tag: Option<String>,
     scan_number: i32,
     frame_number: i32,
-    beamline_energy: f64,
-    sample_theta: f64,
-    epu_polarization: f64,
+    beamline_energy: Option<f64>,
+    sample_theta: Option<f64>,
+    epu_polarization: Option<f64>,
     acquired_at: Option<String>,
     centroid_row: Option<f64>,
     centroid_col: Option<f64>,
@@ -198,9 +216,18 @@ impl QueryableByName<Sqlite> for CatalogFileSql {
             tag: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(row, "tag")?,
             scan_number: diesel::row::NamedRow::get::<Integer, i32>(row, "scan_number")?,
             frame_number: diesel::row::NamedRow::get::<Integer, i32>(row, "frame_number")?,
-            beamline_energy: diesel::row::NamedRow::get::<Double, f64>(row, "beamline_energy")?,
-            sample_theta: diesel::row::NamedRow::get::<Double, f64>(row, "sample_theta")?,
-            epu_polarization: diesel::row::NamedRow::get::<Double, f64>(row, "epu_polarization")?,
+            beamline_energy: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
+                row,
+                "beamline_energy",
+            )?,
+            sample_theta: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
+                row,
+                "sample_theta",
+            )?,
+            epu_polarization: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
+                row,
+                "epu_polarization",
+            )?,
             acquired_at: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(
                 row,
                 "acquired_at",
@@ -226,9 +253,21 @@ fn build_files_sql(beamtime_id_sql: Option<i32>, filter: Option<&CatalogFilter>)
   COALESCE(o.tag, (SELECT t.slug FROM file_tags ft JOIN tags t ON ft.tag_id = t.id WHERE ft.file_id = f.id ORDER BY t.slug LIMIT 1)) AS tag,
   sc.scan_number,
   fr.frame_number,
-  fr.beamline_energy,
-  fr.sample_theta,
-  fr.epu_polarization,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'Beamline Energy'
+   LIMIT 1) AS beamline_energy,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'Sample Theta'
+   LIMIT 1) AS sample_theta,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'EPU Polarization'
+   LIMIT 1) AS epu_polarization,
   fr.acquired_at,
   bf.centroid_row,
   bf.centroid_col,
@@ -265,10 +304,18 @@ WHERE 1=1"#,
             }
         }
         if let Some(em) = f.energy_min {
-            sql.push_str(&format!(" AND fr.beamline_energy >= {em}"));
+            sql.push_str(&format!(
+                " AND (SELECT hv.value FROM header_values hv \
+INNER JOIN header_cards hc ON hv.header_card_id = hc.id \
+WHERE hv.frame_id = fr.id AND hc.name = 'Beamline Energy' LIMIT 1) >= {em}"
+            ));
         }
         if let Some(em) = f.energy_max {
-            sql.push_str(&format!(" AND fr.beamline_energy <= {em}"));
+            sql.push_str(&format!(
+                " AND (SELECT hv.value FROM header_values hv \
+INNER JOIN header_cards hc ON hv.header_card_id = hc.id \
+WHERE hv.frame_id = fr.id AND hc.name = 'Beamline Energy' LIMIT 1) <= {em}"
+            ));
         }
     }
     sql.push_str(" ORDER BY sc.scan_number, fr.frame_number");
@@ -289,9 +336,9 @@ pub fn query_files(db_path: &Path, filter: Option<&CatalogFilter>) -> Result<Vec
             tag: r.tag,
             scan_number: r.scan_number as i64,
             frame_number: r.frame_number as i64,
-            beamline_energy: Some(r.beamline_energy),
-            sample_theta: Some(r.sample_theta),
-            epu_polarization: Some(r.epu_polarization),
+            beamline_energy: r.beamline_energy,
+            sample_theta: r.sample_theta,
+            epu_polarization: r.epu_polarization,
             q: None,
             date_iso: r.acquired_at,
             beam_row: r.centroid_row.map(|x| x as i64),
@@ -324,9 +371,9 @@ pub fn query_scan_points(
             tag: r.tag,
             scan_number: r.scan_number as i64,
             frame_number: r.frame_number as i64,
-            beamline_energy: Some(r.beamline_energy),
-            sample_theta: Some(r.sample_theta),
-            epu_polarization: Some(r.epu_polarization),
+            beamline_energy: r.beamline_energy,
+            sample_theta: r.sample_theta,
+            epu_polarization: r.epu_polarization,
             q: None,
             date_iso: r.acquired_at,
             beam_row: r.centroid_row.map(|x| x as i64),
@@ -350,22 +397,26 @@ struct CatalogScanSql {
     tag: Option<String>,
     scan_number: i32,
     frame_number: i32,
+    zarr_group_key: i32,
+    zarr_frame_index: i32,
+    zarr_bucket_frame_index: Option<i32>,
+    zarr_path: String,
     date_iso: Option<String>,
-    beamline_energy: f64,
-    sample_theta: f64,
-    ccd_theta: f64,
+    beamline_energy: Option<f64>,
+    sample_theta: Option<f64>,
+    ccd_theta: Option<f64>,
     hos: Option<f64>,
-    epu: f64,
-    exposure: f64,
+    epu: Option<f64>,
+    exposure: Option<f64>,
+    ai3_izero: Option<f64>,
     sample_name_h: String,
     scan_id: f64,
-    lambda: Option<f64>,
-    q: Option<f64>,
     beam_row: Option<f64>,
     beam_col: Option<f64>,
     beam_sigma: Option<f64>,
     reflectivity_profile_index: Option<i32>,
     reflectivity_scan_type: Option<String>,
+    catalog_scan_type: Option<String>,
 }
 
 impl QueryableByName<Sqlite> for CatalogScanSql {
@@ -383,19 +434,37 @@ impl QueryableByName<Sqlite> for CatalogScanSql {
             tag: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(row, "tag")?,
             scan_number: diesel::row::NamedRow::get::<Integer, i32>(row, "scan_number")?,
             frame_number: diesel::row::NamedRow::get::<Integer, i32>(row, "frame_number")?,
+            zarr_group_key: diesel::row::NamedRow::get::<Integer, i32>(row, "zarr_group_key")?,
+            zarr_frame_index: diesel::row::NamedRow::get::<Integer, i32>(row, "zarr_frame_index")?,
+            zarr_bucket_frame_index: diesel::row::NamedRow::get::<Nullable<Integer>, Option<i32>>(
+                row,
+                "zarr_bucket_frame_index",
+            )?,
+            zarr_path: diesel::row::NamedRow::get::<Text, String>(row, "zarr_path")?,
             date_iso: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(
                 row, "date_iso",
             )?,
-            beamline_energy: diesel::row::NamedRow::get::<Double, f64>(row, "beamline_energy")?,
-            sample_theta: diesel::row::NamedRow::get::<Double, f64>(row, "sample_theta")?,
-            ccd_theta: diesel::row::NamedRow::get::<Double, f64>(row, "ccd_theta")?,
+            beamline_energy: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
+                row,
+                "beamline_energy",
+            )?,
+            sample_theta: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
+                row,
+                "sample_theta",
+            )?,
+            ccd_theta: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
+                row,
+                "ccd_theta",
+            )?,
             hos: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(row, "hos")?,
-            epu: diesel::row::NamedRow::get::<Double, f64>(row, "epu")?,
-            exposure: diesel::row::NamedRow::get::<Double, f64>(row, "exposure")?,
+            epu: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(row, "epu")?,
+            exposure: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(row, "exposure")?,
+            ai3_izero: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
+                row,
+                "ai3_izero",
+            )?,
             sample_name_h: diesel::row::NamedRow::get::<Text, String>(row, "sample_name_h")?,
             scan_id: diesel::row::NamedRow::get::<Double, f64>(row, "scan_id")?,
-            lambda: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(row, "lambda")?,
-            q: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(row, "q")?,
             beam_row: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(row, "beam_row")?,
             beam_col: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(row, "beam_col")?,
             beam_sigma: diesel::row::NamedRow::get::<Nullable<Double>, Option<f64>>(
@@ -409,6 +478,10 @@ impl QueryableByName<Sqlite> for CatalogScanSql {
             reflectivity_scan_type: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(
                 row,
                 "reflectivity_scan_type",
+            )?,
+            catalog_scan_type: diesel::row::NamedRow::get::<Nullable<Text>, Option<String>>(
+                row,
+                "catalog_scan_type",
             )?,
         })
     }
@@ -429,13 +502,42 @@ fn build_scan_df_sql(beamtime_id: Option<i32>, filter: Option<&CatalogFilter>) -
   COALESCE(o.tag, (SELECT t.slug FROM file_tags ft JOIN tags t ON ft.tag_id = t.id WHERE ft.file_id = f.id ORDER BY t.slug LIMIT 1)) AS tag,
   sc.scan_number,
   fr.frame_number,
+  fr.zarr_group_key,
+  fr.zarr_frame_index,
+  fr.zarr_bucket_frame_index,
+  bt.zarr_path,
   fr.acquired_at AS date_iso,
-  fr.beamline_energy,
-  fr.sample_theta,
-  fr.ccd_theta,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'Beamline Energy'
+   LIMIT 1) AS beamline_energy,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'Sample Theta'
+   LIMIT 1) AS sample_theta,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'CCD Theta'
+   LIMIT 1) AS ccd_theta,
   CAST(NULL AS REAL) AS hos,
-  fr.epu_polarization AS epu,
-  fr.exposure,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'EPU Polarization'
+   LIMIT 1) AS epu,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'EXPOSURE'
+   LIMIT 1) AS exposure,
+  (SELECT hv.value
+   FROM header_values hv
+   INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+   WHERE hv.frame_id = fr.id AND hc.name = 'AI 3 Izero'
+   LIMIT 1) AS ai3_izero,
   COALESCE(o.sample_name, s.name) AS sample_name_h,
   CAST(sc.scan_number AS REAL) AS scan_id,
   CAST(NULL AS REAL) AS lambda,
@@ -444,11 +546,13 @@ fn build_scan_df_sql(beamtime_id: Option<i32>, filter: Option<&CatalogFilter>) -
   bf.centroid_col AS beam_col,
   bf.fit_std AS beam_sigma,
   CAST(NULL AS INTEGER) AS reflectivity_profile_index,
-  CAST(NULL AS TEXT) AS reflectivity_scan_type
+  CAST(NULL AS TEXT) AS reflectivity_scan_type,
+  sc.scan_type AS catalog_scan_type
 FROM frames fr
 INNER JOIN files f ON fr.file_id = f.id
 INNER JOIN scans sc ON fr.scan_id = sc.id
 INNER JOIN samples s ON f.sample_id = s.id
+INNER JOIN beamtimes bt ON f.beamtime_id = bt.id
 LEFT JOIN file_overrides o ON o.source_path = f.nas_uri
 LEFT JOIN beam_finding bf ON bf.frame_id = fr.id
 WHERE 1=1"#,
@@ -476,10 +580,18 @@ WHERE 1=1"#,
             }
         }
         if let Some(em) = f.energy_min {
-            sql.push_str(&format!(" AND fr.beamline_energy >= {em}"));
+            sql.push_str(&format!(
+                " AND (SELECT hv.value FROM header_values hv \
+INNER JOIN header_cards hc ON hv.header_card_id = hc.id \
+WHERE hv.frame_id = fr.id AND hc.name = 'Beamline Energy' LIMIT 1) >= {em}"
+            ));
         }
         if let Some(em) = f.energy_max {
-            sql.push_str(&format!(" AND fr.beamline_energy <= {em}"));
+            sql.push_str(&format!(
+                " AND (SELECT hv.value FROM header_values hv \
+INNER JOIN header_cards hc ON hv.header_card_id = hc.id \
+WHERE hv.frame_id = fr.id AND hc.name = 'Beamline Energy' LIMIT 1) <= {em}"
+            ));
         }
     }
     sql.push_str(" ORDER BY sc.scan_number, fr.frame_number");
@@ -487,6 +599,8 @@ WHERE 1=1"#,
 }
 
 fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataFrame> {
+    const HC_EV_ANGSTROM: f64 = 12_398.419_843_320_025;
+
     let mut file_path = Vec::new();
     let mut data_offset = Vec::new();
     let mut naxis1 = Vec::new();
@@ -499,6 +613,10 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
     let mut tag: Vec<Option<String>> = Vec::new();
     let mut scan_number = Vec::new();
     let mut frame_number = Vec::new();
+    let mut zarr_group_key = Vec::new();
+    let mut zarr_frame_index = Vec::new();
+    let mut zarr_bucket_frame_index: Vec<Option<i64>> = Vec::new();
+    let mut zarr_path = Vec::new();
     let mut date: Vec<Option<String>> = Vec::new();
     let mut beamline_energy = Vec::new();
     let mut sample_theta = Vec::new();
@@ -506,6 +624,7 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
     let mut hos: Vec<Option<f64>> = Vec::new();
     let mut epu = Vec::new();
     let mut exposure = Vec::new();
+    let mut ai3_izero = Vec::new();
     let mut sample_name_h: Vec<Option<String>> = Vec::new();
     let mut scan_id = Vec::new();
     let mut lambda: Vec<Option<f64>> = Vec::new();
@@ -515,6 +634,7 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
     let mut beam_sigma = Vec::new();
     let mut reflectivity_profile_index: Vec<Option<i64>> = Vec::new();
     let mut reflectivity_scan_type: Vec<Option<String>> = Vec::new();
+    let mut catalog_scan_type: Vec<Option<String>> = Vec::new();
     for r in rows {
         file_path.push(r.file_path);
         data_offset.push(r.data_offset);
@@ -528,22 +648,35 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
         tag.push(r.tag);
         scan_number.push(r.scan_number as i64);
         frame_number.push(r.frame_number as i64);
+        zarr_group_key.push(r.zarr_group_key as i64);
+        zarr_frame_index.push(r.zarr_frame_index as i64);
+        zarr_bucket_frame_index.push(r.zarr_bucket_frame_index.map(|x| x as i64));
+        zarr_path.push(r.zarr_path);
         date.push(r.date_iso);
-        beamline_energy.push(Some(r.beamline_energy));
-        sample_theta.push(Some(r.sample_theta));
-        ccd_theta.push(Some(r.ccd_theta));
+        beamline_energy.push(r.beamline_energy);
+        sample_theta.push(r.sample_theta);
+        ccd_theta.push(r.ccd_theta);
         hos.push(r.hos);
-        epu.push(Some(r.epu));
-        exposure.push(Some(r.exposure));
+        epu.push(r.epu);
+        exposure.push(r.exposure);
+        ai3_izero.push(r.ai3_izero);
         sample_name_h.push(Some(r.sample_name_h));
         scan_id.push(Some(r.scan_id));
-        lambda.push(r.lambda);
-        q.push(r.q);
+        let lambda_value = r
+            .beamline_energy
+            .and_then(|energy| (energy > 0.0).then_some(HC_EV_ANGSTROM / energy));
+        let q_value = match (lambda_value, r.sample_theta) {
+            (Some(lam), Some(theta)) => Some(crate::io::q(lam, theta)),
+            _ => None,
+        };
+        lambda.push(lambda_value);
+        q.push(q_value);
         beam_row.push(r.beam_row.map(|x| x as i64));
         beam_col.push(r.beam_col.map(|x| x as i64));
         beam_sigma.push(r.beam_sigma);
         reflectivity_profile_index.push(r.reflectivity_profile_index.map(|x| x as i64));
         reflectivity_scan_type.push(r.reflectivity_scan_type);
+        catalog_scan_type.push(r.catalog_scan_type);
     }
     let series = vec![
         Series::new("file_path".into(), file_path),
@@ -558,6 +691,10 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
         Series::new("tag".into(), tag),
         Series::new("scan_number".into(), scan_number),
         Series::new("frame_number".into(), frame_number),
+        Series::new("zarr_group_key".into(), zarr_group_key),
+        Series::new("zarr_frame_index".into(), zarr_frame_index),
+        Series::new("zarr_bucket_frame_index".into(), zarr_bucket_frame_index),
+        Series::new("zarr_path".into(), zarr_path),
         Series::new("DATE".into(), date),
         Series::new("Beamline Energy".into(), beamline_energy),
         Series::new("Sample Theta".into(), sample_theta),
@@ -565,6 +702,7 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
         Series::new("Higher Order Suppressor".into(), hos),
         Series::new("EPU Polarization".into(), epu),
         Series::new("EXPOSURE".into(), exposure),
+        Series::new("AI 3 Izero".into(), ai3_izero),
         Series::new("Sample Name".into(), sample_name_h),
         Series::new("Scan ID".into(), scan_id),
         Series::new("Lambda".into(), lambda),
@@ -577,6 +715,7 @@ fn catalog_scan_sql_rows_to_dataframe(rows: Vec<CatalogScanSql>) -> Result<DataF
             reflectivity_profile_index,
         ),
         Series::new("reflectivity_scan_type".into(), reflectivity_scan_type),
+        Series::new("catalog_scan_type".into(), catalog_scan_type),
     ];
     let columns: Vec<polars::prelude::Column> = series.into_iter().map(|s| s.into()).collect();
     DataFrame::new(columns).map_err(|e| CatalogError::Validation(e.to_string()))
@@ -610,6 +749,226 @@ pub fn scan_from_catalog_for_beamtime(
         .load(&mut conn)
         .map_err(CatalogError::Diesel)?;
     catalog_scan_sql_rows_to_dataframe(rows)
+}
+
+struct HeaderValueViewSql {
+    frame_id: i32,
+    scan_number: i32,
+    file_path: String,
+    frame_number: i32,
+    zarr_group_key: i32,
+    zarr_frame_index: i32,
+    zarr_bucket_frame_index: Option<i32>,
+    header_name: String,
+    header_display_name: String,
+    header_value: f64,
+}
+
+impl QueryableByName<Sqlite> for HeaderValueViewSql {
+    fn build<'a>(row: &impl diesel::row::NamedRow<'a, Sqlite>) -> deserialize::Result<Self> {
+        Ok(Self {
+            frame_id: diesel::row::NamedRow::get::<Integer, i32>(row, "frame_id")?,
+            scan_number: diesel::row::NamedRow::get::<Integer, i32>(row, "scan_number")?,
+            file_path: diesel::row::NamedRow::get::<Text, String>(row, "file_path")?,
+            frame_number: diesel::row::NamedRow::get::<Integer, i32>(row, "frame_number")?,
+            zarr_group_key: diesel::row::NamedRow::get::<Integer, i32>(row, "zarr_group_key")?,
+            zarr_frame_index: diesel::row::NamedRow::get::<Integer, i32>(row, "zarr_frame_index")?,
+            zarr_bucket_frame_index: diesel::row::NamedRow::get::<Nullable<Integer>, Option<i32>>(
+                row,
+                "zarr_bucket_frame_index",
+            )?,
+            header_name: diesel::row::NamedRow::get::<Text, String>(row, "header_name")?,
+            header_display_name: diesel::row::NamedRow::get::<Text, String>(
+                row,
+                "header_display_name",
+            )?,
+            header_value: diesel::row::NamedRow::get::<Double, f64>(row, "header_value")?,
+        })
+    }
+}
+
+fn build_header_values_view_sql(beamtime_id: Option<i32>) -> String {
+    let mut sql = String::from(
+        r#"SELECT
+  fr.id AS frame_id,
+  sc.scan_number,
+  f.nas_uri AS file_path,
+  fr.frame_number,
+  fr.zarr_group_key,
+  fr.zarr_frame_index,
+  fr.zarr_bucket_frame_index,
+  hc.name AS header_name,
+  hc.display_name AS header_display_name,
+  hv.value AS header_value
+FROM header_values hv
+INNER JOIN frames fr ON hv.frame_id = fr.id
+INNER JOIN files f ON fr.file_id = f.id
+INNER JOIN scans sc ON fr.scan_id = sc.id
+INNER JOIN header_cards hc ON hv.header_card_id = hc.id
+WHERE 1=1"#,
+    );
+    if let Some(bid) = beamtime_id {
+        sql.push_str(&format!(" AND f.beamtime_id = {bid}"));
+    }
+    sql.push_str(" ORDER BY sc.scan_number, fr.frame_number, hc.name");
+    sql
+}
+
+/// Returns a merged frame/header view from `frames`, `header_cards`, and `header_values`.
+///
+/// When `beamtime_dir` is provided, rows are scoped to that single beamtime root.
+pub fn header_values_view(db_path: &Path, beamtime_dir: Option<&Path>) -> Result<DataFrame> {
+    let mut conn = db::establish_connection(db_path)?;
+    let beamtime_id = match beamtime_dir {
+        Some(dir) => match beamtime_id_for_dir(&mut conn, dir)? {
+            Some(id) => Some(id),
+            None => None,
+        },
+        None => None,
+    };
+    if beamtime_dir.is_some() && beamtime_id.is_none() {
+        return DataFrame::new(vec![
+            Series::new("frame_id".into(), Vec::<i64>::new()).into(),
+            Series::new("scan_number".into(), Vec::<i64>::new()).into(),
+            Series::new("file_path".into(), Vec::<String>::new()).into(),
+            Series::new("frame_number".into(), Vec::<i64>::new()).into(),
+            Series::new("zarr_group_key".into(), Vec::<i64>::new()).into(),
+            Series::new("zarr_frame_index".into(), Vec::<i64>::new()).into(),
+            Series::new("zarr_bucket_frame_index".into(), Vec::<Option<i64>>::new()).into(),
+            Series::new("header_name".into(), Vec::<String>::new()).into(),
+            Series::new("header_display_name".into(), Vec::<String>::new()).into(),
+            Series::new("header_value".into(), Vec::<f64>::new()).into(),
+        ])
+        .map_err(|e| CatalogError::Validation(e.to_string()));
+    }
+    let sql = build_header_values_view_sql(beamtime_id);
+    let rows: Vec<HeaderValueViewSql> = sql_query(&sql)
+        .load(&mut conn)
+        .map_err(CatalogError::Diesel)?;
+    let mut frame_id = Vec::with_capacity(rows.len());
+    let mut scan_number = Vec::with_capacity(rows.len());
+    let mut file_path = Vec::with_capacity(rows.len());
+    let mut frame_number = Vec::with_capacity(rows.len());
+    let mut zarr_group_key = Vec::with_capacity(rows.len());
+    let mut zarr_frame_index = Vec::with_capacity(rows.len());
+    let mut zarr_bucket_frame_index: Vec<Option<i64>> = Vec::with_capacity(rows.len());
+    let mut header_name = Vec::with_capacity(rows.len());
+    let mut header_display_name = Vec::with_capacity(rows.len());
+    let mut header_value = Vec::with_capacity(rows.len());
+    for row in rows {
+        frame_id.push(row.frame_id as i64);
+        scan_number.push(row.scan_number as i64);
+        file_path.push(row.file_path);
+        frame_number.push(row.frame_number as i64);
+        zarr_group_key.push(row.zarr_group_key as i64);
+        zarr_frame_index.push(row.zarr_frame_index as i64);
+        zarr_bucket_frame_index.push(row.zarr_bucket_frame_index.map(i64::from));
+        header_name.push(row.header_name);
+        header_display_name.push(row.header_display_name);
+        header_value.push(row.header_value);
+    }
+    DataFrame::new(vec![
+        Series::new("frame_id".into(), frame_id).into(),
+        Series::new("scan_number".into(), scan_number).into(),
+        Series::new("file_path".into(), file_path).into(),
+        Series::new("frame_number".into(), frame_number).into(),
+        Series::new("zarr_group_key".into(), zarr_group_key).into(),
+        Series::new("zarr_frame_index".into(), zarr_frame_index).into(),
+        Series::new("zarr_bucket_frame_index".into(), zarr_bucket_frame_index).into(),
+        Series::new("header_name".into(), header_name).into(),
+        Series::new("header_display_name".into(), header_display_name).into(),
+        Series::new("header_value".into(), header_value).into(),
+    ])
+    .map_err(|e| CatalogError::Validation(e.to_string()))
+}
+
+pub fn sync_missing_headers_for_beamtime(
+    db_path: &Path,
+    beamtime_dir: &Path,
+) -> Result<HeaderSyncReport> {
+    use super::ingest::DEFAULT_INGEST_HEADER_ITEMS;
+    use std::path::PathBuf;
+
+    let mut conn = db::establish_connection(db_path)?;
+    let Some(bid) = beamtime_id_for_dir(&mut conn, beamtime_dir)? else {
+        return Ok(HeaderSyncReport::default());
+    };
+    let frame_rows: Vec<(i32, String)> = frames::table
+        .inner_join(files::table.on(frames::file_id.eq(files::id)))
+        .filter(files::beamtime_id.eq(bid))
+        .select((frames::id, files::nas_uri))
+        .load(&mut conn)
+        .map_err(CatalogError::Diesel)?;
+
+    let mut card_cache: HashMap<String, i32> = header_cards::table
+        .select((header_cards::name, header_cards::id))
+        .load(&mut conn)
+        .map_err(CatalogError::Diesel)?
+        .into_iter()
+        .collect();
+    let header_items: Vec<String> = DEFAULT_INGEST_HEADER_ITEMS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let mut report = HeaderSyncReport::default();
+
+    conn.transaction::<(), CatalogError, _>(|conn| {
+        for (frame_id, file_uri) in &frame_rows {
+            report.files_checked += 1;
+            let Some(path_str) = file_uri.strip_prefix("file://") else {
+                continue;
+            };
+            let row = read_fits_headers_only_row(PathBuf::from(path_str), &header_items)?;
+            let existing: Vec<i32> = header_values::table
+                .filter(header_values::frame_id.eq(*frame_id))
+                .select(header_values::header_card_id)
+                .load(conn)?;
+            let mut existing_set: HashSet<i32> = existing.into_iter().collect();
+            let mut inserted_for_file: u32 = 0;
+
+            for (card_name, value) in row.non_promoted_header_values {
+                let card_id = if let Some(id) = card_cache.get(card_name.as_str()) {
+                    *id
+                } else {
+                    let existing_id: Option<i32> = header_cards::table
+                        .filter(header_cards::name.eq(card_name.as_str()))
+                        .select(header_cards::id)
+                        .first(conn)
+                        .optional()?;
+                    let id = match existing_id {
+                        Some(id) => id,
+                        None => diesel::insert_into(header_cards::table)
+                            .values((
+                                header_cards::name.eq(card_name.as_str()),
+                                header_cards::display_name
+                                    .eq(normalize_header_display_name(card_name.as_str())),
+                            ))
+                            .returning(header_cards::id)
+                            .get_result(conn)?,
+                    };
+                    card_cache.insert(card_name.clone(), id);
+                    id
+                };
+
+                if existing_set.insert(card_id) {
+                    diesel::insert_into(header_values::table)
+                        .values((
+                            header_values::frame_id.eq(*frame_id),
+                            header_values::header_card_id.eq(card_id),
+                            header_values::value.eq(value),
+                        ))
+                        .execute(conn)?;
+                    inserted_for_file += 1;
+                }
+            }
+            if inserted_for_file > 0 {
+                report.files_updated += 1;
+                report.header_rows_inserted += inserted_for_file;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(report)
 }
 
 pub fn update_beamspot(
@@ -745,8 +1104,8 @@ pub fn get_overrides(db_path: &Path, path: Option<&str>) -> Result<DataFrame> {
     let mut sample_names = Vec::new();
     let mut tags = Vec::new();
     let mut notes = Vec::new();
-    let rows: Vec<(String, Option<String>, Option<String>, Option<String>)> = if let Some(p) = path
-    {
+    type OverrideRow = (String, Option<String>, Option<String>, Option<String>);
+    let rows: Vec<OverrideRow> = if let Some(p) = path {
         file_overrides::table
             .filter(file_overrides::source_path.eq(p))
             .select((
@@ -816,6 +1175,44 @@ pub fn set_override(
     Ok(())
 }
 
+pub fn set_scan_type_for_beamtime_scan(
+    db_path: &Path,
+    beamtime_dir: &Path,
+    scan_number: i64,
+    scan_type: &str,
+) -> Result<()> {
+    if scan_type != "fixed_energy" && scan_type != "fixed_angle" {
+        return Err(CatalogError::Validation(format!(
+            "scan_type must be 'fixed_energy' or 'fixed_angle', got: {scan_type}"
+        )));
+    }
+    let mut conn = db::establish_connection(db_path)?;
+    let bid = match beamtime_id_for_dir(&mut conn, beamtime_dir)? {
+        Some(id) => id,
+        None => {
+            return Err(CatalogError::Validation(format!(
+                "beamtime not found in catalog: {}",
+                beamtime_dir.display()
+            )))
+        }
+    };
+    let updated = diesel::update(
+        scans::table
+            .filter(scans::beamtime_id.eq(bid))
+            .filter(scans::scan_number.eq(scan_number as i32)),
+    )
+    .set(scans::scan_type.eq(scan_type))
+    .execute(&mut conn)
+    .map_err(CatalogError::Diesel)?;
+    if updated == 0 {
+        return Err(CatalogError::Validation(format!(
+            "scan not found for beamtime={} scan_number={scan_number}",
+            beamtime_dir.display()
+        )));
+    }
+    Ok(())
+}
+
 pub fn rename_file_in_catalog(
     db_path: &Path,
     old_path: &str,
@@ -879,6 +1276,10 @@ fn scan_from_catalog_columns() -> Vec<&'static str> {
         "tag",
         "scan_number",
         "frame_number",
+        "zarr_group_key",
+        "zarr_frame_index",
+        "zarr_bucket_frame_index",
+        "zarr_path",
         "DATE",
         "Beamline Energy",
         "Sample Theta",
@@ -886,6 +1287,7 @@ fn scan_from_catalog_columns() -> Vec<&'static str> {
         "Higher Order Suppressor",
         "EPU Polarization",
         "EXPOSURE",
+        "AI 3 Izero",
         "Sample Name",
         "Scan ID",
         "Lambda",
@@ -895,6 +1297,7 @@ fn scan_from_catalog_columns() -> Vec<&'static str> {
         "beam_sigma",
         "reflectivity_profile_index",
         "reflectivity_scan_type",
+        "catalog_scan_type",
     ]
 }
 
@@ -1009,18 +1412,8 @@ mod tests {
                 frames::frame_number.eq(0),
                 frames::zarr_group_key.eq(1),
                 frames::zarr_frame_index.eq(0),
+                frames::zarr_bucket_frame_index.eq(None::<i32>),
                 frames::acquired_at.eq(None::<String>),
-                frames::sample_x.eq(0.0),
-                frames::sample_y.eq(0.0),
-                frames::sample_z.eq(0.0),
-                frames::sample_theta.eq(0.0),
-                frames::ccd_theta.eq(0.0),
-                frames::beamline_energy.eq(0.0),
-                frames::epu_polarization.eq(0.0),
-                frames::exposure.eq(0.0),
-                frames::ring_current.eq(0.0),
-                frames::ai3_izero.eq(0.0),
-                frames::beam_current.eq(0.0),
                 frames::quality_flag.eq(None::<String>),
             ))
             .execute(&mut conn)

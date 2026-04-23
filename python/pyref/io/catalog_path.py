@@ -2,13 +2,16 @@
 Resolve the global SQLite catalog path.
 
 The catalog is a single database shared across beamtimes. Its default location is
-``<pyref_data_dir>/catalog.db``, where ``pyref_data_dir`` is ``$PYREF_HOME`` when that
-environment variable is set (created if missing), or the platform user data directory
-subdirectory ``pyref`` (for example macOS ``~/Library/Application Support/pyref``).
+``$XDG_CONFIG_HOME/pyref/catalog.db`` when ``XDG_CONFIG_HOME`` is set, otherwise
+``~/.config/pyref/catalog.db`` (Unix-like under the user home on all platforms). When
+``PYREF_HOME`` is set, the default becomes ``<PYREF_HOME>/catalog.db``. Default zarr
+storage uses the same config root as the catalog
+(``<same_dir_as_catalog_parent>/cache/``). See Rust ``pyref_config_dir`` /
+``pyref_data_dir`` (aliases).
 
 Optional overrides (Rust IO layer): ``PYREF_CATALOG_DB`` forces the catalog file path;
 ``PYREF_CACHE_ROOT`` sets the parent directory of each ``<beamtime_hash>/beamtime.zarr``
-tree (default remains ``<pyref_data_dir>/.cache/``). Parallel ingest reads
+tree (default remains ``<pyref_config_dir>/cache/``). Parallel ingest reads
 ``PYREF_INGEST_WORKER_THREADS`` or ``PYREF_INGEST_RESOURCE_FRACTION`` when Python
 passes neither ``worker_threads`` nor ``resource_fraction`` to ``ingest_beamtime``.
 """

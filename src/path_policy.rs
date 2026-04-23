@@ -26,23 +26,20 @@ pub fn has_month_segment(path: &Path) -> bool {
     path.components().any(|c| {
         c.as_os_str()
             .to_str()
-            .map_or(false, |s| month_regex().is_match(s))
+            .is_some_and(|s| month_regex().is_match(s))
     })
 }
 
 pub fn is_indexable_experiment_dir(path: &Path) -> bool {
     path.components()
-        .last()
+        .next_back()
         .and_then(|c| c.as_os_str().to_str())
-        .map_or(false, |name| INDEXABLE_EXPERIMENTS.contains(&name))
+        .is_some_and(|name| INDEXABLE_EXPERIMENTS.contains(&name))
 }
 
 pub fn path_contains_excluded(path: &Path) -> bool {
-    path.components().any(|c| {
-        c.as_os_str()
-            .to_str()
-            .map_or(false, |s| s == EXCLUDED_SEGMENT)
-    })
+    path.components()
+        .any(|c| c.as_os_str().to_str() == Some(EXCLUDED_SEGMENT))
 }
 
 pub fn is_indexable_als_path(path: &Path) -> bool {

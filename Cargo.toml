@@ -18,8 +18,13 @@ name = "browser"
 path = "src/bin/browser.rs"
 required-features = ["tui"]
 
+[[bin]]
+name = "migrate-zarr-3d"
+path = "src/bin/migrate_zarr_3d.rs"
+required-features = ["catalog"]
+
 [features]
-default = ["bindings", "catalog", "parallel_ingest"]
+default = ["bindings", "catalog", "parallel_ingest", "watch"]
 bindings = ["dep:pyo3", "dep:pyo3-polars", "dep:numpy"]
 extension-module = ["bindings", "pyo3/extension-module", "pyo3/generate-import-lib"]
 catalog = [
@@ -30,6 +35,7 @@ catalog = [
     "dep:walkdir",
     "dep:zarrs",
     "dep:crossbeam-channel",
+    "dep:zstd",
 ]
 parallel_ingest = ["catalog"]
 zarr = ["catalog"]
@@ -61,7 +67,8 @@ directories = {version = "6", optional = true}
 notify-debouncer-mini = {version = "0.4", optional = true}
 log = {version = "0.4", optional = true}
 eframe = {version = "0.28", optional = true, default-features = true}
-zarrs = {version = "0.23", optional = true, default-features = false, features = ["filesystem", "ndarray"]}
+zarrs = {version = "0.23", optional = true, default-features = false, features = ["filesystem", "ndarray", "zstd", "sharding", "crc32c"]}
+zstd = {version = "0.13", optional = true, default-features = false}
 diesel = { version = "2.2", optional = true, features = ["sqlite", "returning_clauses_for_sqlite_3_35", "32-column-tables"] }
 diesel_migrations = {version = "2.2", optional = true, features = ["sqlite"]}
 libsqlite3-sys = {version = "0.28", optional = true, features = ["bundled"]}

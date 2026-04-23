@@ -1,11 +1,8 @@
-#![cfg(feature = "zarr")]
-
 use ndarray::Array2;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zarrs::array::data_type;
-use zarrs::array::Array;
-use zarrs::array::ArrayBuilder;
+use zarrs::array::{Array, ArrayBuilder, ArraySubset};
 use zarrs::group::GroupBuilder;
 use zarrs::storage::{ReadableWritableListableStorage, ReadableWritableListableStorageTraits};
 
@@ -117,15 +114,14 @@ pub fn read_detector_frame(
     }
     let height = shape[1] as usize;
     let width = shape[2] as usize;
-    let subset_ranges: [std::ops::Range<u64>; 3] = [
+    let subset_region = ArraySubset::new_with_ranges(&[
         (frame_index as u64)..(frame_index as u64 + 1),
         0..(height as u64),
         0..(width as u64),
-    ];
-    let subset = array
-        .retrieve_array_subset_ndarray::<i32>(&subset_ranges)
+    ]);
+    let flat: Vec<i32> = array
+        .retrieve_array_subset::<Vec<i32>>(&subset_region)
         .map_err(|e| FitsError::validation(e.to_string()))?;
-    let flat: Vec<i32> = subset.iter().copied().collect();
     Array2::from_shape_vec((height, width), flat).map_err(|e| FitsError::validation(e.to_string()))
 }
 

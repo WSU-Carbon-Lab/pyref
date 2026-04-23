@@ -1,7 +1,8 @@
 pub mod blur;
 pub mod image_mmap;
+pub mod metadata;
 pub mod options;
-pub mod schema;
+pub mod raw_pixels;
 pub mod source;
 
 #[cfg(feature = "zarr")]
@@ -15,7 +16,7 @@ use std::ops::Mul;
 use std::path::PathBuf;
 
 use crate::errors::FitsError;
-use crate::fits::{ImageHduHeader, PrimaryHdu};
+use crate::fits::{CardValue, ImageHduHeader, PrimaryHdu};
 
 #[derive(Debug, Clone)]
 pub struct ImageInfo {
@@ -25,6 +26,10 @@ pub struct ImageInfo {
     pub naxis2: usize,
     pub bitpix: i32,
     pub bzero: i64,
+    pub zarr_path: Option<PathBuf>,
+    pub zarr_bucket_frame_index: Option<usize>,
+    pub zarr_group_key: Option<i32>,
+    pub zarr_frame_index: Option<i32>,
 }
 
 impl ImageInfo {
@@ -41,6 +46,10 @@ impl ImageInfo {
             naxis2: h.naxis2,
             bitpix: h.bitpix,
             bzero,
+            zarr_path: None,
+            zarr_bucket_frame_index: None,
+            zarr_group_key: None,
+            zarr_frame_index: None,
         }
     }
 
@@ -100,6 +109,30 @@ impl ImageInfo {
             .map_err(FitsError::from)?
             .get(row_index)
             .ok_or_else(|| FitsError::validation("bzero row missing or null"))?;
+        let zarr_path = df
+            .column("zarr_path")
+            .ok()
+            .and_then(|s| s.str().ok())
+            .and_then(|c| c.get(row_index))
+            .map(PathBuf::from);
+        let zarr_bucket_frame_index = df
+            .column("zarr_bucket_frame_index")
+            .ok()
+            .and_then(|s| s.i64().ok())
+            .and_then(|c| c.get(row_index))
+            .map(|x| x as usize);
+        let zarr_group_key = df
+            .column("zarr_group_key")
+            .ok()
+            .and_then(|s| s.i64().ok())
+            .and_then(|c| c.get(row_index))
+            .map(|x| x as i32);
+        let zarr_frame_index = df
+            .column("zarr_frame_index")
+            .ok()
+            .and_then(|s| s.i64().ok())
+            .and_then(|c| c.get(row_index))
+            .map(|x| x as i32);
         Ok(ImageInfo {
             path,
             data_offset,
@@ -107,6 +140,10 @@ impl ImageInfo {
             naxis2,
             bitpix,
             bzero,
+            zarr_path,
+            zarr_bucket_frame_index,
+            zarr_group_key,
+            zarr_frame_index,
         })
     }
 }
@@ -547,34 +584,42 @@ pub struct BtIngestRow {
     pub ai3_izero: Option<f64>,
     pub beam_current: Option<f64>,
     pub date_iso: Option<String>,
+    pub non_promoted_header_values: Vec<(String, f64)>,
 }
 
-fn header_float(primary: &PrimaryHdu, key: &str) -> Option<f64> {
+fn card_value_to_f64(value: &CardValue) -> Option<f64> {
+    match value {
+        CardValue::INT(v) => Some(*v as f64),
+        CardValue::FLOAT(v) => Some(*v),
+        CardValue::LOGICAL(v) => Some(if *v { 1.0 } else { 0.0 }),
+        CardValue::STRING(s) => s.trim().parse::<f64>().ok(),
+        CardValue::EMPTY => None,
+    }
+}
+
+fn promoted_header_value(primary: &PrimaryHdu, key: &str) -> Option<f64> {
     if key == "Beamline Energy" {
         if let Some(card) = primary.header.get_card(key) {
-            if let Some(v) = card.value.as_float() {
+            if let Some(v) = card_value_to_f64(&card.value) {
                 return Some(v);
             }
         }
         if let Some(card) = primary.header.get_card("Beamline Energy Goal") {
-            return card.value.as_float();
+            return card_value_to_f64(&card.value);
         }
         return Some(0.0);
-    }
-    if key == "DATE" || key == "Sample Name" {
-        return None;
     }
     primary
         .header
         .get_card(key)
-        .map(|c| c.value.as_float().unwrap_or(1.0))
+        .and_then(|c| card_value_to_f64(&c.value))
 }
 
 pub fn build_bt_ingest_row(
     primary: &PrimaryHdu,
     image_header: &ImageHduHeader,
     path: PathBuf,
-    header_items: &[String],
+    _header_items: &[String],
 ) -> Result<BtIngestRow, FitsError> {
     let path_str = path
         .to_str()
@@ -617,27 +662,26 @@ pub fn build_bt_ingest_row(
         ring_current: None,
         ai3_izero: None,
         beam_current: None,
-        date_iso: None,
+        date_iso: primary.header.get_card("DATE").map(|c| c.value.to_string()),
+        non_promoted_header_values: Vec::new(),
     };
-    for key in header_items {
-        if key == "DATE" {
-            row.date_iso = primary.header.get_card("DATE").map(|c| c.value.to_string());
-            continue;
-        }
-        let v = header_float(primary, key);
-        match key.as_str() {
-            "Beamline Energy" => row.beamline_energy = v,
-            "Sample Theta" => row.sample_theta = v,
-            "CCD Theta" => row.ccd_theta = v,
-            "EPU Polarization" => row.epu_polarization = v,
-            "EXPOSURE" => row.exposure = v,
-            "Sample X" => row.sample_x = v,
-            "Sample Y" => row.sample_y = v,
-            "Sample Z" => row.sample_z = v,
-            "RINGCRNT" => row.ring_current = v,
-            "AI 3 Izero" => row.ai3_izero = v,
-            "Beam Current" => row.beam_current = v,
-            _ => {}
+
+    row.beamline_energy = promoted_header_value(primary, "Beamline Energy");
+    row.sample_theta = promoted_header_value(primary, "Sample Theta");
+    row.ccd_theta = promoted_header_value(primary, "CCD Theta");
+    row.epu_polarization = promoted_header_value(primary, "EPU Polarization");
+    row.exposure = promoted_header_value(primary, "EXPOSURE");
+    row.sample_x = promoted_header_value(primary, "Sample X");
+    row.sample_y = promoted_header_value(primary, "Sample Y");
+    row.sample_z = promoted_header_value(primary, "Sample Z");
+    row.ring_current = promoted_header_value(primary, "RINGCRNT");
+    row.ai3_izero = promoted_header_value(primary, "AI 3 Izero");
+    row.beam_current = promoted_header_value(primary, "Beam Current");
+
+    for card in primary.header.iter() {
+        if let Some(value) = card_value_to_f64(&card.value) {
+            row.non_promoted_header_values
+                .push((card.keyword.clone(), value));
         }
     }
     Ok(row)
@@ -804,15 +848,7 @@ mod tests {
         let data = Array2::from_shape_vec(
             (2, 30),
             (0..60)
-                .map(|i| {
-                    if i < 10 {
-                        5i64
-                    } else if i >= 20 {
-                        5i64
-                    } else {
-                        100
-                    }
-                })
+                .map(|i| if !(10..20).contains(&i) { 5i64 } else { 100 })
                 .collect(),
         )
         .unwrap();

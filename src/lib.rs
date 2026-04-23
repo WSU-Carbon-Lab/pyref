@@ -17,8 +17,8 @@ pub mod catalog;
 pub mod schema;
 
 pub use errors::FitsError;
+pub use io::metadata::FitsMetadataSchema;
 pub use io::options::{ReadFitsOptions, ScanFitsOptions};
-pub use io::schema::FitsMetadataSchema;
 pub use io::source::{FitsSource, ResolvePreference, ResolvedSource};
 pub use io::{build_fits_stem, image_mmap, ImageInfo};
 pub use loader::{
@@ -48,11 +48,16 @@ mod extension {
 
     #[cfg(feature = "catalog")]
     use crate::catalog::{
-        beamtime_ingest_layout, classify_scan_type, get_overrides,
-        ingest_beamtime_with_progress_sink, list_beamtime_entries_v2, list_beamtimes_from_catalog,
-        paths, scan_from_catalog, scan_from_catalog_for_beamtime, set_override, CatalogFilter,
-        IngestParallelism, IngestProgress, IngestProgressSink, ReflectivityScanType,
+        beamtime_ingest_layout, catalog_file_count, classify_scan_type, get_overrides,
+        header_values_view, ingest_beamtime_with_progress_sink, list_beamtime_entries_v2,
+        list_beamtimes_from_catalog, paths, scan_from_catalog, scan_from_catalog_for_beamtime,
+        set_override, set_scan_type_for_beamtime_scan, sync_missing_headers_for_beamtime,
+        CatalogFilter, IngestParallelism, IngestProgress, IngestProgressSink, IngestSelection,
+        ReflectivityScanType,
     };
+
+    #[cfg(feature = "catalog")]
+    type ClassifyScanTypeTuple = (String, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
 
     #[global_allocator]
     static ALLOC: PolarsAllocator = PolarsAllocator::new();
@@ -350,6 +355,43 @@ mod extension {
     }
 
     #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_pyref_data_dir")]
+    pub fn py_pyref_data_dir() -> PyResult<String> {
+        match paths::pyref_data_dir() {
+            Ok(p) => Ok(p.to_string_lossy().to_string()),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(name = "py_catalog_file_count")]
+    #[pyo3(
+        signature = (db_path=None, beamtime_path=None),
+        text_signature = "(db_path=None, beamtime_path=None)"
+    )]
+    pub fn py_catalog_file_count(
+        db_path: Option<&str>,
+        beamtime_path: Option<&str>,
+    ) -> PyResult<u32> {
+        let db = match db_path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => paths::default_catalog_db_path()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?,
+        };
+        let beam = beamtime_path.map(std::path::Path::new);
+        match catalog_file_count(&db, beam) {
+            Ok(n) => Ok(n),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
     fn ingest_progress_to_pydict<'py>(
         py: Python<'py>,
         ev: &IngestProgress,
@@ -369,9 +411,9 @@ mod extension {
                 }
                 d.set_item("scans", list)?;
             }
-            IngestProgress::Phase { name } => {
+            IngestProgress::Phase { phase } => {
                 d.set_item("event", "phase")?;
-                d.set_item("phase", name.as_str())?;
+                d.set_item("phase", phase.as_str())?;
             }
             IngestProgress::CatalogRow {
                 scan_number,
@@ -432,9 +474,10 @@ mod extension {
     #[cfg(feature = "catalog")]
     #[pyfunction]
     #[pyo3(name = "py_ingest_beamtime")]
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(
-        signature = (beamtime_path, header_items, incremental=true, worker_threads=None, resource_fraction=None, progress_callback=None),
-        text_signature = "(beamtime_path, header_items, incremental=True, worker_threads=None, resource_fraction=None, progress_callback=None)"
+        signature = (beamtime_path, header_items, incremental=true, worker_threads=None, resource_fraction=None, progress_callback=None, max_scans=None, scan_numbers=None),
+        text_signature = "(beamtime_path, header_items, incremental=True, worker_threads=None, resource_fraction=None, progress_callback=None, max_scans=None, scan_numbers=None)"
     )]
     pub fn py_ingest_beamtime(
         py: Python<'_>,
@@ -444,11 +487,17 @@ mod extension {
         worker_threads: Option<usize>,
         resource_fraction: Option<f64>,
         progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
+        max_scans: Option<u32>,
+        scan_numbers: Option<Vec<i32>>,
     ) -> PyResult<String> {
         let path = std::path::Path::new(beamtime_path);
         let parallelism = IngestParallelism {
             worker_threads,
             resource_fraction,
+        };
+        let selection = IngestSelection {
+            max_scans,
+            scan_numbers,
         };
         let progress = progress_callback.map(|cb| {
             IngestProgressSink::from_callback(move |ev| {
@@ -467,6 +516,7 @@ mod extension {
                 incremental,
                 progress,
                 parallelism,
+                selection,
             )
         });
         match result {
@@ -516,6 +566,51 @@ mod extension {
                 e.to_string(),
             )),
         }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(
+        name = "py_header_values_view",
+        signature = (db_path, beamtime_path=None),
+        text_signature = "(db_path, beamtime_path=None)"
+    )]
+    pub fn py_header_values_view(
+        db_path: &str,
+        beamtime_path: Option<&str>,
+    ) -> PyResult<PyDataFrame> {
+        let db = std::path::Path::new(db_path);
+        let beamtime = beamtime_path.map(std::path::Path::new);
+        match header_values_view(db, beamtime) {
+            Ok(df) => Ok(PyDataFrame(df)),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(
+        name = "py_sync_missing_headers_for_beamtime",
+        signature = (db_path, beamtime_path),
+        text_signature = "(db_path, beamtime_path)"
+    )]
+    pub fn py_sync_missing_headers_for_beamtime<'py>(
+        py: Python<'py>,
+        db_path: &str,
+        beamtime_path: &str,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use pyo3::types::PyDict;
+        let db = std::path::Path::new(db_path);
+        let beam = std::path::Path::new(beamtime_path);
+        let report = sync_missing_headers_for_beamtime(db, beam)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let d = PyDict::new_bound(py);
+        d.set_item("files_checked", report.files_checked)?;
+        d.set_item("files_updated", report.files_updated)?;
+        d.set_item("header_rows_inserted", report.header_rows_inserted)?;
+        Ok(d)
     }
 
     #[cfg(feature = "catalog")]
@@ -623,6 +718,29 @@ mod extension {
     }
 
     #[cfg(feature = "catalog")]
+    #[pyfunction]
+    #[pyo3(
+        name = "py_set_scan_type_for_beamtime_scan",
+        signature = (db_path, beamtime_path, scan_number, scan_type),
+        text_signature = "(db_path, beamtime_path, scan_number, scan_type)"
+    )]
+    pub fn py_set_scan_type_for_beamtime_scan(
+        db_path: &str,
+        beamtime_path: &str,
+        scan_number: i64,
+        scan_type: &str,
+    ) -> PyResult<()> {
+        let db = std::path::Path::new(db_path);
+        let beam = std::path::Path::new(beamtime_path);
+        match set_scan_type_for_beamtime_scan(db, beam, scan_number, scan_type) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                e.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "catalog")]
     fn reflectivity_scan_type_id(st: ReflectivityScanType) -> &'static str {
         match st {
             ReflectivityScanType::FixedEnergy => "fixed_energy",
@@ -641,7 +759,7 @@ mod extension {
     /// Classify scan type from a list of ``(beamline_energy_eV, sample_theta_deg)`` pairs.
     pub fn py_classify_scan_type(
         pairs: Vec<(Option<f64>, Option<f64>)>,
-    ) -> PyResult<(String, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> {
+    ) -> PyResult<ClassifyScanTypeTuple> {
         let (st, e_min, e_max, t_min, t_max) = classify_scan_type(&pairs);
         Ok((
             reflectivity_scan_type_id(st).to_string(),
@@ -650,6 +768,61 @@ mod extension {
             t_min,
             t_max,
         ))
+    }
+
+    #[cfg(all(feature = "catalog", feature = "watch"))]
+    #[pyclass(name = "CatalogWatcherCancel")]
+    pub struct CatalogWatcherCancel {
+        inner: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[cfg(all(feature = "catalog", feature = "watch"))]
+    #[pymethods]
+    impl CatalogWatcherCancel {
+        #[new]
+        fn new() -> Self {
+            Self {
+                inner: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }
+        }
+
+        fn cancel(&self) {
+            self.inner.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(all(feature = "catalog", feature = "watch"))]
+    #[pyfunction]
+    #[pyo3(name = "py_run_catalog_watcher_blocking")]
+    #[pyo3(
+        signature = (beamtime_path, header_items, debounce_ms, subpaths, cancel),
+        text_signature = "(beamtime_path, header_items, debounce_ms, subpaths, cancel)"
+    )]
+    pub fn py_run_catalog_watcher_blocking(
+        py: Python<'_>,
+        beamtime_path: &str,
+        header_items: Vec<String>,
+        debounce_ms: u64,
+        subpaths: Vec<String>,
+        cancel: PyRef<CatalogWatcherCancel>,
+    ) -> PyResult<()> {
+        use std::path::PathBuf;
+        let flag = std::sync::Arc::clone(&cancel.inner);
+        let sub: Vec<PathBuf> = subpaths.into_iter().map(PathBuf::from).collect();
+        let path = std::path::Path::new(beamtime_path).to_path_buf();
+        py.allow_threads(|| {
+            crate::catalog::run_catalog_watcher_blocking(
+                &path,
+                &header_items,
+                debounce_ms,
+                &sub,
+                flag,
+            )
+        })
+        .map_err(|e: crate::catalog::CatalogError| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        Ok(())
     }
 
     #[pymodule]
@@ -672,6 +845,8 @@ mod extension {
         #[cfg(feature = "catalog")]
         {
             m.add_function(pyo3::wrap_pyfunction!(py_default_catalog_db_path, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_pyref_data_dir, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_catalog_file_count, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_beamtime_ingest_layout, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_ingest_beamtime, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_scan_from_catalog, m)?)?;
@@ -679,11 +854,25 @@ mod extension {
                 py_scan_from_catalog_for_beamtime,
                 m
             )?)?;
+            m.add_function(pyo3::wrap_pyfunction!(py_header_values_view, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(
+                py_sync_missing_headers_for_beamtime,
+                m
+            )?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_beamtime_entries, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_list_beamtimes, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_get_overrides, m)?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_set_override, m)?)?;
+            m.add_function(pyo3::wrap_pyfunction!(
+                py_set_scan_type_for_beamtime_scan,
+                m
+            )?)?;
             m.add_function(pyo3::wrap_pyfunction!(py_classify_scan_type, m)?)?;
+            #[cfg(feature = "watch")]
+            {
+                m.add_class::<CatalogWatcherCancel>()?;
+                m.add_function(pyo3::wrap_pyfunction!(py_run_catalog_watcher_blocking, m)?)?;
+            }
         }
         Ok(())
     }

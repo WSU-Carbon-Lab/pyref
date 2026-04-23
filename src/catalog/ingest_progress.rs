@@ -26,6 +26,29 @@ pub struct BeamtimeIngestLayout {
     pub scans: Vec<ScanFileCount>,
 }
 
+/// Coarse ingest phase label for hosts that refresh banners.
+///
+/// The string form (``"headers"``, ``"catalog"``, ``"zarr"``) is the stable wire
+/// representation forwarded to Python callbacks via [`IngestPhase::as_str`]; do not
+/// rename or remove variants without updating the Python-side consumers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IngestPhase {
+    Headers,
+    Catalog,
+    Zarr,
+}
+
+impl IngestPhase {
+    /// Stable lowercase label used by the Python progress-callback wire format.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Headers => "headers",
+            Self::Catalog => "catalog",
+            Self::Zarr => "zarr",
+        }
+    }
+}
+
 /// One progress event during beamtime ingest.
 #[derive(Clone, Debug)]
 pub enum IngestProgress {
@@ -37,7 +60,7 @@ pub enum IngestProgress {
     },
     /// Optional coarse phase label for hosts that refresh banners (``headers``, ``catalog``,
     /// ``zarr``).
-    Phase { name: String },
+    Phase { phase: IngestPhase },
     /// Emitted after each file's catalog rows (samples, files, frames) are inserted; mirrors
     /// [`IngestProgress::FileComplete`] counters so UIs can advance progress during the SQLite
     /// transaction, not only during zarr writes.
@@ -146,4 +169,26 @@ pub(crate) fn layout_and_groups_from_paths(
         scans,
     };
     (layout, groups)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ingest_phase_as_str_matches_wire_labels() {
+        assert_eq!(IngestPhase::Headers.as_str(), "headers");
+        assert_eq!(IngestPhase::Catalog.as_str(), "catalog");
+        assert_eq!(IngestPhase::Zarr.as_str(), "zarr");
+    }
+
+    #[test]
+    fn ingest_phase_variants_are_distinct_and_copyable() {
+        let a = IngestPhase::Headers;
+        let b = a;
+        assert_eq!(a, b);
+        assert_ne!(IngestPhase::Headers, IngestPhase::Catalog);
+        assert_ne!(IngestPhase::Catalog, IngestPhase::Zarr);
+        assert_ne!(IngestPhase::Headers, IngestPhase::Zarr);
+    }
 }

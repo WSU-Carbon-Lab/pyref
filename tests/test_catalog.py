@@ -17,6 +17,7 @@ if getattr(_pyref_mod, "py_default_catalog_db_path", None) is None:
     pytest.skip("catalog path export missing", allow_module_level=True)
 
 from pyref.io import (
+    apply_scan_overrides,
     beamtime_ingest_layout,
     classify_reflectivity_scan_type,
     get_overrides,
@@ -25,7 +26,9 @@ from pyref.io import (
     read_beamtime,
     scan_experiment,
     scan_from_catalog_for_beamtime,
+    set_beamtime_scan_types,
     set_override,
+    summarize_beamtime_scans,
 )
 from pyref.io.catalog_path import resolve_catalog_path
 from pyref.io.readers import REQUIRED_SCAN_COLUMNS
@@ -240,3 +243,81 @@ def test_read_beamtime_ingest_quiet(minimal_fits_dir: Path | None) -> None:
         show_progress=False,
     )
     assert view.frames.height >= 1
+
+
+def test_apply_scan_overrides_updates_all_rows_for_scan(
+    minimal_fits_dir: Path | None,
+) -> None:
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    db = ingest_beamtime(minimal_fits_dir, incremental=False)
+    rows = scan_from_catalog_for_beamtime(minimal_fits_dir, db)
+    if rows.height == 0:
+        pytest.skip("no rows in catalog")
+    scan_number = int(rows["scan_number"][0])
+    updated = apply_scan_overrides(
+        minimal_fits_dir,
+        scan_numbers=[scan_number],
+        catalog_path=db,
+        sample_name="scan_level_sample",
+        tag="scan_level_tag",
+    )
+    assert updated.height >= 1
+    rows2 = scan_from_catalog_for_beamtime(
+        minimal_fits_dir,
+        db,
+        scan_numbers=[scan_number],
+    )
+    assert rows2.height >= 1
+    assert rows2["sample_name"].n_unique() == 1
+    assert rows2["sample_name"][0] == "scan_level_sample"
+    assert rows2["tag"].n_unique() == 1
+    assert rows2["tag"][0] == "scan_level_tag"
+
+
+def test_summarize_beamtime_scans_reports_ranges_and_types(
+    minimal_fits_dir: Path | None,
+) -> None:
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    db = ingest_beamtime(minimal_fits_dir, incremental=False)
+    summary = summarize_beamtime_scans(
+        minimal_fits_dir,
+        catalog_path=db,
+    )
+    assert summary.height >= 1
+    assert "energy_min" in summary.columns
+    assert "energy_max" in summary.columns
+    assert "theta_min" in summary.columns
+    assert "theta_max" in summary.columns
+    assert "catalog_scan_type" in summary.columns
+    kind = summary["inferred_scan_type"][0]
+    assert kind in {"fixed_energy", "fixed_angle", "single_point"}
+
+
+def test_set_beamtime_scan_types_persists_catalog_scan_type(
+    minimal_fits_dir: Path | None,
+) -> None:
+    if getattr(_pyref_mod, "py_set_scan_type_for_beamtime_scan", None) is None:
+        pytest.skip("py_set_scan_type_for_beamtime_scan not built")
+    if minimal_fits_dir is None:
+        pytest.skip("fixtures/minimal.fits not found")
+    db = ingest_beamtime(minimal_fits_dir, incremental=False)
+    rows = scan_from_catalog_for_beamtime(minimal_fits_dir, db)
+    if rows.height == 0:
+        pytest.skip("no rows in catalog")
+    scan_number = int(rows["scan_number"][0])
+    out = set_beamtime_scan_types(
+        minimal_fits_dir,
+        {scan_number: "fixed_angle"},
+        catalog_path=db,
+    )
+    assert out.height == 1
+    rows2 = scan_from_catalog_for_beamtime(
+        minimal_fits_dir,
+        db,
+        scan_numbers=[scan_number],
+    )
+    assert "catalog_scan_type" in rows2.columns
+    assert rows2["catalog_scan_type"].drop_nulls().n_unique() == 1
+    assert rows2["catalog_scan_type"].drop_nulls()[0] == "fixed_angle"

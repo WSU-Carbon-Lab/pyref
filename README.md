@@ -1,20 +1,4 @@
-<p align="center">
-  <img src="https://github.com/WSU-Carbon-Lab/pyref/assets/73567020/f4883d3b-829e-48da-9a66-df50ecf357e5" width="320" alt="pyref logo">
-</p>
-
-<p align="center">
-  Fast PRSoXR data reduction for ALS Beamline 11.0.1.2.
-</p>
-
-<div align="center">
-  <a href="https://github.com/WSU-Carbon-Lab/pyref">Home</a> |
-  <a href="https://wsu-carbon-lab.github.io/pyref/">Docs</a> |
-  <a href="https://deepwiki.com/WSU-Carbon-Lab/pyref">DeepWiki</a>
-</div>
-
-<p align="center">
-  <a href="https://doi.org/10.5281/zenodo.14758701">DOI</a>
-</p>
+Now archived, see [pxr-reduce](https://github.com/ALS-RSOXS/pxr-reduce) and [refloxide](https://github.com/ALS-RSOXS/refloxide) maintained by the ALS beam-line scientists. 
 
 ## Table of Contents
 
